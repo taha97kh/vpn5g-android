@@ -85,7 +85,7 @@ object Vpn5gTimer {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     channelId,
-                    "VPN 5G",
+                    context.getString(R.string.vpn5g_timer_ended_title),
                     NotificationManager.IMPORTANCE_DEFAULT,
                 )
                 manager.createNotificationChannel(channel)

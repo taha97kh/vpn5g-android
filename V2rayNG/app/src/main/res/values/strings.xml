@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name" translatable="false">VPN 5G</string>
+    <string name="app_name" translatable="false">VPN5G IRBOT</string>
     <string name="app_widget_name">Switch</string>
     <string name="app_tile_name">Switch</string>
     <string name="app_tile_first_use">Add a profile in the app before using this feature.</string>
@@ -14,7 +14,7 @@
     <string name="pull_down_to_refresh">Please pull down to refresh!</string>
 
     <!-- Notifications -->
-    <string name="notification_channel_service">v2rayNG service</string>
+    <string name="notification_channel_service">VPN5G IRBOT</string>
     <string name="notification_channel_subscription_updates">Subscription updates</string>
     <string name="notification_channel_connection_checks">Connection checks</string>
     <string name="notification_action_stop_v2ray">Stop</string>
@@ -582,31 +582,23 @@
     <string name="vpn5g_disconnect">قطع اتصال</string>
     <string name="vpn5g_connected">متصل</string>
     <string name="vpn5g_disconnected">قطع</string>
-    <string name="vpn5g_connecting">در حال اتصال…</string>
     <string name="vpn5g_no_server_selected">اول یک سرور انتخاب کنید</string>
     <string name="vpn5g_remaining_time">زمان باقی‌مانده: %1$s</string>
     <string name="vpn5g_current_server">سرور فعلی</string>
-    <string name="vpn5g_refresh">به‌روزرسانی</string>
-    <string name="vpn5g_refreshing">در حال به‌روزرسانی…</string>
     <string name="vpn5g_offline_cached">آفلاین — لیست قبلی نمایش داده می‌شود</string>
-    <string name="vpn5g_free_countries">کشورهای رایگان</string>
-    <string name="vpn5g_locked_countries">کشورهای ویژه (اشتراک)</string>
     <string name="vpn5g_needs_subscription">نیاز به اشتراک</string>
     <string name="vpn5g_locked_dialog_title">این کشور ویژه است</string>
     <string name="vpn5g_locked_dialog_body">برای استفاده از سرورهای این کشور، اشتراک تهیه کنید.</string>
     <string name="vpn5g_open_bot">باز کردن ربات</string>
     <string name="vpn5g_close">بستن</string>
-    <string name="vpn5g_bot_promo_title">ربات VPN 5G — کانفیگ رایگان</string>
+    <string name="vpn5g_bot_promo_title">ربات VPN5G IRBOT — کانفیگ رایگان</string>
     <string name="vpn5g_bot_promo_body">کانفیگ‌های تازه، پشتیبانی و خرید اشتراک در ربات تلگرام</string>
     <string name="vpn5g_nav_home">خانه</string>
-    <string name="vpn5g_nav_guide">راهنما</string>
-    <string name="vpn5g_nav_subscription">اشتراک</string>
-    <string name="vpn5g_nav_about">درباره</string>
     <string name="vpn5g_advanced_settings">تنظیمات پیشرفته</string>
     <string name="vpn5g_empty_list">هنوز سروری نیست — برای دریافت لیست، به‌روزرسانی کنید</string>
     <string name="vpn5g_servers_count">%1$d سرور</string>
     <string name="vpn5g_ping_ms">%1$d میلی‌ثانیه</string>
-    <string name="vpn5g_timer_ended_title">VPN 5G</string>
+    <string name="vpn5g_timer_ended_title">VPN5G IRBOT</string>
     <string name="vpn5g_timer_ended_body">۳۰ دقیقه تمام شد و اتصال قطع شد. برای اتصال دوباره، در صفحه اصلی یک سرور انتخاب کنید.</string>
     <string name="vpn5g_imported_config">کانفیگ وارد شد</string>
     <string name="vpn5g_imported_file">%1$d کانفیگ از فایل وارد شد</string>
@@ -620,7 +612,6 @@
     <string name="vpn5g_guide_step3_body">لیست را به‌روزرسانی کنید و یک سرور دیگر انتخاب کنید؛ فقط سرورهای زنده نمایش داده می‌شوند.</string>
     <string name="vpn5g_guide_step4_title">۴. قطع خودکار بعد از ۳۰ دقیقه</string>
     <string name="vpn5g_guide_step4_body">هر اتصال بعد از ۳۰ دقیقه خودکار قطع می‌شود؛ برای ادامه دوباره متصل شوید.</string>
-    <string name="vpn5g_about_title">درباره VPN 5G</string>
     <string name="vpn5g_about_maker">سازنده: عارف خیراندیش (@4ref.ai)</string>
     <string name="vpn5g_about_channel">کانال: @VPNCRACKNET</string>
     <string name="vpn5g_about_bot">ربات: @VPN5G_IRBot</string>
@@ -646,5 +637,61 @@
     <string name="vpn5g_auth_invalid_code">کد باید ۶ رقم باشد</string>
     <string name="vpn5g_auth_recover_title">بازیابی رمز عبور</string>
     <string name="vpn5g_auth_recover_body">کد بازیابی به ایمیل شما ارسال می‌شود.</string>
+
+    <!-- v1.1: X-VPN-style home, tunnel verification, routing, profile, promo codes -->
+    <string name="vpn5g_nav_premium">حق بیمه</string>
+    <string name="vpn5g_nav_browser">مرورگر</string>
+    <string name="vpn5g_nav_routing">مسیریابی</string>
+    <string name="vpn5g_nav_me">من</string>
+    <string name="vpn5g_status_verifying">در حال بررسی تونل…</string>
+    <string name="vpn5g_status_tunnel_failed">تونل برقرار نشد</string>
+    <string name="vpn5g_status_not_connected">متصل نیست</string>
+    <string name="vpn5g_loading_servers">در حال دریافت سرورها…</string>
+    <string name="vpn5g_free_servers">سرورهای رایگان</string>
+    <string name="vpn5g_auto_server">خودکار</string>
+    <string name="vpn5g_auto_connect">اتصال خودکار به بهترین سرور</string>
+    <string name="vpn5g_exit_ip">آی‌پی خروجی: %1$s</string>
+    <string name="vpn5g_tunnel_failed_retry">این سرور تونل نکرد؛ در حال تلاش با سرور بعدی…</string>
+    <string name="vpn5g_tunnel_failed_all">هیچ سروری تونل نکرد؛ لیست را به‌روزرسانی کنید و دوباره تلاش کنید</string>
+    <string name="vpn5g_guide_links_title">لینک‌های مفید</string>
+    <string name="vpn5g_routing_title">تنظیمات تونل</string>
+    <string name="vpn5g_routing_body">انتخاب کنید کدام برنامه‌ها از VPN عبور کنند.</string>
+    <string name="vpn5g_routing_enable">تونل برای برنامه‌های انتخاب‌شده</string>
+    <string name="vpn5g_routing_enable_body">وقتی فعال است، فقط برنامه‌های انتخاب‌شده از VPN استفاده می‌کنند.</string>
+    <string name="vpn5g_routing_mode_title">حالت تونل</string>
+    <string name="vpn5g_routing_mode_bypass">عبور مستقیم برنامه‌های انتخاب‌شده</string>
+    <string name="vpn5g_routing_mode_bypass_body">برنامه‌های انتخاب‌شده از VPN عبور نمی‌کنند؛ بقیه از VPN استفاده می‌کنند.</string>
+    <string name="vpn5g_routing_mode_proxy_body">فقط برنامه‌های انتخاب‌شده از VPN استفاده می‌کنند؛ بقیه مستقیم متصل می‌شوند.</string>
+    <string name="vpn5g_routing_choose_apps">انتخاب برنامه‌ها (%1$d انتخاب شده)</string>
+    <string name="vpn5g_routing_apply_note">تغییرات بعد از اتصال دوباره اعمال می‌شود.</string>
+    <string name="vpn5g_profile_account">حساب کاربری</string>
+    <string name="vpn5g_profile_not_signed_in">وارد نشده‌اید</string>
+    <string name="vpn5g_auth_register_title">ثبت‌نام با ایمیل</string>
+    <string name="vpn5g_auth_password">رمز عبور</string>
+    <string name="vpn5g_auth_new_password">رمز عبور جدید</string>
+    <string name="vpn5g_auth_signin">ورود</string>
+    <string name="vpn5g_auth_login_with_code">ورود با کد تایید</string>
+    <string name="vpn5g_auth_go_register">ثبت‌نام نکرده‌اید؟ ثبت‌نام کنید</string>
+    <string name="vpn5g_auth_done">انجام شد</string>
+    <string name="vpn5g_auth_back_to_profile">بازگشت به پروفایل</string>
+    <string name="vpn5g_auth_sending">در حال ارسال کد…</string>
+    <string name="vpn5g_auth_verifying">در حال بررسی…</string>
+    <string name="vpn5g_auth_change_password">تغییر رمز عبور</string>
+    <string name="vpn5g_auth_password_short">رمز عبور باید حداقل ۶ کاراکتر باشد</string>
+    <string name="vpn5g_auth_network_error">خطای شبکه؛ دوباره تلاش کنید</string>
+    <string name="vpn5g_auth_code_wrong">کد واردشده درست نیست</string>
+    <string name="vpn5g_auth_signin_failed">ورود ناموفق بود</string>
+    <string name="vpn5g_auth_generic_error">خطایی رخ داد؛ دوباره تلاش کنید</string>
+    <string name="vpn5g_auth_signout">خروج از حساب</string>
+    <string name="vpn5g_promo_title">کد تخفیف / هدیه</string>
+    <string name="vpn5g_promo_body">اگر از ربات کد تخفیف یا هدیه گرفته‌اید، اینجا وارد کنید تا فعال شود.</string>
+    <string name="vpn5g_promo_code">کد</string>
+    <string name="vpn5g_promo_redeem">فعال کردن کد</string>
+    <string name="vpn5g_promo_valid">کد معتبر است؛ برای فعال‌سازی نهایی، در ربات تأیید کنید.</string>
+    <string name="vpn5g_promo_unknown">این کد شناخته نشد</string>
+    <string name="vpn5g_promo_exhausted">ظرفیت استفاده از این کد تمام شده است</string>
+    <string name="vpn5g_promo_already">این کد قبلاً در این دستگاه استفاده شده است</string>
+    <string name="vpn5g_promo_invalid">کد معتبر نیست</string>
+    <string name="vpn5g_promo_confirm_bot">تأیید در ربات تلگرام</string>
 
 </resources>

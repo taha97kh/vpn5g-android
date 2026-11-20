@@ -29,16 +29,18 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import com.v2ray.ang.R
 
-/** VPN 5G dark palette. */
-val Vpn5gNavyTop = Color(0xFF0F172A)
-val Vpn5gNavyBottom = Color(0xFF1E293B)
+/** VPN5G IRBOT dark palette — near-black X-VPN-style background, cyan accent. */
+val Vpn5gNavyTop = Color(0xFF000000)
+val Vpn5gNavyBottom = Color(0xFF0A0A0A)
+val Vpn5gCyan = Color(0xFF00E5CC)
+val Vpn5gBlackBar = Color(0xFF000000)
 val Vpn5gAccent = Color(0xFF2563EB)
 val Vpn5gAccentLight = Color(0xFF3B82F6)
 val Vpn5gOnDark = Color(0xFFF1F5F9)
 val Vpn5gOnDarkMuted = Color(0xFF94A3B8)
 
 /**
- * Animated gradient background (dark navy with a slowly shifting blue tint).
+ * Animated background (near-black with a slowly shifting dark-cyan tint).
  *
  * Purely presentational: two [animateFloat] progress values on an infinite
  * transition drive the middle/bottom gradient stops through [lerp].
@@ -62,7 +64,7 @@ fun Vpn5gAnimatedBackground(content: @Composable BoxScope.() -> Unit) {
         ),
         label = "gradient_mid",
     )
-    val mid = lerp(Vpn5gNavyBottom, Color(0xFF172554), midProgress)
+    val mid = lerp(Vpn5gNavyBottom, Color(0xFF06231F), midProgress)
     val tintProgress by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -72,7 +74,7 @@ fun Vpn5gAnimatedBackground(content: @Composable BoxScope.() -> Unit) {
         ),
         label = "gradient_tint",
     )
-    val tint = lerp(Color(0xFF1D4ED8), Vpn5gAccent, tintProgress)
+    val tint = lerp(Color(0xFF00897B), Vpn5gCyan, tintProgress)
     Box(
         modifier = Modifier
             .fillMaxSize()

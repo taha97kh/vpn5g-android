@@ -1,5 +1,6 @@
 package com.v2ray.ang.handler.vpn5g
 
+import android.content.Context
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.dto.UrlContentRequest
 import com.v2ray.ang.dto.entities.ProfileItem
@@ -7,6 +8,7 @@ import com.v2ray.ang.dto.entities.SubscriptionItem
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SpeedtestManager
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.ASSET_FALLBACK_SERVERS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.LIVE_JSON
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUBSCRIPTION_REMARKS
@@ -19,6 +21,7 @@ import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -216,8 +219,12 @@ object Vpn5gSync {
     }
 
     /**
-     * Reads the stored "VPN 5G" group and builds home-screen sections.
-     * Free countries first (by server count), then locked ones.
+     * Reads the stored "VPN5G IRBOT" group and builds home-screen sections.
+     * Free countries first (by server count), then locked ones. Each server
+     * row carries the flag + Persian country name parsed from its remark
+     * (free, no I/O); servers whose remark has no country are enriched later
+     * by [enrichCountries] (DNS + bundled GeoIP table) so the first paint is
+     * never blocked on DNS.
      */
     fun loadGroupedServers(freeCountries: List<String>): List<Vpn5gCountryUi> {
         val subId = MmkvManager.decodeSubscriptions()
@@ -233,6 +240,7 @@ object Vpn5gSync {
             val ping = MmkvManager.decodeServerAffiliationInfo(guid)?.testDelayMillis ?: 0L
             val label = profile.country?.trim().orEmpty().ifEmpty { key }
             labels.putIfAbsent(key, label)
+            val remarkCountry = Vpn5gGeoIp.countryFromRemark(profile.remarks)
             byCountry.getOrPut(key) { mutableListOf() }.add(
                 Vpn5gServerUi(
                     guid = guid,
@@ -240,6 +248,10 @@ object Vpn5gSync {
                     country = key,
                     pingMillis = ping,
                     isSelected = guid == selected,
+                    flag = remarkCountry?.flag ?: "🌐",
+                    countryNameFa = remarkCountry?.nameFa ?: "",
+                    countryCode = remarkCountry?.code ?: "",
+                    host = profile.server.orEmpty(),
                 )
             )
         }
@@ -255,6 +267,112 @@ object Vpn5gSync {
                 .thenByDescending { it.servers.size }
                 .thenBy { it.label }
         )
+    }
+
+    /**
+     * Background GeoIP enrichment: resolves the host of every server whose
+     * remark carried no country and fills in its flag + Persian name from
+     * the bundled table. Bounded: 32-host batches, 16-way concurrency, and
+     * a global [budgetMs] so a huge list never stalls the UI — servers not
+     * resolved in budget keep the globe and are retried on the next refresh
+     * (DNS results are cached per host). Never throws.
+     */
+    suspend fun enrichCountries(
+        context: Context,
+        sections: List<Vpn5gCountryUi>,
+        budgetMs: Long = 6_000L,
+    ): List<Vpn5gCountryUi> = withContext(Dispatchers.IO) {
+        val deadline = System.currentTimeMillis() + budgetMs
+        val resolved = mutableMapOf<String, Vpn5gGeoIp.Country>()
+        val unknown = sections.flatMap { it.servers }.filter { it.countryCode.isEmpty() }
+        if (unknown.isEmpty()) return@withContext sections
+        val semaphore = Semaphore(16)
+        runCatching {
+            unknown.chunked(32).forEach { batch ->
+                if (System.currentTimeMillis() >= deadline) return@forEach
+                val results = kotlinx.coroutines.withTimeoutOrNull(2_500L) {
+                    coroutineScope {
+                        batch.map { server ->
+                            async {
+                                semaphore.withPermit {
+                                    server.guid to Vpn5gGeoIp.countryForHost(context, server.host)
+                                }
+                            }
+                        }.awaitAll()
+                    }
+                } ?: return@forEach
+                results.forEach { (guid, country) ->
+                    if (country.code.isNotEmpty()) resolved[guid] = country
+                }
+            }
+        }.onFailure { e ->
+            LogUtil.e(AppConfig.TAG, "Vpn5gSync: GeoIP enrichment failed", e)
+        }
+        if (resolved.isEmpty()) return@withContext sections
+        sections.map { section ->
+            section.copy(
+                servers = section.servers.map { server ->
+                    val country = resolved[server.guid] ?: return@map server
+                    server.copy(
+                        flag = country.flag,
+                        countryNameFa = country.nameFa,
+                        countryCode = country.code,
+                    )
+                }
+            )
+        }
+    }
+
+    /**
+     * Bundled fallback snapshot (assets/vpn5g/fallback_servers.json).
+     *
+     * Used ONLY when the stored group is empty and a live refresh failed
+     * (no internet, or the sources are unreachable from the national
+     * network): the snapshot — taken from the live sources when v1.1 was
+     * built — is imported so the list is never empty on first launch. The
+     * entries are NOT ping-tested here (there is no network to test with);
+     * they show unknown ping and the UI marks the list offline. The next
+     * successful refresh replaces them with ping-tested servers. Returns
+     * the number of servers imported.
+     */
+    suspend fun loadBundledFallback(context: Context): Int = withContext(Dispatchers.IO) {
+        try {
+            val subId = ensureSubscriptionId()
+            if (MmkvManager.decodeServerList(subId).isNotEmpty()) return@withContext 0
+            val body = context.applicationContext.assets.open(ASSET_FALLBACK_SERVERS)
+                .bufferedReader().use { it.readText() }
+            val entries = JsonUtil.fromJsonSafe(body, Array<FallbackEntry>::class.java)
+                ?.toList().orEmpty()
+            if (entries.isEmpty()) return@withContext 0
+            val profiles = linkedMapOf<String, ProfileItem>()
+            val rawConfigs = mutableMapOf<String, String>()
+            entries.forEach { entry ->
+                val uri = entry.uri?.trim().orEmpty()
+                if (uri.isEmpty()) return@forEach
+                val profile = try {
+                    AngConfigManager.parseConfig(uri, subId, null)
+                } catch (e: Exception) {
+                    LogUtil.e(AppConfig.TAG, "Vpn5gSync: fallback parse failed", e)
+                    null
+                } ?: return@forEach
+                profile.country = entry.country?.trim().orEmpty().ifEmpty { "بین‌الملل" }
+                val guid = Utils.getUuid()
+                profiles[guid] = profile
+                rawConfigs[guid] = ""
+            }
+            if (profiles.isEmpty()) return@withContext 0
+            MmkvManager.saveServerProfiles(
+                profiles = profiles,
+                rawConfigs = rawConfigs,
+                subscriptionId = subId,
+                append = false,
+            )
+            LogUtil.i(AppConfig.TAG, "Vpn5gSync: bundled fallback imported ${profiles.size} servers")
+            profiles.size
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Vpn5gSync: bundled fallback failed", e)
+            0
+        }
     }
 
     /** Imports a single config URI (deep link) into the VPN 5G group. */

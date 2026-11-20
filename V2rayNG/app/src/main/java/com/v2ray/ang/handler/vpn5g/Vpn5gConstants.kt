@@ -41,7 +41,7 @@ object Vpn5gConstants {
     const val CHANNEL_URL = "https://t.me/VPNCRACKNET"
     const val SUPPORT_URL = "https://t.me/Aref_5G"
 
-    const val SUBSCRIPTION_REMARKS = "VPN 5G"
+    const val SUBSCRIPTION_REMARKS = "VPN5G IRBOT"
 
     /** Default free countries (normalized names, no emoji prefix). */
     val DEFAULT_FREE_COUNTRIES = listOf("بین‌الملل", "فرانسه", "آلمان")
@@ -52,6 +52,18 @@ object Vpn5gConstants {
     /** MMKV SETTING keys owned by VPN 5G. */
     const val KEY_APP_CONFIG_JSON = "vpn5g_app_config_json"
     const val KEY_CONNECTED_AT = "vpn5g_connected_at"
+    /** JSON of the signed-in account session (email + tokens), see Vpn5gAuthService. */
+    const val KEY_AUTH_SESSION_JSON = "vpn5g_auth_session_json"
+    /** Redeemed promo codes, stored as a JSON array of code strings. */
+    const val KEY_REDEEMED_CODES_JSON = "vpn5g_redeemed_codes_json"
+    /** GUIDs of servers whose tunnel check failed in this process run. */
+    const val KEY_TUNNEL_FAILED_GUIDS = "vpn5g_tunnel_failed_guids"
+
+    /** Bundled fallback assets (assets/vpn5g/). */
+    const val ASSET_FALLBACK_SERVERS = "vpn5g/fallback_servers.json"
+
+    /** Max servers tried in one auto-failover chain after a tunnel check fails. */
+    const val MAX_TUNNEL_ATTEMPTS = 3
 
     /** Unique WorkManager name for the 30-minute disconnect work. */
     const val DISCONNECT_WORK_NAME = "vpn5g_30min_disconnect"

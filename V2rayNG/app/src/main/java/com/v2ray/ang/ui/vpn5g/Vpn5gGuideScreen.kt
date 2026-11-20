@@ -1,7 +1,9 @@
 package com.v2ray.ang.ui.vpn5g
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,14 +21,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 
-/** In-app guide: how to connect, import a config, and recover from a dead server. */
+/** In-app guide + quick links (the "Browser" tab): how to connect, import a config, and recover from a dead server. */
 @Composable
-fun Vpn5gGuideScreen(onBack: () -> Unit) {
+fun Vpn5gGuideScreen(
+    onBack: () -> Unit,
+    onOpenUrl: (String) -> Unit,
+) {
     var entered by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { entered = true }
 
@@ -69,6 +76,29 @@ fun Vpn5gGuideScreen(onBack: () -> Unit) {
             }
         }
         Vpn5gStaggeredItem(index = 5, visible = entered) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = stringResource(R.string.vpn5g_guide_links_title),
+                    color = Vpn5gOnDark,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                GuideLinkRow(
+                    label = stringResource(R.string.vpn5g_about_bot),
+                    onClick = { onOpenUrl(Vpn5gConstants.BOT_URL) },
+                )
+                GuideLinkRow(
+                    label = stringResource(R.string.vpn5g_about_channel),
+                    onClick = { onOpenUrl(Vpn5gConstants.CHANNEL_URL) },
+                )
+                GuideLinkRow(
+                    label = stringResource(R.string.vpn5g_about_support),
+                    onClick = { onOpenUrl(Vpn5gConstants.SUPPORT_URL) },
+                )
+            }
+        }
+        Vpn5gStaggeredItem(index = 6, visible = entered) {
             TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = stringResource(R.string.vpn5g_nav_home),
@@ -77,5 +107,22 @@ fun Vpn5gGuideScreen(onBack: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun GuideLinkRow(label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Button, onClickLabel = label) { onClick() }
+            .padding(vertical = 6.dp)
+    ) {
+        Text(
+            text = label,
+            color = Vpn5gAccentLight,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
