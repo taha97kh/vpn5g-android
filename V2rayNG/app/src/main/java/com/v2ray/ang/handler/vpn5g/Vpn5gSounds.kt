@@ -20,7 +20,7 @@ object Vpn5gSounds {
     fun playConnected() = play(ToneGenerator.TONE_PROP_BEEP2, 600L)
 
     /** Distinct low error tone when a connect fails. */
-    fun playError() = play(ToneGenerator.TONE_CDMA_ABORT, 400L)
+    fun playError() = play(ToneGenerator.TONE_SUP_ERROR, 400L)
 
     private fun play(tone: Int, durationMs: Long) {
         try {

@@ -10,6 +10,7 @@ import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.ui.compose.ThemeManager
+import kotlin.concurrent.thread
 
 class AngApplication : Application() {
     companion object {
@@ -52,9 +53,9 @@ class AngApplication : Application() {
         // initialize() copies them. Copy them here, once per install, on
         // a background thread: initAssets() only copies files that are
         // missing, so it is idempotent and safe to run at every launch.
-        Thread(name = "vpn5g-init-assets") {
+        thread(name = "vpn5g-init-assets") {
             SettingsManager.initAssets(this, assets)
-        }.start()
+        }
 
         // Initialize theme state from MMKV
         ThemeManager.refresh()
