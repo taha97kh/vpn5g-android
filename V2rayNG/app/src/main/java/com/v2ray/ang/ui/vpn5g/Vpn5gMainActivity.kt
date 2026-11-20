@@ -5,9 +5,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
@@ -46,7 +48,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -80,6 +85,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -87,21 +93,26 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
 import com.v2ray.ang.AppConfig
+import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
+import com.v2ray.ang.dto.UrlContentRequest
 import com.v2ray.ang.enums.PermissionType
 import com.v2ray.ang.extension.toast
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
+import com.v2ray.ang.handler.vpn5g.GithubReleaseAsset
 import com.v2ray.ang.handler.vpn5g.PaymentGatewayRemote
 import com.v2ray.ang.handler.vpn5g.PromoCodeRemote
 import com.v2ray.ang.handler.vpn5g.SubscriptionPlanRemote
 import com.v2ray.ang.handler.vpn5g.SubscriptionStatusRemote
+import com.v2ray.ang.handler.vpn5g.Vpn5gAppUpdate
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthService
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_PROTOCOL_FILTER
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_UPDATE_LAST_CHECK_MS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_AUTO_FAILOVER_ATTEMPTS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_TUNNEL_ATTEMPTS
 import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
@@ -119,6 +130,7 @@ import com.v2ray.ang.ui.base.HelperBaseComponentActivity
 import com.v2ray.ang.ui.compose.colorPing
 import com.v2ray.ang.ui.compose.colorPingRed
 import com.v2ray.ang.ui.main.MainActivity
+import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.Dispatchers
@@ -134,6 +146,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 enum class Vpn5gDestination {
     HOME, PREMIUM, BROWSER, ROUTING, ME, AUTH, PROTOCOL
@@ -182,6 +195,14 @@ data class Vpn5gHomeUiState(
     val trialEnabled: Boolean = false,
     /** Free-trial length in hours (24 per the product rule). */
     val trialHours: Int = 24,
+    /** A newer GitHub release is available (v1.1.3): card shown on home. */
+    val updateAvailable: Boolean = false,
+    /** Display version of the newer release (e.g. "1.1.4"), null when none. */
+    val updateVersion: String? = null,
+    /** True while the update APK is downloading. */
+    val updateDownloading: Boolean = false,
+    /** Download progress 0..1 while downloading. */
+    val updateDownloadProgress: Float = 0f,
 )
 
 /**
@@ -198,6 +219,14 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _failoverEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val failoverEvent: SharedFlow<String> = _failoverEvent.asSharedFlow()
+
+    /** Fired with the downloaded APK file; the Activity opens the installer. */
+    private val _updateInstallEvent = MutableSharedFlow<File>(extraBufferCapacity = 1)
+    val updateInstallEvent: SharedFlow<File> = _updateInstallEvent.asSharedFlow()
+
+    /** Release asset picked by the update check; the download source. */
+    private var pendingUpdateAsset: GithubReleaseAsset? = null
+    private var updateDownloadJob: Job? = null
 
     private var verifyJob: Job? = null
     private val triedGuids = mutableSetOf<String>()
@@ -301,6 +330,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         // Auto-refresh on entry (and every 5 minutes while open).
         viewModelScope.launch { refresh() }
 
+        // App update check (v1.1.3): once per day at most, silent on failure.
+        checkForUpdate()
+
         viewModelScope.launch {
             while (isActive) {
                 delay(5 * 60_000L)
@@ -328,6 +360,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     override fun onCleared() {
         verifyJob?.cancel()
+        updateDownloadJob?.cancel()
         runCatching {
             MessageHelper.sendMsg2Service(getApplication(), AppConfig.MSG_UNREGISTER_CLIENT, "")
         }.onFailure {
@@ -445,6 +478,91 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun consumeError() {
         _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    /**
+     * Checks the latest GitHub release (v1.1.3). Runs at most once per day:
+     * the timestamp is stored only when the fetch succeeds, so a failed
+     * check (e.g. no network) retries on the next launch instead of staying
+     * silent for a day. Never shows anything when offline or when the
+     * installed version is already the latest.
+     */
+    fun checkForUpdate() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val lastCheck = MmkvManager.decodeSettingsLong(KEY_UPDATE_LAST_CHECK_MS, 0L)
+            if (System.currentTimeMillis() - lastCheck < Vpn5gAppUpdate.UPDATE_CHECK_INTERVAL_MS) {
+                return@launch
+            }
+            val release = Vpn5gAppUpdate.fetchLatest() ?: return@launch
+            MmkvManager.encodeSettings(KEY_UPDATE_LAST_CHECK_MS, System.currentTimeMillis())
+            val latestTag = release.tagName ?: return@launch
+            if (!Vpn5gAppUpdate.isNewerVersion(latestTag, BuildConfig.VERSION_NAME)) {
+                return@launch
+            }
+            val asset = Vpn5gAppUpdate.pickPlaystoreApkAsset(release) ?: return@launch
+            pendingUpdateAsset = asset
+            _uiState.update {
+                it.copy(
+                    updateAvailable = true,
+                    updateVersion = Vpn5gAppUpdate.displayVersion(latestTag),
+                )
+            }
+        }
+    }
+
+    /** Hides the update card until the next daily check. */
+    fun dismissUpdate() {
+        _uiState.update { it.copy(updateAvailable = false) }
+    }
+
+    /**
+     * Downloads the pending update APK into the app cache with visible
+     * progress, then asks the Activity to fire the system installer.
+     * A failed download shows a toast and leaves the card for a retry.
+     */
+    fun startUpdateDownload() {
+        val asset = pendingUpdateAsset ?: return
+        val url = asset.browserDownloadUrl ?: return
+        if (_uiState.value.updateDownloading) return
+        updateDownloadJob = viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(updateDownloading = true, updateDownloadProgress = 0f) }
+            val app = getApplication<Application>()
+            val target = File(
+                File(app.cacheDir, "update").apply { mkdirs() },
+                asset.name?.takeIf { it.endsWith(".apk", ignoreCase = true) } ?: "VPN5G_update.apk",
+            )
+            val ok = try {
+                HttpUtil.downloadToFile(
+                    UrlContentRequest(url = url, timeout = 60_000),
+                    target,
+                ) { downloaded, total ->
+                    if (total > 0) {
+                        _uiState.update {
+                            it.copy(
+                                updateDownloadProgress = (downloaded.toFloat() / total)
+                                    .coerceIn(0f, 1f),
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: update download failed", e)
+                false
+            }
+            if (ok && target.exists() && target.length() > 0) {
+                _uiState.update { it.copy(updateDownloading = false, updateDownloadProgress = 1f) }
+                _updateInstallEvent.emit(target)
+            } else {
+                runCatching { target.delete() }
+                _uiState.update {
+                    it.copy(
+                        updateDownloading = false,
+                        updateDownloadProgress = 0f,
+                        errorMessage = app.getString(R.string.vpn5g_update_download_failed),
+                    )
+                }
+            }
+        }
     }
 
     /** Called by the Activity before a manual connect/server tap. */
@@ -856,12 +974,24 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
 
     private var pendingGuid: String? = null
 
+    /** APK waiting for the "install unknown apps" grant (Android 8+). */
+    private var pendingInstallFile: File? = null
+
     private val requestVpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
             if (it.resultCode == RESULT_OK) {
                 pendingGuid?.let { startV2Ray(it) }
             }
             pendingGuid = null
+        }
+
+    private val requestInstallPermission =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            if (packageManager.canRequestPackageInstalls()) {
+                pendingInstallFile?.let { installApk(it) }
+            }
+            // Still ungranted: the user declined in settings; the update
+            // card stays and the user can tap the button again.
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -876,6 +1006,34 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         handleDeepLink(intent)
     }
 
+    /**
+     * Fires the system package installer for a downloaded APK. Stock
+     * Android never allows a fully silent install: the user confirms once
+     * in the system UI. When the "install unknown apps" grant is missing
+     * (Android 8+), the user is sent to this app's settings page first
+     * and the install is retried when they return.
+     */
+    private fun installApk(file: File) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            pendingInstallFile = file
+            requestInstallPermission.launch(
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName"),
+                ),
+            )
+            return
+        }
+        pendingInstallFile = null
+        val uri = FileProvider.getUriForFile(this, "$packageName.cache", file)
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        startActivity(intent)
+    }
+
     @Composable
     override fun ScreenContent() {
         val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -887,6 +1045,14 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         LaunchedEffect(Unit) {
             viewModel.failoverEvent.collect { guid ->
                 requestServiceStart(guid)
+            }
+        }
+
+        // App update: the ViewModel asks for the installer once the APK
+        // has downloaded; the Activity owns the install intent + grant flow.
+        LaunchedEffect(Unit) {
+            viewModel.updateInstallEvent.collect { file ->
+                installApk(file)
             }
         }
 
@@ -934,6 +1100,8 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
                             onOpenPremium = { destination = Vpn5gDestination.PREMIUM },
                             onConsumeAutoFailoverNotice = { viewModel.consumeAutoFailoverNotice() },
+                            onUpdateDownload = { viewModel.startUpdateDownload() },
+                            onDismissUpdate = { viewModel.dismissUpdate() },
                         )
                         Vpn5gDestination.PREMIUM -> Vpn5gSubscriptionScreen(
                             state = uiState,
@@ -1266,6 +1434,86 @@ private fun formatRemaining(millis: Long?): String {
  * a Recommended fastest-server row, and a premium banner. The ring shows
  * the 30-minute session as a progress arc while connected.
  */
+/**
+ * Prominent in-app update banner (v1.1.3): shown when a newer GitHub
+ * release exists. One tap downloads the APK with visible progress and
+ * opens the system installer; the user confirms once in the system UI.
+ * "Later" hides the card until the next daily check.
+ */
+@Composable
+private fun Vpn5gUpdateCard(
+    version: String,
+    downloading: Boolean,
+    progress: Float,
+    onUpdate: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Vpn5gCyan.copy(alpha = 0.18f))
+            .padding(16.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.vpn5g_update_title),
+            color = Vpn5gOnDark,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = stringResource(R.string.vpn5g_update_body, version),
+            color = Vpn5gOnDark,
+            fontSize = 14.sp,
+        )
+        Spacer(Modifier.height(12.dp))
+        if (downloading) {
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth(),
+                color = Vpn5gCyan,
+                trackColor = Vpn5gOnDark.copy(alpha = 0.15f),
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(
+                    R.string.vpn5g_update_downloading,
+                    (progress * 100).toInt(),
+                ),
+                color = Vpn5gOnDarkMuted,
+                fontSize = 13.sp,
+            )
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Button(
+                    onClick = onUpdate,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Vpn5gCyan,
+                        contentColor = Color.Black,
+                    ),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_update_button),
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                TextButton(onClick = onDismiss) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_update_later),
+                        color = Vpn5gOnDarkMuted,
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Vpn5gHomeScreen(
@@ -1278,6 +1526,8 @@ fun Vpn5gHomeScreen(
     onOpenBot: () -> Unit,
     onOpenPremium: () -> Unit,
     onConsumeAutoFailoverNotice: () -> Unit,
+    onUpdateDownload: () -> Unit,
+    onDismissUpdate: () -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
     var serversExpanded by rememberSaveable { mutableStateOf(true) }
@@ -1428,6 +1678,21 @@ fun Vpn5gHomeScreen(
                         remainingFraction = state.remainingMillis
                             ?.let { (it / (30L * 60_000L).toFloat()).coerceIn(0f, 1f) },
                         onClick = onToggleConnect,
+                    )
+                }
+            }
+
+            val newVersion = state.updateVersion
+            if (state.updateAvailable && newVersion != null) {
+                item {
+                    // In-app update banner (v1.1.3): shown when a newer
+                    // GitHub release exists; one tap downloads + installs.
+                    Vpn5gUpdateCard(
+                        version = newVersion,
+                        downloading = state.updateDownloading,
+                        progress = state.updateDownloadProgress,
+                        onUpdate = onUpdateDownload,
+                        onDismiss = onDismissUpdate,
                     )
                 }
             }

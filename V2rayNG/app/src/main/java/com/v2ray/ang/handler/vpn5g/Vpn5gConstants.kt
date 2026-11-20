@@ -60,6 +60,8 @@ object Vpn5gConstants {
     const val KEY_TUNNEL_FAILED_GUIDS = "vpn5g_tunnel_failed_guids"
     /** Selected protocol filter id ("auto", "vless", "vmess", "trojan", "ss"). */
     const val KEY_PROTOCOL_FILTER = "vpn5g_protocol_filter"
+    /** Last successful app-update check, epoch millis (v1.1.3, at most daily). */
+    const val KEY_UPDATE_LAST_CHECK_MS = "vpn5g_update_last_check_ms"
 
     /** Bundled fallback assets (assets/vpn5g/). */
     const val ASSET_FALLBACK_SERVERS = "vpn5g/fallback_servers.json"

@@ -275,9 +275,18 @@ object HttpUtil {
         }
     }
 
+    /**
+     * Downloads a URL to [targetFile].
+     *
+     * @param onProgress Optional progress callback (downloaded bytes, total
+     * bytes; total is -1 when the server sends no Content-Length). Called
+     * from the calling thread as bytes arrive. Defaults to null, which
+     * keeps the previous copy behavior for existing callers.
+     */
     fun downloadToFile(
         request: UrlContentRequest,
-        targetFile: File
+        targetFile: File,
+        onProgress: ((downloadedBytes: Long, totalBytes: Long) -> Unit)? = null
     ): Boolean {
         val url = request.url ?: return false
         val client = buildOkHttpClient(request.timeout, request.httpPort, request.proxyUsername, request.proxyPassword, followRedirects = true)
@@ -296,9 +305,21 @@ object HttpUtil {
                     return false
                 }
                 val body = response.body ?: return false
+                val totalBytes = body.contentLength()
                 body.byteStream().use { input ->
                     targetFile.outputStream().use { output ->
-                        input.copyTo(output)
+                        if (onProgress == null) {
+                            input.copyTo(output)
+                        } else {
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            var downloaded = 0L
+                            var read: Int
+                            while (input.read(buffer).also { read = it } != -1) {
+                                output.write(buffer, 0, read)
+                                downloaded += read
+                                onProgress(downloaded, totalBytes)
+                            }
+                        }
                     }
                 }
                 true

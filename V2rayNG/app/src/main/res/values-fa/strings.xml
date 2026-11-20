@@ -576,5 +576,11 @@
     <string name="sub_info_unlimited">نامحدود</string>
 
     <string name="vpn5g_loading">در حال بارگذاری…</string>
+    <string name="vpn5g_update_title">نسخه جدید اومد</string>
+    <string name="vpn5g_update_body">نسخه‌ی %1$s منتشر شد؛ با یک کلیک بروزرسانی کن</string>
+    <string name="vpn5g_update_button">بروزرسانی</string>
+    <string name="vpn5g_update_later">بعداً</string>
+    <string name="vpn5g_update_downloading">در حال دانلود… %1$d٪</string>
+    <string name="vpn5g_update_download_failed">دانلود ناموفق بود؛ دوباره تلاش کن</string>
 
 </resources>

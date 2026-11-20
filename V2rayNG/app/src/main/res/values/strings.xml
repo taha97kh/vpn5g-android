@@ -764,5 +764,11 @@
     <string name="vpn5g_connect_brand" translatable="false">4ref.ai</string>
     <string name="vpn5g_vip" translatable="false">VIP</string>
     <string name="vpn5g_loading">Loading...</string>
+    <string name="vpn5g_update_title">نسخه جدید اومد</string>
+    <string name="vpn5g_update_body">نسخه‌ی %1$s منتشر شد؛ با یک کلیک بروزرسانی کن</string>
+    <string name="vpn5g_update_button">بروزرسانی</string>
+    <string name="vpn5g_update_later">بعداً</string>
+    <string name="vpn5g_update_downloading">در حال دانلود… %1$d٪</string>
+    <string name="vpn5g_update_download_failed">دانلود ناموفق بود؛ دوباره تلاش کن</string>
 
 </resources>
