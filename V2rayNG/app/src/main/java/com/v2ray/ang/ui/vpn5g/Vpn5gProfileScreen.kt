@@ -38,7 +38,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_URL
 
 /**
  * "Me" screen: account (email auth), subscription remaining, advanced
- * settings, and about (maker, channel, bot, support, version).
+ * settings, and about (channel, bot, support, version).
  */
 @Composable
 fun Vpn5gProfileScreen(
@@ -178,12 +178,6 @@ fun Vpn5gProfileScreen(
                         fontSize = 14.sp,
                     )
                 }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = stringResource(R.string.vpn5g_about_maker),
-                    color = Vpn5gOnDark,
-                    fontSize = 15.sp,
-                )
                 Spacer(Modifier.height(8.dp))
                 ProfileLinkRow(
                     label = stringResource(R.string.vpn5g_about_channel),

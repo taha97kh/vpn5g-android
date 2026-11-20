@@ -612,7 +612,6 @@
     <string name="vpn5g_guide_step3_body">لیست را به‌روزرسانی کنید و یک سرور دیگر انتخاب کنید؛ فقط سرورهای زنده نمایش داده می‌شوند.</string>
     <string name="vpn5g_guide_step4_title">۴. قطع خودکار بعد از ۳۰ دقیقه</string>
     <string name="vpn5g_guide_step4_body">هر اتصال بعد از ۳۰ دقیقه خودکار قطع می‌شود؛ برای ادامه دوباره متصل شوید.</string>
-    <string name="vpn5g_about_maker">سازنده: عارف خیراندیش (@4ref.ai)</string>
     <string name="vpn5g_about_channel">کانال: @VPNCRACKNET</string>
     <string name="vpn5g_about_bot">ربات: @VPN5G_IRBot</string>
     <string name="vpn5g_about_support">پشتیبانی: @Aref_5G</string>
@@ -634,6 +633,8 @@
     <string name="vpn5g_auth_forgot">فراموشی رمز عبور</string>
     <string name="vpn5g_auth_coming_soon">به‌زودی — نیاز به سرور دارد (نسخه‌ی بعد)</string>
     <string name="vpn5g_auth_invalid_email">ایمیل معتبر وارد کنید</string>
+    <string name="vpn5g_auth_gmail_only">ثبت‌نام فقط با ایمیل Gmail امکان‌پذیر است</string>
+    <string name="vpn5g_auth_disposable">ایمیل‌های موقت و یک‌بارمصرف قابل قبول نیستند</string>
     <string name="vpn5g_auth_invalid_code">کد باید ۶ رقم باشد</string>
     <string name="vpn5g_auth_recover_title">بازیابی رمز عبور</string>
     <string name="vpn5g_auth_recover_body">کد بازیابی به ایمیل شما ارسال می‌شود.</string>

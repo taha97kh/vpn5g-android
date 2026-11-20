@@ -86,8 +86,27 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    private fun validEmail(): Boolean {
+    /**
+     * Email validation. Signup and password recovery accept ONLY
+     * @gmail.com addresses (see [Vpn5gEmailPolicy]); login keeps the
+     * generic format check because registered accounts are gmail by
+     * construction.
+     */
+    private fun validEmail(gmailOnly: Boolean = false): Boolean {
         val email = _uiState.value.email.trim()
+        if (gmailOnly) {
+            val errorRes = when (Vpn5gEmailPolicy.check(email)) {
+                Vpn5gEmailPolicy.Check.OK -> null
+                Vpn5gEmailPolicy.Check.DISPOSABLE -> R.string.vpn5g_auth_disposable
+                Vpn5gEmailPolicy.Check.NOT_GMAIL -> R.string.vpn5g_auth_gmail_only
+                Vpn5gEmailPolicy.Check.INVALID_FORMAT -> R.string.vpn5g_auth_invalid_email
+            }
+            if (errorRes != null) {
+                _uiState.update { it.copy(emailErrorRes = errorRes) }
+                return false
+            }
+            return true
+        }
         return if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
             _uiState.update { it.copy(emailErrorRes = R.string.vpn5g_auth_invalid_email) }
             false
@@ -129,7 +148,8 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Step 1 of the code flows: send the OTP code for the current mode. */
     fun sendCode() {
-        if (!validEmail()) return
+        val gmailOnly = _uiState.value.mode != Vpn5gAuthMode.LOGIN
+        if (!validEmail(gmailOnly = gmailOnly)) return
         if (_uiState.value.mode == Vpn5gAuthMode.REGISTER &&
             !validPassword(_uiState.value.password)
         ) return
