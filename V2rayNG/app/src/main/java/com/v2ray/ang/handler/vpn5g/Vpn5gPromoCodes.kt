@@ -62,9 +62,18 @@ object Vpn5gPromoCodes {
         if (codes.isNullOrEmpty()) return Validation.UnknownCode
         val entry = codes.firstOrNull { it.code?.trim()?.uppercase() == input }
             ?: return Validation.UnknownCode
+        return validateEntry(entry, isRedeemedLocally(input))
+    }
+
+    /**
+     * Pure decision over one matched entry (no I/O; covered by JVM unit
+     * tests in Vpn5gPromoCodesTest). [alreadyRedeemed] is whether this
+     * device already redeemed the code.
+     */
+    fun validateEntry(entry: PromoCodeRemote, alreadyRedeemed: Boolean): Validation {
         val remaining = entry.remaining_uses
         if (remaining != null && remaining <= 0) return Validation.Exhausted
-        if (isRedeemedLocally(input)) return Validation.AlreadyRedeemed
+        if (alreadyRedeemed) return Validation.AlreadyRedeemed
         val type = entry.type?.trim()?.lowercase()
         val usable = when (type) {
             "discount" -> (entry.discount_percent ?: 0) in 1..100

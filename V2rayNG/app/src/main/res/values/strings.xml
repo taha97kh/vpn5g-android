@@ -576,7 +576,7 @@
     <string name="sub_info_traffic" translatable="false">%1$s / %2$s</string>
     <string name="sub_info_unlimited">Unlimited</string>
 
-    <!-- VPN 5G strings (Persian defaults; fa locale falls back to these) -->
+    <!-- VPN5G IRBOT strings (Persian defaults; fa locale falls back to these) -->
     <string name="vpn5g_app_tagline">اینترنت آزاد، سریع و امن</string>
     <string name="vpn5g_connect">اتصال</string>
     <string name="vpn5g_connected">متصل</string>
