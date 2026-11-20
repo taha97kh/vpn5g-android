@@ -45,6 +45,7 @@ fun Vpn5gProfileScreen(
     state: Vpn5gHomeUiState,
     onBack: () -> Unit,
     onOpenAuth: () -> Unit,
+    onOpenProtocol: () -> Unit,
     onSignOut: () -> Unit,
     onOpenAdvanced: () -> Unit,
     onOpenUrl: (String) -> Unit,
@@ -168,9 +169,16 @@ fun Vpn5gProfileScreen(
             }
         }
 
-        // Advanced settings + about.
+        // VPN settings (protocol) + advanced settings + about.
         Vpn5gStaggeredItem(index = 4, visible = entered) {
             Column(modifier = Modifier.fillMaxWidth()) {
+                TextButton(onClick = onOpenProtocol, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_profile_vpn_settings),
+                        color = Vpn5gAccentLight,
+                        fontSize = 14.sp,
+                    )
+                }
                 TextButton(onClick = onOpenAdvanced, modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = stringResource(R.string.vpn5g_advanced_settings),

@@ -188,3 +188,15 @@ fun Vpn5gChevronIcon(color: Color, size: Dp = 20.dp, modifier: Modifier = Modifi
         drawLine(color, Offset(w * 0.68f, h * 0.5f), Offset(w * 0.32f, h * 0.84f), stroke, StrokeCap.Round)
     }
 }
+
+/** Checkmark for the selected protocol row. */
+@Composable
+fun Vpn5gCheckIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.11f
+        drawLine(color, Offset(w * 0.18f, h * 0.54f), Offset(w * 0.42f, h * 0.78f), stroke, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.42f, h * 0.78f), Offset(w * 0.84f, h * 0.22f), stroke, StrokeCap.Round)
+    }
+}

@@ -58,6 +58,8 @@ object Vpn5gConstants {
     const val KEY_REDEEMED_CODES_JSON = "vpn5g_redeemed_codes_json"
     /** GUIDs of servers whose tunnel check failed in this process run. */
     const val KEY_TUNNEL_FAILED_GUIDS = "vpn5g_tunnel_failed_guids"
+    /** Selected protocol filter id ("auto", "vless", "vmess", "trojan", "ss"). */
+    const val KEY_PROTOCOL_FILTER = "vpn5g_protocol_filter"
 
     /** Bundled fallback assets (assets/vpn5g/). */
     const val ASSET_FALLBACK_SERVERS = "vpn5g/fallback_servers.json"

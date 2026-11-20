@@ -90,6 +90,8 @@ data class Vpn5gServerUi(
     val countryCode: String = "",
     /** Server host (for GeoIP lookup only; not displayed). */
     val host: String = "",
+    /** Config protocol scheme ("vless", "vmess", "trojan", "ss"), or "" when unknown. */
+    val protocol: String = "",
 )
 
 /** One country section on the home screen. */

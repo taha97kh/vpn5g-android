@@ -85,10 +85,12 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gAuthService
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_PROTOCOL_FILTER
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_TUNNEL_ATTEMPTS
 import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
 import com.v2ray.ang.handler.vpn5g.Vpn5gPromoCodes
+import com.v2ray.ang.handler.vpn5g.Vpn5gProtocol
 import com.v2ray.ang.handler.vpn5g.Vpn5gRemoteConfig
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gSync
@@ -116,7 +118,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 enum class Vpn5gDestination {
-    HOME, PREMIUM, BROWSER, ROUTING, ME, AUTH
+    HOME, PREMIUM, BROWSER, ROUTING, ME, AUTH, PROTOCOL
 }
 
 /** Post-connect tunnel state. The UI must never show a false "connected". */
@@ -146,6 +148,8 @@ data class Vpn5gHomeUiState(
     val promoInput: String = "",
     val promoStatus: Vpn5gPromoStatus = Vpn5gPromoStatus.IDLE,
     val promoBotLink: String? = null,
+    /** Selected protocol filter id ("auto", "vless", "vmess", "trojan", "ss"). */
+    val protocolFilter: String = Vpn5gProtocol.AUTO,
 )
 
 /**
@@ -220,6 +224,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     notice = cached.notice,
                     promoCodes = cached.codes,
                     signedInEmail = Vpn5gAuthService.currentSession()?.email,
+                    protocolFilter = Vpn5gProtocol.normalize(
+                        MmkvManager.decodeSettingsString(KEY_PROTOCOL_FILTER)
+                    ),
                     offline = usedFallback,
                 )
             }
@@ -326,6 +333,21 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             )
         }
+    }
+
+    fun setProtocolFilter(id: String) {
+        val normalized = Vpn5gProtocol.normalize(id)
+        MmkvManager.encodeSettings(KEY_PROTOCOL_FILTER, normalized)
+        _uiState.update { it.copy(protocolFilter = normalized) }
+    }
+
+    /** Best free server honoring the protocol filter (lowest ping, else first). */
+    fun bestFreeServer(): Vpn5gServerUi? {
+        val servers = Vpn5gProtocol.filterSections(
+            _uiState.value.countries, _uiState.value.protocolFilter
+        ).filter { it.isFree }.flatMap { it.servers }
+        return servers.filter { it.pingMillis > 0 }.minByOrNull { it.pingMillis }
+            ?: servers.firstOrNull()
     }
 
     fun consumeError() {
@@ -497,7 +519,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun nextBestServer(excluding: Set<String>): Vpn5gServerUi? {
-        return _uiState.value.countries
+        return Vpn5gProtocol.filterSections(
+            _uiState.value.countries, _uiState.value.protocolFilter
+        )
             .filter { it.isFree }
             .flatMap { it.servers }
             .filter { it.guid !in excluding && it.pingMillis > 0 }
@@ -655,6 +679,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             state = uiState,
                             onBack = { destination = Vpn5gDestination.HOME },
                             onOpenAuth = { destination = Vpn5gDestination.AUTH },
+                            onOpenProtocol = { destination = Vpn5gDestination.PROTOCOL },
                             onSignOut = { viewModel.signOut() },
                             onOpenAdvanced = {
                                 startActivity(Intent(this@Vpn5gMainActivity, MainActivity::class.java))
@@ -662,6 +687,14 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onOpenUrl = { url -> Utils.openUri(this@Vpn5gMainActivity, url) },
                         )
                         Vpn5gDestination.AUTH -> Vpn5gAuthScreen(
+                            onBack = { destination = Vpn5gDestination.ME },
+                        )
+                        Vpn5gDestination.PROTOCOL -> Vpn5gProtocolScreen(
+                            currentProtocol = uiState.protocolFilter,
+                            onSelect = {
+                                viewModel.setProtocolFilter(it)
+                                destination = Vpn5gDestination.ME
+                            },
                             onBack = { destination = Vpn5gDestination.ME },
                         )
                     }
@@ -736,8 +769,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             return
         }
         val guid = state.selectedGuid
-            ?: state.countries.firstOrNull { it.isFree }
-                ?.servers?.firstOrNull()?.guid
+            ?: viewModel.bestFreeServer()?.guid
             ?: run {
                 toast(R.string.vpn5g_no_server_selected)
                 return
@@ -749,11 +781,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
     private fun connectBestServer() {
         val state = viewModel.uiState.value
         if (state.isRunning) return
-        val guid = state.countries.firstOrNull { it.isFree }
-            ?.servers?.filter { it.pingMillis > 0 }
-            ?.minByOrNull { it.pingMillis }?.guid
-            ?: state.countries.firstOrNull { it.isFree }
-                ?.servers?.firstOrNull()?.guid
+        val guid = viewModel.bestFreeServer()?.guid
             ?: run {
                 toast(R.string.vpn5g_no_server_selected)
                 return
@@ -876,8 +904,9 @@ fun Vpn5gHomeScreen(
     var serversExpanded by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(Unit) { entered = true }
 
-    val freeSections = state.countries.filter { it.isFree }
-    val lockedSections = state.countries.filter { !it.isFree }
+    val displayCountries = Vpn5gProtocol.filterSections(state.countries, state.protocolFilter)
+    val freeSections = displayCountries.filter { it.isFree }
+    val lockedSections = displayCountries.filter { !it.isFree }
     val freeCount = freeSections.sumOf { it.servers.size }
     val bestServer = freeSections.flatMap { it.servers }
         .filter { it.pingMillis > 0 }
@@ -1107,10 +1136,13 @@ fun Vpn5gHomeScreen(
                 }
             }
 
-            if (state.countries.isEmpty() && !state.isLoading && !state.isRefreshing) {
+            if (displayCountries.isEmpty() && !state.isLoading && !state.isRefreshing) {
                 item {
                     Text(
-                        text = stringResource(R.string.vpn5g_empty_list),
+                        text = stringResource(
+                            if (state.countries.isEmpty()) R.string.vpn5g_empty_list
+                            else R.string.vpn5g_protocol_no_servers
+                        ),
                         color = Vpn5gOnDarkMuted,
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,

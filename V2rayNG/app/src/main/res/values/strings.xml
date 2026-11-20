@@ -695,4 +695,20 @@
     <string name="vpn5g_promo_invalid">کد معتبر نیست</string>
     <string name="vpn5g_promo_confirm_bot">تأیید در ربات تلگرام</string>
 
+    <!-- v1.1: protocol picker -->
+    <string name="vpn5g_protocol_title">پروتکل</string>
+    <string name="vpn5g_protocol_auto">خودکار</string>
+    <string name="vpn5g_protocol_auto_body">بهترین گزینه برای شبکه شما</string>
+    <string name="vpn5g_protocol_recommended">توصیه شده</string>
+    <string name="vpn5g_protocol_vless">VLESS</string>
+    <string name="vpn5g_protocol_vless_body">سریع و سبک</string>
+    <string name="vpn5g_protocol_vmess">VMess</string>
+    <string name="vpn5g_protocol_vmess_body">پروتکل اصلی V2Ray</string>
+    <string name="vpn5g_protocol_trojan">Trojan</string>
+    <string name="vpn5g_protocol_trojan_body">پنهان‌کاری بالا در شبکه‌های سخت</string>
+    <string name="vpn5g_protocol_ss">Shadowsocks</string>
+    <string name="vpn5g_protocol_ss_body">ساده و سریع</string>
+    <string name="vpn5g_protocol_no_servers">سروری با این پروتکل پیدا نشد</string>
+    <string name="vpn5g_profile_vpn_settings">تنظیمات VPN</string>
+
 </resources>

@@ -252,6 +252,9 @@ object Vpn5gSync {
                     countryNameFa = remarkCountry?.nameFa ?: "",
                     countryCode = remarkCountry?.code ?: "",
                     host = profile.server.orEmpty(),
+                    // EConfigType schemes carry a "://" suffix ("vless://").
+                    protocol = profile.configType.protocolScheme
+                        .removeSuffix("://").lowercase(),
                 )
             )
         }
