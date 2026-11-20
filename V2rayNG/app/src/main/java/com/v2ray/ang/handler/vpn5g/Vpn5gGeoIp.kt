@@ -141,7 +141,9 @@ object Vpn5gGeoIp {
         hostCache[key]?.let { return it }
         val ip = resolveHost(key) ?: return UNKNOWN
         val country = countryForIp(context, ip)
-        hostCache[key] = country
+        // Only cache real results: a transient DNS failure must not pin
+        // the host to UNKNOWN for the rest of the process.
+        if (country.code.isNotEmpty()) hostCache[key] = country
         return country
     }
 

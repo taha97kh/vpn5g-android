@@ -10,9 +10,9 @@ import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SpeedtestManager
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.ASSET_FALLBACK_SERVERS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.FREE_SERVER_COUNT
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.LIVE_JSON
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUBSCRIPTION_REMARKS
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.isFreeCountry
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.normalizeCountry
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
@@ -219,14 +219,35 @@ object Vpn5gSync {
     }
 
     /**
+     * Free tier (v1.1.1): the [FREE_SERVER_COUNT] fastest-pinging configs
+     * are free; every other config is premium-locked. Pure function (no
+     * Android APIs) so it is covered by JVM unit tests. Only servers with
+     * a measured ping (pingMillis > 0) can be free — a config with no ping
+     * result is never free and never tried first.
+     */
+    fun selectFreeGuids(
+        servers: List<Vpn5gServerUi>,
+        count: Int = FREE_SERVER_COUNT,
+    ): Set<String> {
+        return servers
+            .filter { it.pingMillis > 0 }
+            .sortedBy { it.pingMillis }
+            .take(count)
+            .map { it.guid }
+            .toSet()
+    }
+
+    /**
      * Reads the stored "VPN5G IRBOT" group and builds home-screen sections.
      * Free countries first (by server count), then locked ones. Each server
      * row carries the flag + Persian country name parsed from its remark
      * (free, no I/O); servers whose remark has no country are enriched later
      * by [enrichCountries] (DNS + bundled GeoIP table) so the first paint is
-     * never blocked on DNS.
+     * never blocked on DNS. The free tier is the 50 fastest-pinging servers
+     * ([selectFreeGuids]); a section is "free" when it holds at least one
+     * free server.
      */
-    fun loadGroupedServers(freeCountries: List<String>): List<Vpn5gCountryUi> {
+    fun loadGroupedServers(): List<Vpn5gCountryUi> {
         val subId = MmkvManager.decodeSubscriptions()
             .firstOrNull { it.subscription.url == LIVE_JSON }?.guid
             ?: return emptyList()
@@ -258,11 +279,15 @@ object Vpn5gSync {
                 )
             )
         }
+        val freeGuids = selectFreeGuids(byCountry.values.flatten())
         val sections = byCountry.map { (key, servers) ->
+            val marked = servers
+                .map { it.copy(isFree = it.guid in freeGuids) }
+                .sortedBy { if (it.pingMillis <= 0L) Long.MAX_VALUE else it.pingMillis }
             Vpn5gCountryUi(
                 label = labels[key] ?: key,
-                isFree = isFreeCountry(key, freeCountries),
-                servers = servers.sortedBy { if (it.pingMillis <= 0L) Long.MAX_VALUE else it.pingMillis },
+                isFree = marked.any { it.isFree },
+                servers = marked,
             )
         }
         return sections.sortedWith(

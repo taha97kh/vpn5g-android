@@ -15,10 +15,15 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -26,7 +31,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
 
 /** VPN5G IRBOT dark palette — near-black X-VPN-style background, cyan accent. */
@@ -160,5 +168,33 @@ fun Vpn5gStaggeredItem(
         modifier = modifier,
     ) {
         content()
+    }
+}
+
+/**
+ * Small credit footer ("Made by AREF KH / 2026 - 1405"), shown at the
+ * bottom of the home screen content and the Me/Profile screen. This is
+ * the ONLY place a personal name appears in the app.
+ */
+@Composable
+fun Vpn5gFooter() {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.vpn5g_footer_made_by),
+            color = Vpn5gOnDarkMuted,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.vpn5g_footer_years),
+            color = Vpn5gOnDarkMuted,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+        )
     }
 }

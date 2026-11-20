@@ -31,7 +31,7 @@ valid JSON; the app ignores unknown fields.
 
 | Field | Type | Required | Default when absent | Meaning |
 |---|---|---|---|---|
-| `free_countries` | array of strings | no | `["بین‌الملل", "فرانسه", "آلمان"]` | Countries whose servers are free. Names are matched after stripping the flag-emoji prefix, so `"فرانسه"` matches the live list label `"🇫🇷 فرانسه"`. Every other country in the live list is shown locked. |
+| `free_countries` | array of strings | no | — | IGNORED since v1.1.1 (kept only so old files still parse). The free tier is now the **50 fastest-pinging configs** after each sync/ping, whichever countries they are in; everything else is premium-locked. |
 | `notice` | string \| null | no | `null` | Short announcement shown at the top of the home screen (e.g. maintenance). `null` or absent hides it. |
 | `config_sources` | array of strings (URLs) | no | `[]` | Extra config sources fetched in addition to the built-in defaults. Each URL must return plain-text config URIs, one per line (`vmess://`, `vless://`, `trojan://`, `ss://`). Duplicates are de-duplicated; a failing source is skipped. |
 | `min_version` | string \| null | no | `null` | Reserved for v2 (minimum app version that may use the configs). v1 reads it but does not enforce it. |
@@ -129,7 +129,6 @@ tested. Dead configs (TCP connect fails) are dropped and never stored.
 
 ```json
 {
-  "free_countries": ["بین‌الملل", "فرانسه", "آلمان"],
   "notice": "سرورهای جدید اضافه شد — لیست را به‌روزرسانی کنید",
   "config_sources": [
     "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs.txt",
@@ -168,7 +167,6 @@ the bot; the app never ships with prices.)
 
 ```json
 {
-  "free_countries": ["بین‌الملل", "فرانسه", "آلمان"],
   "notice": null,
   "config_sources": [],
   "min_version": null,

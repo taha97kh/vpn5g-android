@@ -31,7 +31,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -39,11 +38,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.v2ray.ang.R
 
 /**
- * Registration / login and password-recovery screens, wired to
+ * Registration / login and recovery screens, wired to
  * [Vpn5gAuthViewModel] / [com.v2ray.ang.handler.vpn5g.Vpn5gAuthService]
- * (Supabase Auth). The Supabase project does not exist yet, so sending a
- * code reports "coming soon" honestly instead of pretending to work; the
- * validation (email format, 6-digit code, password length) is real.
+ * (Supabase Auth OTP, passwordless): the user enters a Gmail address, a
+ * real 6-digit code is emailed, and entering the code signs them in.
+ * Registration creates the account on first use; recovery signs an
+ * existing account back in. When the Supabase project is not configured
+ * the screen says so honestly instead of pretending to send codes.
  *
  * Motion: the same language as the home screen — animated gradient
  * background (from the activity), pulsing logo, and staggered springy entry.
@@ -131,7 +132,7 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
         val busy = state.phase == Vpn5gAuthPhase.SENDING_CODE ||
             state.phase == Vpn5gAuthPhase.VERIFYING
 
-        // Email field (all modes).
+        // Email field (all modes, Gmail only).
         Vpn5gStaggeredItem(index = 3, visible = entered) {
             OutlinedTextField(
                 value = state.email,
@@ -148,43 +149,12 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
             )
         }
 
-        // Password field (login + register; recovery asks for it after the code).
-        if (state.mode != Vpn5gAuthMode.RECOVER || state.phase == Vpn5gAuthPhase.NEW_PASSWORD) {
-            Vpn5gStaggeredItem(index = 4, visible = entered) {
-                OutlinedTextField(
-                    value = if (state.phase == Vpn5gAuthPhase.NEW_PASSWORD) state.newPassword else state.password,
-                    onValueChange = {
-                        if (state.phase == Vpn5gAuthPhase.NEW_PASSWORD) authViewModel.setNewPassword(it)
-                        else authViewModel.setPassword(it)
-                    },
-                    label = {
-                        Text(
-                            stringResource(
-                                if (state.phase == Vpn5gAuthPhase.NEW_PASSWORD) R.string.vpn5g_auth_new_password
-                                else R.string.vpn5g_auth_password
-                            )
-                        )
-                    },
-                    singleLine = true,
-                    enabled = !busy,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    isError = state.passwordErrorRes != null,
-                    supportingText = state.passwordErrorRes?.let { { Text(stringResource(it)) } },
-                    colors = vpn5gTextFieldColors(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-
-        // Primary action per mode/phase.
+        // Primary action: send the code, then confirm it.
         Vpn5gStaggeredItem(index = 5, visible = entered) {
             Button(
                 onClick = {
                     when {
-                        state.phase == Vpn5gAuthPhase.NEW_PASSWORD -> authViewModel.updatePassword()
                         state.phase == Vpn5gAuthPhase.CODE_SENT -> authViewModel.verifyCode()
-                        state.mode == Vpn5gAuthMode.LOGIN -> authViewModel.signInWithPassword()
                         else -> authViewModel.sendCode()
                     }
                 },
@@ -198,12 +168,9 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
                 Text(
                     text = stringResource(
                         when {
-                            state.phase == Vpn5gAuthPhase.NEW_PASSWORD -> R.string.vpn5g_auth_change_password
                             state.phase == Vpn5gAuthPhase.CODE_SENT -> R.string.vpn5g_auth_confirm
                             state.phase == Vpn5gAuthPhase.SENDING_CODE -> R.string.vpn5g_auth_sending
                             state.phase == Vpn5gAuthPhase.VERIFYING -> R.string.vpn5g_auth_verifying
-                            state.mode == Vpn5gAuthMode.LOGIN -> R.string.vpn5g_auth_signin
-                            state.mode == Vpn5gAuthMode.REGISTER -> R.string.vpn5g_auth_send_code
                             else -> R.string.vpn5g_auth_send_code
                         }
                     ),
@@ -255,12 +222,6 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
         Vpn5gStaggeredItem(index = 9, visible = entered) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (state.mode == Vpn5gAuthMode.LOGIN) {
-                    TextButton(
-                        onClick = { authViewModel.sendCode() },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(text = stringResource(R.string.vpn5g_auth_login_with_code), color = Vpn5gAccentLight, fontSize = 14.sp)
-                    }
                     TextButton(
                         onClick = { authViewModel.setMode(Vpn5gAuthMode.REGISTER) },
                         modifier = Modifier.fillMaxWidth(),

@@ -1,12 +1,12 @@
 package com.v2ray.ang.handler.vpn5g
 
 /**
- * VPN 5G constants: remote endpoints, links, and the default free-country list.
+ * VPN 5G constants: remote endpoints, links, and the free tier.
  *
- * Free countries are the top-3 countries by live server count in live_configs.json,
- * with the tie at 1 server broken toward آلمان (live list: بین‌الملل 36، فرانسه 3،
- * آمریکا 1، آلمان 1). The list is overridable by app_config.json (see
- * Vpn5gRemoteConfig); the values here are only the fallback.
+ * Free tier (v1.1.1): after each sync/ping, the [FREE_SERVER_COUNT]
+ * fastest-pinging configs are free; every other config is premium-locked.
+ * The free set is computed from measured pings in
+ * [Vpn5gSync.loadGroupedServers] — never by country, and never invented.
  */
 object Vpn5gConstants {
     const val LIVE_JSON = "https://taha97kh-vpn5g-app.static.hf.space/live_configs.json"
@@ -43,8 +43,8 @@ object Vpn5gConstants {
 
     const val SUBSCRIPTION_REMARKS = "VPN5G IRBOT"
 
-    /** Default free countries (normalized names, no emoji prefix). */
-    val DEFAULT_FREE_COUNTRIES = listOf("بین‌الملل", "فرانسه", "آلمان")
+    /** Free tier: this many fastest-pinging configs are free (v1.1.1). */
+    const val FREE_SERVER_COUNT = 50
 
     /** Auto-disconnect after this long. */
     const val SESSION_LIMIT_MINUTES = 30L
@@ -84,11 +84,5 @@ object Vpn5gConstants {
     fun normalizeCountry(raw: String?): String {
         if (raw.isNullOrBlank()) return ""
         return raw.trim().replace(Regex("^[^\\p{L}]+"), "").trim()
-    }
-
-    fun isFreeCountry(country: String?, freeCountries: List<String>): Boolean {
-        val normalized = normalizeCountry(country)
-        if (normalized.isEmpty()) return false
-        return freeCountries.any { normalizeCountry(it) == normalized }
     }
 }

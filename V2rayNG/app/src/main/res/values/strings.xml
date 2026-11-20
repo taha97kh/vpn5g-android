@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name" translatable="false">VPN5G IRBOT</string>
+    <string name="app_name" translatable="false">VPN 5G</string>
     <string name="app_widget_name">Switch</string>
     <string name="app_tile_name">Switch</string>
     <string name="app_tile_first_use">Add a profile in the app before using this feature.</string>
@@ -616,7 +616,7 @@
     <string name="vpn5g_about_support">پشتیبانی: @Aref_5G</string>
     <string name="vpn5g_about_version">نسخه: %1$s (کد %2$d)</string>
     <string name="vpn5g_about_build_date">تاریخ ساخت: %1$s</string>
-    <string name="vpn5g_about_core">بر پایه‌ی v2rayNG (GPL-3.0)</string>
+    <string name="vpn5g_about_core">بر پایه‌ی نرم‌افزار آزاد (GPL-3.0)</string>
     <string name="vpn5g_subscription_title">وضعیت اشتراک</string>
     <string name="vpn5g_subscription_none">اشتراکی ثبت نشده است</string>
     <string name="vpn5g_subscription_none_body">برای تهیه اشتراک و باز کردن کشورهای ویژه، از ربات اقدام کنید.</string>
@@ -636,7 +636,7 @@
     <string name="vpn5g_auth_disposable">ایمیل‌های موقت و یک‌بارمصرف قابل قبول نیستند</string>
     <string name="vpn5g_auth_invalid_code">کد باید ۶ رقم باشد</string>
     <string name="vpn5g_auth_recover_title">بازیابی رمز عبور</string>
-    <string name="vpn5g_auth_recover_body">کد بازیابی به ایمیل شما ارسال می‌شود.</string>
+    <string name="vpn5g_auth_recover_body">کد ورود به ایمیلت ارسال می‌شود؛ با همان کد وارد حسابت می‌شوی.</string>
 
     <!-- v1.1: X-VPN-style home, tunnel verification, routing, profile, promo codes -->
     <string name="vpn5g_nav_premium">حق بیمه</string>
@@ -667,19 +667,13 @@
     <string name="vpn5g_profile_account">حساب کاربری</string>
     <string name="vpn5g_profile_not_signed_in">وارد نشده‌اید</string>
     <string name="vpn5g_auth_register_title">ثبت‌نام با ایمیل</string>
-    <string name="vpn5g_auth_password">رمز عبور</string>
-    <string name="vpn5g_auth_new_password">رمز عبور جدید</string>
-    <string name="vpn5g_auth_signin">ورود</string>
-    <string name="vpn5g_auth_login_with_code">ورود با کد تایید</string>
     <string name="vpn5g_auth_go_register">ثبت‌نام نکرده‌اید؟ ثبت‌نام کنید</string>
     <string name="vpn5g_auth_done">انجام شد</string>
     <string name="vpn5g_auth_back_to_profile">بازگشت به پروفایل</string>
     <string name="vpn5g_auth_sending">در حال ارسال کد…</string>
     <string name="vpn5g_auth_verifying">در حال بررسی…</string>
-    <string name="vpn5g_auth_change_password">تغییر رمز عبور</string>
-    <string name="vpn5g_auth_password_short">رمز عبور باید حداقل ۶ کاراکتر باشد</string>
     <string name="vpn5g_auth_network_error">خطای شبکه؛ دوباره تلاش کنید</string>
-    <string name="vpn5g_auth_code_wrong">کد واردشده درست نیست</string>
+    <string name="vpn5g_auth_code_wrong">کد اشتباه است یا منقضی شده؛ کد تازه بگیرید</string>
     <string name="vpn5g_auth_signin_failed">ورود ناموفق بود</string>
     <string name="vpn5g_auth_generic_error">خطایی رخ داد؛ دوباره تلاش کنید</string>
     <string name="vpn5g_auth_signout">خروج از حساب</string>
@@ -756,5 +750,17 @@
     <string name="vpn5g_premium_pay_bot">خرید از ربات تلگرام</string>
     <string name="vpn5g_premium_pay_bot_body">پرداخت و فعال‌سازی از طریق ربات</string>
     <string name="vpn5g_premium_coming_soon">به‌زودی</string>
+
+    <!-- v1.1.1: unknown-country fallback, server subtitle, no-ping switch,
+         start failure, OTP rate limit, footer credit, connect brand -->
+    <string name="vpn5g_country_unknown">نامشخص</string>
+    <string name="vpn5g_server_subtitle" translatable="false">VPN5G_iRBot</string>
+    <string name="vpn5g_no_ping_switch">این سرور پینگ ندارد؛ در حال اتصال به سرور بعدی…</string>
+    <string name="vpn5g_start_failed">اتصال برقرار نشد؛ دوباره تلاش کنید</string>
+    <string name="vpn5g_auth_rate_limited">کدهای زیادی درخواست شده؛ یک دقیقه صبر کنید و دوباره تلاش کنید</string>
+    <string name="vpn5g_auth_email_not_registered">این ایمیل ثبت نشده است؛ اول ثبت‌نام کنید</string>
+    <string name="vpn5g_footer_made_by" translatable="false">Made by AREF KH</string>
+    <string name="vpn5g_footer_years" translatable="false">2026 - 1405</string>
+    <string name="vpn5g_connect_brand" translatable="false">4ref.ai</string>
 
 </resources>

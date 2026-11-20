@@ -93,9 +93,16 @@ fun Vpn5gSubscriptionScreen(
     var showPayment by rememberSaveable { mutableStateOf(false) }
     val gateway = state.paymentGateway
     val gatewayReady = gateway?.enabled == true && !gateway.url.isNullOrBlank()
-    val freeCountryCount = state.countries.count { it.isFree }
+    // Real live counts, per server: free countries are the countries
+    // with at least one free server; free servers are the top-50
+    // fastest configs. Never count a whole section as free.
+    val freeCountryCount = state.countries.count { section ->
+        section.servers.any { it.isFree }
+    }
     val totalCountryCount = state.countries.size
-    val freeServerCount = state.countries.filter { it.isFree }.sumOf { it.servers.size }
+    val freeServerCount = state.countries.sumOf { section ->
+        section.servers.count { it.isFree }
+    }
     val totalServerCount = state.countries.sumOf { it.servers.size }
 
     Column(
@@ -306,8 +313,9 @@ fun Vpn5gSubscriptionScreen(
                             stringResource(R.string.vpn5g_premium_coming_soon)
                         },
                         onClick = {
-                            if (gatewayReady) {
-                                onOpenUrl(gateway!!.url!!)
+                            val url = gateway?.url
+                            if (gatewayReady && !url.isNullOrBlank()) {
+                                onOpenUrl(url)
                             } else {
                                 onOpenBot()
                             }

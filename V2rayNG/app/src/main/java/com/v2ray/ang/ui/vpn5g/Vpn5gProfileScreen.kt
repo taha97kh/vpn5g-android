@@ -234,6 +234,9 @@ fun Vpn5gProfileScreen(
                 )
             }
         }
+        Vpn5gStaggeredItem(index = 6, visible = entered) {
+            Vpn5gFooter()
+        }
     }
 }
 

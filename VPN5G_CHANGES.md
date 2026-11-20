@@ -6,6 +6,50 @@ stays `com.v2ray.ang`; namespace stays `com.v2ray.ang`. LICENSE (GPL-3.0)
 kept intact; the fork credit is in the About screen
 ("بر پایه‌ی v2rayNG (GPL-3.0)") and in this file.
 
+## v1.1.1 (2026-11-20, versionCode 3)
+
+- **App name is "VPN 5G" everywhere**: launcher label (main + fdroid, all
+  locales) and in-app title. `app_name` was still "v2rayNG" in the
+  `values-fa` locale (the user's locale) and 8 other locales, plus the dev
+  / pre-release flavours. The About-screen credit is reworded to
+  "بر پایه‌ی نرم‌افزار آزاد (GPL-3.0)" (no name). "v2rayNG" remains only
+  in `LICENSE` and source-code attribution comments; package names
+  unchanged.
+- **Server rows hide config names**: each row shows flag + country name
+  (GeoIP; globe + "نامشخص" when unknown) + ping, with the small subtitle
+  "VPN5G_iRBot". Applies to the main list, search results, Auto row,
+  Recommended row, and all tabs. Nothing remark-derived is displayed.
+- **Free tier = 50 fastest configs**: after each sync/ping the 50
+  fastest-pinging configs are free (`Vpn5gConstants.FREE_SERVER_COUNT`,
+  `Vpn5gSync.selectFreeGuids`); everything else is premium-locked. The
+  3-free-countries model and `free_countries` in `app_config.json` are
+  retired (the field still parses, but is ignored). Premium-table counts
+  are per-server live counts. 30-minute session timer unchanged.
+- **Fast switch on dead configs**: a config with no ping is never tried
+  first; a tap or connect resolves to the next best free server in a
+  different country immediately, with a brief notice. Tunnel-check
+  failure switches the same way (no fixed 4 s wait — polls for the
+  restart instead). Per-session attempt bound max-3 kept.
+- **Real registration via Supabase OTP (passwordless)**: Gmail → real
+  6-digit code (`auth/v1/otp`) → code entry (`auth/v1/verify`) → logged
+  in. Recovery uses the same OTP flow. No password anywhere. Config in
+  `Vpn5gAuthConfig` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`); the
+  "به‌زودی — نیاز به سرور دارد" block shows only when the config is
+  absent. Dashboard still needs: Magic Link email template must contain
+  `{{.Token}}`, and custom SMTP for VPN5G.IRBOT@gmail.com.
+- **Footer**: "Made by AREF KH / 2026 - 1405" at the bottom of the home
+  screen (above the bottom nav) and the Me/Profile screen. The only
+  place a personal name appears.
+- **Connect animation**: "4ref.ai" sits on the circular power button;
+  while connecting a ring spins around the circle; on connect the ring
+  stops, the text briefly catches fire (orange/red glow + slight
+  scale-up) and fades away, leaving the normal connected state.
+- **Error fixes**: `bestFreeServer` no longer falls back to a no-ping
+  server; `refresh()` clears `isLoading` on failure; GeoIP caches only
+  non-UNKNOWN results; service start failure shows a short Persian
+  message instead of raw core text; payment-gateway `!!` made a safe
+  call.
+
 ## Created files
 
 ### New code — `V2rayNG/app/src/main/java/com/v2ray/ang/handler/vpn5g/`

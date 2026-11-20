@@ -1,7 +1,6 @@
 package com.v2ray.ang.ui.vpn5g
 
 import android.app.Application
-import android.util.Patterns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -21,18 +20,15 @@ import kotlinx.coroutines.launch
 enum class Vpn5gAuthMode { LOGIN, REGISTER, RECOVER }
 
 enum class Vpn5gAuthPhase {
-    IDLE, SENDING_CODE, CODE_SENT, VERIFYING, NEW_PASSWORD, DONE, ERROR
+    IDLE, SENDING_CODE, CODE_SENT, VERIFYING, DONE, ERROR
 }
 
 data class Vpn5gAuthUiState(
     val mode: Vpn5gAuthMode = Vpn5gAuthMode.LOGIN,
     val phase: Vpn5gAuthPhase = Vpn5gAuthPhase.IDLE,
     val email: String = "",
-    val password: String = "",
-    val newPassword: String = "",
     val code: String = "",
     val emailErrorRes: Int? = null,
-    val passwordErrorRes: Int? = null,
     val codeErrorRes: Int? = null,
     val errorRes: Int? = null,
     val signedInEmail: String? = null,
@@ -41,11 +37,15 @@ data class Vpn5gAuthUiState(
 )
 
 /**
- * Auth screen ViewModel: owns the login / register / password-recovery
- * state machine and calls [Vpn5gAuthService] on IO. The Supabase project
- * does not exist yet, so every send/verify returns NotConfigured and the
- * screen says so honestly (no fake sends). Validation (email format,
- * 6-digit code, password length) is real and local.
+ * Auth screen ViewModel: owns the passwordless OTP state machine
+ * (email → 6-digit code → verified → signed in) and calls
+ * [Vpn5gAuthService] on IO. Registration, login, and recovery are the
+ * same OTP flow: registration creates the account on first use, recovery
+ * signs an existing account back in. There is no password anywhere.
+ *
+ * When the Supabase project is not configured, every send/verify returns
+ * NotConfigured and the screen says so honestly (no fake sends).
+ * Validation (Gmail-only email, 6-digit code) is real and local.
  */
 class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -60,9 +60,7 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
                 mode = mode,
                 phase = Vpn5gAuthPhase.IDLE,
                 code = "",
-                newPassword = "",
                 emailErrorRes = null,
-                passwordErrorRes = null,
                 codeErrorRes = null,
                 errorRes = null,
             )
@@ -73,14 +71,6 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(email = value, emailErrorRes = null, errorRes = null) }
     }
 
-    fun setPassword(value: String) {
-        _uiState.update { it.copy(password = value, passwordErrorRes = null, errorRes = null) }
-    }
-
-    fun setNewPassword(value: String) {
-        _uiState.update { it.copy(newPassword = value, passwordErrorRes = null, errorRes = null) }
-    }
-
     fun setCode(value: String) {
         _uiState.update {
             it.copy(code = value.filter { ch -> ch.isDigit() }.take(6), codeErrorRes = null, errorRes = null)
@@ -88,78 +78,35 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Email validation. Signup and password recovery accept ONLY
-     * @gmail.com addresses (see [Vpn5gEmailPolicy]); login keeps the
-     * generic format check because registered accounts are gmail by
-     * construction.
+     * Email validation. Every mode accepts ONLY @gmail.com addresses (see
+     * [Vpn5gEmailPolicy]): a non-Gmail address can never be a registered
+     * account, so it is rejected upfront with a clear message instead of
+     * failing at the backend.
      */
-    private fun validEmail(gmailOnly: Boolean = false): Boolean {
+    private fun validEmail(): Boolean {
         val email = _uiState.value.email.trim()
-        if (gmailOnly) {
-            val errorRes = when (Vpn5gEmailPolicy.check(email)) {
-                Vpn5gEmailPolicy.Check.OK -> null
-                Vpn5gEmailPolicy.Check.DISPOSABLE -> R.string.vpn5g_auth_disposable
-                Vpn5gEmailPolicy.Check.NOT_GMAIL -> R.string.vpn5g_auth_gmail_only
-                Vpn5gEmailPolicy.Check.INVALID_FORMAT -> R.string.vpn5g_auth_invalid_email
-            }
-            if (errorRes != null) {
-                _uiState.update { it.copy(emailErrorRes = errorRes) }
-                return false
-            }
-            return true
+        val errorRes = when (Vpn5gEmailPolicy.check(email)) {
+            Vpn5gEmailPolicy.Check.OK -> null
+            Vpn5gEmailPolicy.Check.DISPOSABLE -> R.string.vpn5g_auth_disposable
+            Vpn5gEmailPolicy.Check.NOT_GMAIL -> R.string.vpn5g_auth_gmail_only
+            Vpn5gEmailPolicy.Check.INVALID_FORMAT -> R.string.vpn5g_auth_invalid_email
         }
-        return if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-            _uiState.update { it.copy(emailErrorRes = R.string.vpn5g_auth_invalid_email) }
-            false
-        } else {
-            true
+        if (errorRes != null) {
+            _uiState.update { it.copy(emailErrorRes = errorRes) }
+            return false
         }
-    }
-
-    private fun validPassword(password: String): Boolean {
-        return if (password.length < 6) {
-            _uiState.update { it.copy(passwordErrorRes = R.string.vpn5g_auth_password_short) }
-            false
-        } else {
-            true
-        }
-    }
-
-    /** Login with email + password. */
-    fun signInWithPassword() {
-        if (!validEmail()) return
-        if (!validPassword(_uiState.value.password)) return
-        val state = _uiState.value
-        _uiState.update { it.copy(phase = Vpn5gAuthPhase.VERIFYING, errorRes = null) }
-        viewModelScope.launch {
-            when (val result = Vpn5gAuthService.signInWithPassword(state.email.trim(), state.password)) {
-                is Vpn5gAuthService.AuthResult.SignedIn ->
-                    _uiState.update {
-                        it.copy(phase = Vpn5gAuthPhase.DONE, signedInEmail = result.session.email)
-                    }
-                Vpn5gAuthService.AuthResult.NotConfigured ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_coming_soon) }
-                is Vpn5gAuthService.AuthResult.Error ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = mapError(result.message)) }
-                else ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_generic_error) }
-            }
-        }
+        return true
     }
 
     /** Step 1 of the code flows: send the OTP code for the current mode. */
     fun sendCode() {
-        val gmailOnly = _uiState.value.mode != Vpn5gAuthMode.LOGIN
-        if (!validEmail(gmailOnly = gmailOnly)) return
-        if (_uiState.value.mode == Vpn5gAuthMode.REGISTER &&
-            !validPassword(_uiState.value.password)
-        ) return
+        if (!validEmail()) return
         val state = _uiState.value
         _uiState.update { it.copy(phase = Vpn5gAuthPhase.SENDING_CODE, errorRes = null) }
         viewModelScope.launch {
             val result = when (state.mode) {
                 Vpn5gAuthMode.LOGIN -> Vpn5gAuthService.sendLoginOtp(state.email.trim())
-                Vpn5gAuthMode.REGISTER -> Vpn5gAuthService.signUpWithEmail(state.email.trim(), state.password)
+                Vpn5gAuthMode.REGISTER -> Vpn5gAuthService.sendLoginOtp(state.email.trim())
                 Vpn5gAuthMode.RECOVER -> Vpn5gAuthService.sendRecoveryOtp(state.email.trim())
             }
             when (result) {
@@ -184,43 +131,9 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
             _uiState.update { it.copy(codeErrorRes = R.string.vpn5g_auth_invalid_code) }
             return
         }
-        val type = when (state.mode) {
-            Vpn5gAuthMode.LOGIN -> "email"
-            Vpn5gAuthMode.REGISTER -> "signup"
-            Vpn5gAuthMode.RECOVER -> "recovery"
-        }
         _uiState.update { it.copy(phase = Vpn5gAuthPhase.VERIFYING, errorRes = null) }
         viewModelScope.launch {
-            when (val result = Vpn5gAuthService.verifyOtp(state.email.trim(), state.code, type)) {
-                is Vpn5gAuthService.AuthResult.SignedIn -> {
-                    if (state.mode == Vpn5gAuthMode.RECOVER) {
-                        // Recovery verified: now ask for the new password.
-                        _uiState.update {
-                            it.copy(phase = Vpn5gAuthPhase.NEW_PASSWORD, signedInEmail = result.session.email)
-                        }
-                    } else {
-                        _uiState.update {
-                            it.copy(phase = Vpn5gAuthPhase.DONE, signedInEmail = result.session.email)
-                        }
-                    }
-                }
-                Vpn5gAuthService.AuthResult.NotConfigured ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_coming_soon) }
-                is Vpn5gAuthService.AuthResult.Error ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = mapError(result.message)) }
-                else ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_generic_error) }
-            }
-        }
-    }
-
-    /** Recovery step 3: set the new password with the verified session. */
-    fun updatePassword() {
-        if (!validPassword(_uiState.value.newPassword)) return
-        val newPassword = _uiState.value.newPassword
-        _uiState.update { it.copy(phase = Vpn5gAuthPhase.VERIFYING, errorRes = null) }
-        viewModelScope.launch {
-            when (val result = Vpn5gAuthService.updatePassword(newPassword)) {
+            when (val result = Vpn5gAuthService.verifyOtp(state.email.trim(), state.code)) {
                 is Vpn5gAuthService.AuthResult.SignedIn ->
                     _uiState.update {
                         it.copy(phase = Vpn5gAuthPhase.DONE, signedInEmail = result.session.email)
@@ -238,7 +151,7 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
     fun signOut() {
         Vpn5gAuthService.signOut()
         _uiState.update {
-            it.copy(phase = Vpn5gAuthPhase.IDLE, signedInEmail = null, code = "", password = "")
+            it.copy(phase = Vpn5gAuthPhase.IDLE, signedInEmail = null, code = "")
         }
     }
 
@@ -248,13 +161,11 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun mapError(message: String): Int {
         LogUtil.e(AppConfig.TAG, "Vpn5gAuthViewModel: auth error $message")
-        return when {
-            message == "password_too_short" -> R.string.vpn5g_auth_password_short
-            message == "network_error" -> R.string.vpn5g_auth_network_error
-            message.startsWith("verify_failed") || message.startsWith("otp_failed") ->
-                R.string.vpn5g_auth_code_wrong
-            message.startsWith("signin_failed") || message.startsWith("signup_failed") ->
-                R.string.vpn5g_auth_signin_failed
+        return when (message) {
+            "network_error" -> R.string.vpn5g_auth_network_error
+            "rate_limited" -> R.string.vpn5g_auth_rate_limited
+            "email_not_registered" -> R.string.vpn5g_auth_email_not_registered
+            "code_wrong_or_expired" -> R.string.vpn5g_auth_code_wrong
             else -> R.string.vpn5g_auth_generic_error
         }
     }

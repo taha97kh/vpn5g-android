@@ -22,6 +22,11 @@ data class LiveConfigEntry(
 
 /** Remote app configuration (app_config.json). */
 data class AppConfigRemote(
+    /**
+     * IGNORED since v1.1.1: the free tier is the 50 fastest-pinging configs
+     * (see Vpn5gConstants.FREE_SERVER_COUNT), not a country list. Kept so
+     * older published configs still parse.
+     */
     val free_countries: List<String>? = null,
     val notice: String? = null,
     val config_sources: List<String>? = null,
@@ -127,6 +132,8 @@ data class Vpn5gServerUi(
     val country: String,
     val pingMillis: Long,
     val isSelected: Boolean,
+    /** True when this server is in the free tier (top-50 fastest ping, v1.1.1). */
+    val isFree: Boolean = false,
     /** Flag emoji derived from the remark or the server IP ("🌐" when unknown). */
     val flag: String = "🌐",
     /** Persian country name derived from the remark or the server IP. */

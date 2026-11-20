@@ -14,19 +14,35 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /**
- * Email auth service layer (Supabase Auth / GoTrue REST).
+ * Email auth service layer (Supabase Auth / GoTrue REST), passwordless OTP.
  *
- * Flows: email+password registration, OTP login, and password recovery by
- * 6-digit code — all against the project in [Vpn5gAuthConfig]. The Supabase
- * project does not exist yet, so every call returns [AuthResult.NotConfigured]
- * until the URL and anon key are filled in; the UI surfaces that honestly.
+ * One flow for registration, login, and recovery: the user enters a Gmail
+ * address, a real 6-digit code is emailed, the user enters the code, and
+ * the account is verified and signed in. Gmail-only is enforced by the UI
+ * ([Vpn5gEmailPolicy]) before any call is made.
+ *
+ * Endpoints (project in [Vpn5gAuthConfig]):
+ *  - POST /auth/v1/otp {"email", "create_user": true} — registration and
+ *    login (a new user is created on first use).
+ *  - POST /auth/v1/otp {"email", "create_user": false} — recovery (the
+ *    email must already be registered).
+ *  - POST /auth/v1/verify {"email", "token", "type": "email"} — checks the
+ *    code and returns the session.
+ *
+ * There is no password anywhere in this flow by design. The older
+ * email+password signup (/auth/v1/signup) was dropped: its default
+ * confirmation email carries a LINK, not a 6-digit code, so the app's code
+ * field could never work with it; /otp is the documented code flow
+ * (Supabase: "email OTPs are a form of passwordless login where users key
+ * in a six digit code sent to their email address").
  *
  * The session (access/refresh token + email) is persisted in MMKV under
- * [KEY_AUTH_SESSION_JSON]. Passwords are never stored. The Gmail app
- * password that actually sends the codes lives in Supabase's SMTP settings,
- * never in this app.
+ * [KEY_AUTH_SESSION_JSON]. The Gmail app password that actually sends the
+ * codes lives in Supabase's SMTP settings, never in this app.
  *
- * All calls run on Dispatchers.IO and never throw.
+ * All calls run on Dispatchers.IO and never throw. The "coming soon" path
+ * ([AuthResult.NotConfigured]) remains for an unconfigured project and is
+ * the only case in which no send is attempted.
  */
 object Vpn5gAuthService {
 
@@ -79,25 +95,7 @@ object Vpn5gAuthService {
         MmkvManager.encodeSettings(KEY_AUTH_SESSION_JSON, JsonUtil.toJson(session))
     }
 
-    /** Registration step 1: create the account and send the OTP code. */
-    suspend fun signUpWithEmail(email: String, password: String): AuthResult =
-        withContext(Dispatchers.IO) {
-            if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
-            if (password.length < 6) {
-                return@withContext AuthResult.Error("password_too_short")
-            }
-            post(
-                path = "/auth/v1/signup",
-                body = """{"email":"${jsonEscape(email)}","password":"${jsonEscape(password)}"}""",
-            ) { code, _ ->
-                // 200 = created (session or confirmation pending); the OTP
-                // code is emailed by Supabase either way.
-                if (code in 200..299) AuthResult.CodeSent
-                else AuthResult.Error("signup_failed_$code")
-            }
-        }
-
-    /** OTP login step 1: email a 6-digit login code (creates the user if new). */
+    /** OTP step 1: email a 6-digit code; creates the account on first use. */
     suspend fun sendLoginOtp(email: String): AuthResult =
         withContext(Dispatchers.IO) {
             if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
@@ -106,11 +104,15 @@ object Vpn5gAuthService {
                 body = """{"email":"${jsonEscape(email)}","create_user":true}""",
             ) { code, _ ->
                 if (code in 200..299) AuthResult.CodeSent
-                else AuthResult.Error("otp_failed_$code")
+                else AuthResult.Error(sendErrorKey(code))
             }
         }
 
-    /** Password-recovery step 1: email a 6-digit recovery code. */
+    /**
+     * Recovery step 1: email a 6-digit code to an already-registered Gmail.
+     * Recovery is the same OTP flow as login — the verified code signs the
+     * user straight back in (there is no password to reset).
+     */
     suspend fun sendRecoveryOtp(email: String): AuthResult =
         withContext(Dispatchers.IO) {
             if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
@@ -119,23 +121,22 @@ object Vpn5gAuthService {
                 body = """{"email":"${jsonEscape(email)}","create_user":false}""",
             ) { code, _ ->
                 if (code in 200..299) AuthResult.CodeSent
-                else AuthResult.Error("recovery_failed_$code")
+                else AuthResult.Error(sendErrorKey(code))
             }
         }
 
     /**
-     * Step 2 for login/recovery: verify the 6-digit code.
-     * [type] is "email" for OTP login and "recovery" for password recovery.
+     * OTP step 2: verify the 6-digit code (type "email" for every mode).
      * On success a session is persisted and returned.
      */
-    suspend fun verifyOtp(email: String, code: String, type: String): AuthResult =
+    suspend fun verifyOtp(email: String, code: String): AuthResult =
         withContext(Dispatchers.IO) {
             if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
             post(
                 path = "/auth/v1/verify",
-                body = """{"email":"${jsonEscape(email)}","token":"${jsonEscape(code)}","type":"${jsonEscape(type)}"}""",
+                body = """{"email":"${jsonEscape(email)}","token":"${jsonEscape(code)}","type":"email"}""",
             ) { status, body ->
-                if (status !in 200..299) return@post AuthResult.Error("verify_failed_$status")
+                if (status !in 200..299) return@post AuthResult.Error(verifyErrorKey(status))
                 parseSession(body, email)?.let { session ->
                     saveSession(session)
                     AuthResult.SignedIn(session)
@@ -143,42 +144,27 @@ object Vpn5gAuthService {
             }
         }
 
-    /** Recovery step 3: set a new password with the verified session. */
-    suspend fun updatePassword(newPassword: String): AuthResult =
-        withContext(Dispatchers.IO) {
-            val session = currentSession()
-            if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
-            if (session?.accessToken.isNullOrBlank()) {
-                return@withContext AuthResult.Error("no_session")
-            }
-            if (newPassword.length < 6) {
-                return@withContext AuthResult.Error("password_too_short")
-            }
-            put(
-                path = "/auth/v1/user",
-                token = session.accessToken,
-                body = """{"password":"${jsonEscape(newPassword)}"}""",
-            ) { code, _ ->
-                if (code in 200..299) AuthResult.SignedIn(session)
-                else AuthResult.Error("password_update_failed_$code")
-            }
-        }
+    /**
+     * Maps an OTP-send HTTP status to a stable error key. Pure, JVM-tested.
+     * 429 is Supabase's one-code-per-60-seconds limit; 422 means the email
+     * is not registered (recovery with create_user=false).
+     */
+    internal fun sendErrorKey(status: Int): String = when (status) {
+        429 -> "rate_limited"
+        422 -> "email_not_registered"
+        else -> "otp_failed"
+    }
 
-    /** Email+password sign-in for an existing account. */
-    suspend fun signInWithPassword(email: String, password: String): AuthResult =
-        withContext(Dispatchers.IO) {
-            if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
-            post(
-                path = "/auth/v1/token?grant_type=password",
-                body = """{"email":"${jsonEscape(email)}","password":"${jsonEscape(password)}"}""",
-            ) { code, body ->
-                if (code !in 200..299) return@post AuthResult.Error("signin_failed_$code")
-                parseSession(body, email)?.let { session ->
-                    saveSession(session)
-                    AuthResult.SignedIn(session)
-                } ?: AuthResult.Error("signin_no_session")
-            }
-        }
+    /**
+     * Maps an OTP-verify HTTP status to a stable error key. Pure,
+     * JVM-tested. GoTrue answers a wrong or expired code with 400
+     * ("Token has expired or is invalid"); 429 is the rate limit.
+     */
+    internal fun verifyErrorKey(status: Int): String = when (status) {
+        429 -> "rate_limited"
+        400, 401, 403, 404, 422 -> "code_wrong_or_expired"
+        else -> "verify_failed"
+    }
 
     private suspend fun post(
         path: String,
@@ -197,28 +183,6 @@ object Vpn5gAuthService {
             }
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Vpn5gAuthService: POST $path failed", e)
-            AuthResult.Error("network_error")
-        }
-    }
-
-    private suspend fun put(
-        path: String,
-        token: String?,
-        body: String,
-        handle: (Int, String) -> AuthResult,
-    ): AuthResult {
-        return try {
-            val request = Request.Builder()
-                .url(Vpn5gAuthConfig.SUPABASE_URL.trimEnd('/') + path)
-                .header("apikey", Vpn5gAuthConfig.SUPABASE_ANON_KEY)
-                .header("Authorization", "Bearer $token")
-                .put(body.toRequestBody(JSON))
-                .build()
-            client().newCall(request).execute().use { response ->
-                handle(response.code, response.body?.string().orEmpty())
-            }
-        } catch (e: Exception) {
-            LogUtil.e(AppConfig.TAG, "Vpn5gAuthService: PUT $path failed", e)
             AuthResult.Error("network_error")
         }
     }

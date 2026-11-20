@@ -3,8 +3,6 @@ package com.v2ray.ang.handler.vpn5g
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.dto.UrlContentRequest
 import com.v2ray.ang.handler.MmkvManager
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.APP_CONFIG
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.DEFAULT_FREE_COUNTRIES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_APP_CONFIG_JSON
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
@@ -17,12 +15,12 @@ import kotlinx.coroutines.withContext
  *
  * The file does not exist on the server yet: a 404 or any fetch failure is
  * normal in v1 and falls back to safe defaults (cached JSON when available,
- * otherwise [DEFAULT_FREE_COUNTRIES] and no notice). Never throws.
+ * otherwise no notice and no remote values). Never throws.
  */
 object Vpn5gRemoteConfig {
 
     fun defaults(): AppConfigRemote = AppConfigRemote(
-        free_countries = DEFAULT_FREE_COUNTRIES,
+        free_countries = null,
         notice = null,
         config_sources = emptyList(),
         min_version = null,
