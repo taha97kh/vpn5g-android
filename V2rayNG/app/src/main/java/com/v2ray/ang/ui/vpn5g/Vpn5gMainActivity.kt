@@ -366,9 +366,9 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onToggleConnect = { toggleConnect() },
                             onServerTap = { guid -> onServerTap(guid) },
                             onLockedCountryTap = { lockedCountry = it },
-                            onOpenBot = { Utils.openUri(this, BOT_URL) },
+                            onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
                             onOpenAdvanced = {
-                                startActivity(Intent(this, MainActivity::class.java))
+                                startActivity(Intent(this@Vpn5gMainActivity, MainActivity::class.java))
                             },
                         )
                         Vpn5gDestination.GUIDE -> Vpn5gGuideScreen(
@@ -377,12 +377,12 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                         Vpn5gDestination.SUBSCRIPTION -> Vpn5gSubscriptionScreen(
                             state = uiState,
                             onBack = { destination = Vpn5gDestination.HOME },
-                            onOpenBot = { Utils.openUri(this, BOT_URL) },
+                            onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
                             onOpenAuth = { destination = Vpn5gDestination.AUTH },
                         )
                         Vpn5gDestination.ABOUT -> Vpn5gAboutScreen(
                             onBack = { destination = Vpn5gDestination.HOME },
-                            onOpenUrl = { url -> Utils.openUri(this, url) },
+                            onOpenUrl = { url -> Utils.openUri(this@Vpn5gMainActivity, url) },
                         )
                         Vpn5gDestination.AUTH -> Vpn5gAuthScreen(
                             onBack = { destination = Vpn5gDestination.SUBSCRIPTION },

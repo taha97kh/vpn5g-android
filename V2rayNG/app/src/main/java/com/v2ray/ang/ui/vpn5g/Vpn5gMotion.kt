@@ -3,8 +3,9 @@ package com.v2ray.ang.ui.vpn5g
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateColor
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateValue
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -40,25 +41,27 @@ val Vpn5gOnDarkMuted = Color(0xFF94A3B8)
 /**
  * Animated gradient background (dark navy with a slowly shifting blue tint).
  *
- * Purely presentational: two [animateColor] values on an infinite transition
+ * Purely presentational: two [animateValue] values on an infinite transition
  * drive the middle/bottom gradient stops. Render-thread driven, no bitmap
  * animation, no new dependencies. Never gates sync or connect work.
  */
 @Composable
 fun Vpn5gAnimatedBackground(content: @Composable BoxScope.() -> Unit) {
     val transition = rememberInfiniteTransition(label = "vpn5g_gradient")
-    val mid by transition.animateColor(
+    val mid by transition.animateValue(
         initialValue = Vpn5gNavyBottom,
         targetValue = Color(0xFF172554),
+        typeConverter = Color.VectorConverter,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 8000),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "gradient_mid",
     )
-    val tint by transition.animateColor(
+    val tint by transition.animateValue(
         initialValue = Color(0xFF1D4ED8),
         targetValue = Vpn5gAccent,
+        typeConverter = Color.VectorConverter,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 6000),
             repeatMode = RepeatMode.Reverse,
