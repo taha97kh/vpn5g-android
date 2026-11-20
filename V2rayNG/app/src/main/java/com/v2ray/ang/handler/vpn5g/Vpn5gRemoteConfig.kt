@@ -3,6 +3,7 @@ package com.v2ray.ang.handler.vpn5g
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.dto.UrlContentRequest
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.APP_CONFIG
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_APP_CONFIG_JSON
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
