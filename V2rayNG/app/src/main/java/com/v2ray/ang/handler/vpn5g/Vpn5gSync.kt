@@ -219,7 +219,7 @@ object Vpn5gSync {
     }
 
     /**
-     * Free tier (v1.1.1): the [FREE_SERVER_COUNT] fastest-pinging configs
+     * Free tier (v1.1.2): the [FREE_SERVER_COUNT] fastest-pinging configs
      * are free; every other config is premium-locked. Pure function (no
      * Android APIs) so it is covered by JVM unit tests. Only servers with
      * a measured ping (pingMillis > 0) can be free — a config with no ping
@@ -243,7 +243,7 @@ object Vpn5gSync {
      * row carries the flag + Persian country name parsed from its remark
      * (free, no I/O); servers whose remark has no country are enriched later
      * by [enrichCountries] (DNS + bundled GeoIP table) so the first paint is
-     * never blocked on DNS. The free tier is the 50 fastest-pinging servers
+     * never blocked on DNS. The free tier is the 20 fastest-pinging servers
      * ([selectFreeGuids]); a section is "free" when it holds at least one
      * free server.
      */

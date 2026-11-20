@@ -1,15 +1,18 @@
 package com.v2ray.ang.ui.vpn5g
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -24,6 +27,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -187,15 +194,18 @@ fun Vpn5gProfileScreen(
                     )
                 }
                 Spacer(Modifier.height(8.dp))
-                ProfileLinkRow(
+                // Channel / Bot / Support as neomorphism buttons (v1.1.2).
+                NeuLinkButton(
                     label = stringResource(R.string.vpn5g_about_channel),
                     onClick = { onOpenUrl(CHANNEL_URL) },
                 )
-                ProfileLinkRow(
+                Spacer(Modifier.height(12.dp))
+                NeuLinkButton(
                     label = stringResource(R.string.vpn5g_about_bot),
                     onClick = { onOpenUrl(BOT_URL) },
                 )
-                ProfileLinkRow(
+                Spacer(Modifier.height(12.dp))
+                NeuLinkButton(
                     label = stringResource(R.string.vpn5g_about_support),
                     onClick = { onOpenUrl(SUPPORT_URL) },
                 )
@@ -240,18 +250,51 @@ fun Vpn5gProfileScreen(
     }
 }
 
+/**
+ * Neomorphism button (v1.1.2): soft-extruded look on the dark theme —
+ * a rounded surface with a light-to-dark diagonal gradient, a light
+ * top-left edge and a dark bottom-right edge, plus a soft drop shadow.
+ */
 @Composable
-private fun ProfileLinkRow(label: String, onClick: () -> Unit) {
-    Row(
+private fun NeuLinkButton(label: String, onClick: () -> Unit) {
+    Box(
+        contentAlignment = Alignment.Center,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(role = Role.Button, onClickLabel = label) { onClick() }
-            .padding(vertical = 6.dp)
+            .height(54.dp)
+            .shadow(
+                elevation = 8.dp,
+                shape = RoundedCornerShape(16.dp),
+                ambientColor = Color.Black.copy(alpha = 0.6f),
+                spotColor = Color.Black.copy(alpha = 0.6f),
+            )
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                brush = Brush.linearGradient(
+                    colors = listOf(Color(0xFF232323), Color(0xFF1A1A1A)),
+                    start = Offset.Zero,
+                    end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
+                ),
+            )
+            .border(
+                width = 1.dp,
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.14f),
+                        Color.Transparent,
+                        Color.Black.copy(alpha = 0.35f),
+                    ),
+                    start = Offset.Zero,
+                    end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
+                ),
+                shape = RoundedCornerShape(16.dp),
+            )
+            .clickable(role = Role.Button, onClickLabel = label) { onClick() },
     ) {
         Text(
             text = label,
-            color = Vpn5gAccentLight,
-            fontSize = 15.sp,
+            color = Vpn5gOnDark,
+            fontSize = 16.sp,
             fontWeight = FontWeight.Bold,
         )
     }

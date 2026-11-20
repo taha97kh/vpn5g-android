@@ -16,10 +16,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,6 +32,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -196,5 +200,38 @@ fun Vpn5gFooter() {
             fontSize = 12.sp,
             textAlign = TextAlign.Center,
         )
+    }
+}
+
+/**
+ * Launch splash (v1.1.2): the full-screen branded image fills the screen
+ * (centerCrop) with a "Loading..." indicator at the bottom. Shown for
+ * exactly 3 seconds by the launcher activity, then replaced by the main
+ * screen. Purely presentational; it never gates sync or connect work.
+ */
+@Composable
+fun Vpn5gSplashScreen() {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Image(
+            painter = painterResource(R.drawable.splash_bg),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 48.dp),
+        ) {
+            CircularProgressIndicator(color = Vpn5gCyan, modifier = Modifier.size(32.dp))
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_loading),
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
     }
 }

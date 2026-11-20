@@ -762,5 +762,7 @@
     <string name="vpn5g_footer_made_by" translatable="false">Made by AREF KH</string>
     <string name="vpn5g_footer_years" translatable="false">2026 - 1405</string>
     <string name="vpn5g_connect_brand" translatable="false">4ref.ai</string>
+    <string name="vpn5g_vip" translatable="false">VIP</string>
+    <string name="vpn5g_loading">Loading...</string>
 
 </resources>

@@ -45,6 +45,17 @@ class AngApplication : Application() {
         // Ensure critical preference defaults are present in MMKV early
         SettingsManager.initApp(this)
 
+        // VPN 5G (v1.1.2): the launcher is Vpn5gMainActivity, not
+        // MainActivity, so the geo data files (.dat) the Xray core needs
+        // were never installed on this path — the first connect tap failed
+        // until the user opened Advanced Settings (MainActivity), whose
+        // initialize() copies them. Copy them here, once per install, on
+        // a background thread: initAssets() only copies files that are
+        // missing, so it is idempotent and safe to run at every launch.
+        Thread(name = "vpn5g-init-assets") {
+            SettingsManager.initAssets(this, assets)
+        }.start()
+
         // Initialize theme state from MMKV
         ThemeManager.refresh()
     }

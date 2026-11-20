@@ -3,7 +3,7 @@ package com.v2ray.ang.handler.vpn5g
 /**
  * VPN 5G constants: remote endpoints, links, and the free tier.
  *
- * Free tier (v1.1.1): after each sync/ping, the [FREE_SERVER_COUNT]
+ * Free tier (v1.1.2): after each sync/ping, the [FREE_SERVER_COUNT]
  * fastest-pinging configs are free; every other config is premium-locked.
  * The free set is computed from measured pings in
  * [Vpn5gSync.loadGroupedServers] — never by country, and never invented.
@@ -43,8 +43,8 @@ object Vpn5gConstants {
 
     const val SUBSCRIPTION_REMARKS = "VPN5G IRBOT"
 
-    /** Free tier: this many fastest-pinging configs are free (v1.1.1). */
-    const val FREE_SERVER_COUNT = 50
+    /** Free tier: this many fastest-pinging configs are free (v1.1.2). */
+    const val FREE_SERVER_COUNT = 20
 
     /** Auto-disconnect after this long. */
     const val SESSION_LIMIT_MINUTES = 30L

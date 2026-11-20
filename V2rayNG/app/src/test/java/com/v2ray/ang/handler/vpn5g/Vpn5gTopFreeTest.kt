@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/** JVM tests for the free tier: the 50 fastest-pinging configs (pure Kotlin). */
+/** JVM tests for the free tier: the 20 fastest-pinging configs (pure Kotlin). */
 class Vpn5gTopFreeTest {
 
     private fun server(guid: String, pingMillis: Long): Vpn5gServerUi {
@@ -18,20 +18,20 @@ class Vpn5gTopFreeTest {
     }
 
     @Test
-    fun test_free_count_is_50() {
-        assertEquals(50, Vpn5gConstants.FREE_SERVER_COUNT)
+    fun test_free_count_is_20() {
+        assertEquals(20, Vpn5gConstants.FREE_SERVER_COUNT)
     }
 
     @Test
-    fun test_fastest_50_win() {
+    fun test_fastest_20_win() {
         // 60 servers, pings 600..10 (shuffled order in the list).
         val servers = (1..60).shuffled().map { i ->
             server(guid = "g$i", pingMillis = i * 10L)
         }
         val free = Vpn5gSync.selectFreeGuids(servers)
-        assertEquals(50, free.size)
-        // The 50 fastest are pings 10..500 (i = 1..50).
-        assertEquals((1..50).map { "g$it" }.toSet(), free)
+        assertEquals(20, free.size)
+        // The 20 fastest are pings 10..200 (i = 1..20).
+        assertEquals((1..20).map { "g$it" }.toSet(), free)
     }
 
     @Test
@@ -47,7 +47,7 @@ class Vpn5gTopFreeTest {
     }
 
     @Test
-    fun test_fewer_than_50_returns_all_with_ping() {
+    fun test_fewer_than_20_returns_all_with_ping() {
         val servers = listOf(
             server("a", 30L),
             server("b", 10L),
@@ -64,11 +64,11 @@ class Vpn5gTopFreeTest {
 
     @Test
     fun test_ties_are_deterministic() {
-        // All 60 servers ping 10ms: sortedBy is stable, so the first 50
-        // in list order win — the same 50 on every run.
+        // All 60 servers ping 10ms: sortedBy is stable, so the first 20
+        // in list order win — the same 20 on every run.
         val servers = (1..60).map { server("g$it", 10L) }
         val free = Vpn5gSync.selectFreeGuids(servers)
-        assertEquals((1..50).map { "g$it" }.toSet(), free)
+        assertEquals((1..20).map { "g$it" }.toSet(), free)
     }
 
     @Test

@@ -94,7 +94,7 @@ fun Vpn5gSubscriptionScreen(
     val gateway = state.paymentGateway
     val gatewayReady = gateway?.enabled == true && !gateway.url.isNullOrBlank()
     // Real live counts, per server: free countries are the countries
-    // with at least one free server; free servers are the top-50
+    // with at least one free server; free servers are the top-20
     // fastest configs. Never count a whole section as free.
     val freeCountryCount = state.countries.count { section ->
         section.servers.any { it.isFree }
