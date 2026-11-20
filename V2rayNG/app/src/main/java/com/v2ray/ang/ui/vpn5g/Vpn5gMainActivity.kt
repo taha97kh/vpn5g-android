@@ -38,6 +38,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -86,6 +88,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_PROTOCOL_FILTER
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_AUTO_FAILOVER_ATTEMPTS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_TUNNEL_ATTEMPTS
 import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
@@ -121,6 +124,9 @@ enum class Vpn5gDestination {
     HOME, PREMIUM, BROWSER, ROUTING, ME, AUTH, PROTOCOL
 }
 
+/** Server-list tabs on the home screen (X-VPN server-list style). */
+enum class Vpn5gServerTab { FREE, ALL, SPECIAL }
+
 /** Post-connect tunnel state. The UI must never show a false "connected". */
 enum class Vpn5gTunnelState { IDLE, VERIFYING, VERIFIED, FAILED, UNKNOWN }
 
@@ -150,6 +156,8 @@ data class Vpn5gHomeUiState(
     val promoBotLink: String? = null,
     /** Selected protocol filter id ("auto", "vless", "vmess", "trojan", "ss"). */
     val protocolFilter: String = Vpn5gProtocol.AUTO,
+    /** Brief auto-failover notice ("switched to server X"); auto-dismissed. */
+    val autoFailoverNotice: String? = null,
 )
 
 /**
@@ -172,6 +180,20 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     private var verifyAttempts = 0
     private var tunnelFailedStop = false
     private var baselineIp: String? = null
+
+    // Auto-failover on an unexpected drop (v1.1): when the service stops
+    // without the user asking, without the 30-minute timer ending, and
+    // without a tunnel-verification failure, the app reconnects to the
+    // best server in another country (bounded attempts) and shows a notice.
+    private var userStopRequested = false
+    private var suppressAutoFailover = false
+    private var sessionActive = false
+    private var sessionStartedAtMs = 0L
+    private var droppedCountry: String? = null
+    private var autoFailoverAttempts = 0
+    private var autoFailoverPending = false
+    private var failoverTargetName: String? = null
+    private var autoFailoverJob: Job? = null
 
     private val serviceReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -356,10 +378,24 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Called by the Activity before a manual connect/server tap. */
     fun resetTunnelAttempts() {
-        verifyJob?.cancel()
-        verifyJob = null
+        resetForFailover()
         triedGuids.clear()
         verifyAttempts = 0
+        autoFailoverAttempts = 0
+        autoFailoverPending = false
+        autoFailoverJob?.cancel()
+        autoFailoverJob = null
+        _uiState.update {
+            it.copy(
+                autoFailoverNotice = null,
+            )
+        }
+    }
+
+    /** Fresh verification state; keeps the auto-failover attempt counter. */
+    private fun resetForFailover() {
+        verifyJob?.cancel()
+        verifyJob = null
         tunnelFailedStop = false
         _uiState.update {
             it.copy(
@@ -369,6 +405,23 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 verifiedExitFlag = "",
             )
         }
+    }
+
+    /** Manual disconnect from the power button: never auto-fail over. */
+    fun userDisconnect() {
+        userStopRequested = true
+        autoFailoverJob?.cancel()
+        autoFailoverJob = null
+        resetTunnelAttempts()
+    }
+
+    /** An intentional restart is in progress (server switch / failover). */
+    fun markRestarting() {
+        suppressAutoFailover = true
+    }
+
+    fun consumeAutoFailoverNotice() {
+        _uiState.update { it.copy(autoFailoverNotice = null) }
     }
 
     fun signOut() {
@@ -414,6 +467,24 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             if (Vpn5gTimer.connectedAt() == 0L) {
                 Vpn5gTimer.scheduleDisconnect(app)
             }
+            sessionActive = true
+            sessionStartedAtMs = System.currentTimeMillis()
+            userStopRequested = false
+            suppressAutoFailover = false
+            if (autoFailoverPending) {
+                autoFailoverPending = false
+                val target = failoverTargetName
+                failoverTargetName = null
+                if (target != null) {
+                    _uiState.update {
+                        it.copy(
+                            autoFailoverNotice = app.getString(
+                                R.string.vpn5g_autofailover_switched, target
+                            ),
+                        )
+                    }
+                }
+            }
             // Verify the tunnel carries traffic (once per session; the job
             // survives failover restarts so attempts stay bounded).
             if (verifyJob?.isActive != true) startTunnelVerification()
@@ -434,6 +505,39 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
             }
+            // Unexpected drop? Schedule an auto-failover check (delayed, so
+            // an intentional restart that comes back up cancels it). The
+            // 30-minute timer ends the session at 30:00, so a stop after
+            // ~29 minutes is treated as the timer, not a drop.
+            val wasSession = sessionActive
+            sessionActive = false
+            val sessionAgeMs = if (sessionStartedAtMs > 0L) {
+                System.currentTimeMillis() - sessionStartedAtMs
+            } else {
+                0L
+            }
+            val timerProbablyEnded = sessionAgeMs >= 29 * 60_000L
+            val selectedGuid = MmkvManager.getSelectServer()
+            droppedCountry = _uiState.value.countries
+                .flatMap { it.servers }
+                .firstOrNull { it.guid == selectedGuid }?.country
+            val shouldFailover = !suppressAutoFailover && !userStopRequested &&
+                !tunnelFailedStop && !timerProbablyEnded &&
+                (wasSession || (autoFailoverPending &&
+                    autoFailoverAttempts < MAX_AUTO_FAILOVER_ATTEMPTS))
+            if (shouldFailover) {
+                autoFailoverJob?.cancel()
+                autoFailoverJob = viewModelScope.launch {
+                    delay(3_000L)
+                    if (!isActive) return@launch
+                    if (_uiState.value.isRunning || userStopRequested ||
+                        suppressAutoFailover
+                    ) {
+                        return@launch
+                    }
+                    attemptAutoFailover()
+                }
+            }
             tunnelFailedStop = false
         }
         _uiState.update {
@@ -443,6 +547,65 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         viewModelScope.launch(Dispatchers.IO) { refreshSelection() }
+    }
+
+    /**
+     * Auto-failover after an unexpected drop: reconnect to the best free
+     * server in a DIFFERENT country than the one that dropped (lowest
+     * ping, honoring the protocol filter), bounded to
+     * [MAX_AUTO_FAILOVER_ATTEMPTS] attempts per session. Shows a brief
+     * notice of the switch; gives up with a message when no server is left.
+     */
+    private fun attemptAutoFailover() {
+        val app = getApplication<Application>()
+        if (autoFailoverAttempts >= MAX_AUTO_FAILOVER_ATTEMPTS) {
+            autoFailoverPending = false
+            _uiState.update {
+                it.copy(
+                    autoFailoverNotice = app.getString(
+                        R.string.vpn5g_autofailover_gave_up
+                    ),
+                )
+            }
+            return
+        }
+        val droppedGuid = MmkvManager.getSelectServer()
+        val candidates = Vpn5gProtocol.filterSections(
+            _uiState.value.countries, _uiState.value.protocolFilter
+        )
+            .filter { it.isFree }
+            .flatMap { it.servers }
+            .filter { it.guid != droppedGuid && it.pingMillis > 0 }
+        val next = candidates
+            .filter { it.country != droppedCountry }
+            .minByOrNull { it.pingMillis }
+            ?: candidates.minByOrNull { it.pingMillis }
+        if (next == null) {
+            autoFailoverPending = false
+            _uiState.update {
+                it.copy(
+                    autoFailoverNotice = app.getString(
+                        R.string.vpn5g_autofailover_gave_up
+                    ),
+                )
+            }
+            return
+        }
+        autoFailoverAttempts++
+        autoFailoverPending = true
+        failoverTargetName = next.name
+        if (droppedGuid != null) triedGuids += droppedGuid
+        resetForFailover()
+        suppressAutoFailover = true
+        _uiState.update {
+            it.copy(
+                autoFailoverNotice = app.getString(
+                    R.string.vpn5g_autofailover_switching,
+                    next.countryNameFa.ifBlank { next.country },
+                ),
+            )
+        }
+        viewModelScope.launch { _failoverEvent.emit(next.guid) }
     }
 
     /**
@@ -509,6 +672,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                                     .getString(R.string.vpn5g_tunnel_failed_retry),
                             )
                         }
+                        // The restart below is intentional: do not let the
+                        // drop detector treat it as an unexpected disconnect.
+                        suppressAutoFailover = true
                         _failoverEvent.emit(next.guid)
                         delay(4_000L)
                         if (!_uiState.value.isRunning) return@launch
@@ -654,6 +820,8 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onAutoConnect = { connectBestServer() },
                             onLockedCountryTap = { lockedCountry = it },
                             onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
+                            onOpenPremium = { destination = Vpn5gDestination.PREMIUM },
+                            onConsumeAutoFailoverNotice = { viewModel.consumeAutoFailoverNotice() },
                         )
                         Vpn5gDestination.PREMIUM -> Vpn5gSubscriptionScreen(
                             state = uiState,
@@ -764,7 +932,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
     private fun toggleConnect() {
         val state = viewModel.uiState.value
         if (state.isRunning) {
-            viewModel.resetTunnelAttempts()
+            viewModel.userDisconnect()
             LauncherManager.stopService(this)
             return
         }
@@ -795,6 +963,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         if (state.isRunning) {
             if (guid == state.selectedGuid) return
             viewModel.resetTunnelAttempts()
+            viewModel.markRestarting()
             MmkvManager.setSelectServer(guid)
             LauncherManager.restartService(this)
             return
@@ -886,8 +1055,9 @@ private fun formatRemaining(millis: Long?): String {
 /**
  * X-VPN-style home screen: black background, connection status above a big
  * circular power button with a cyan ring, "Free Servers" and "Auto" rows,
- * then the grouped server list. The ring shows the 30-minute session as a
- * progress arc while connected.
+ * then the grouped server list with tabs (Free / All / Special), search,
+ * a Recommended fastest-server row, and a premium banner. The ring shows
+ * the 30-minute session as a progress arc while connected.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -899,19 +1069,41 @@ fun Vpn5gHomeScreen(
     onAutoConnect: () -> Unit,
     onLockedCountryTap: (String) -> Unit,
     onOpenBot: () -> Unit,
+    onOpenPremium: () -> Unit,
+    onConsumeAutoFailoverNotice: () -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
     var serversExpanded by rememberSaveable { mutableStateOf(true) }
+    var serverTab by rememberSaveable { mutableStateOf(Vpn5gServerTab.FREE) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(Unit) { entered = true }
 
     val displayCountries = Vpn5gProtocol.filterSections(state.countries, state.protocolFilter)
-    val freeSections = displayCountries.filter { it.isFree }
-    val lockedSections = displayCountries.filter { !it.isFree }
+    val freeSectionsAll = displayCountries.filter { it.isFree }
+    val searchedCountries = if (searchQuery.isBlank()) {
+        displayCountries
+    } else {
+        displayCountries.mapNotNull { section ->
+            val labelMatch = section.label.contains(searchQuery, ignoreCase = true)
+            val servers = if (labelMatch) {
+                section.servers
+            } else {
+                section.servers.filter {
+                    it.name.contains(searchQuery, ignoreCase = true) ||
+                        it.countryNameFa.contains(searchQuery, ignoreCase = true)
+                }
+            }
+            if (servers.isEmpty()) null else section.copy(servers = servers)
+        }
+    }
+    val freeSections = searchedCountries.filter { it.isFree }
+    val lockedSections = searchedCountries.filter { !it.isFree }
+    val listExpanded = serversExpanded || searchQuery.isNotBlank()
     val freeCount = freeSections.sumOf { it.servers.size }
-    val bestServer = freeSections.flatMap { it.servers }
+    val bestServer = freeSectionsAll.flatMap { it.servers }
         .filter { it.pingMillis > 0 }
         .minByOrNull { it.pingMillis }
-        ?: freeSections.flatMap { it.servers }.firstOrNull()
+        ?: freeSectionsAll.flatMap { it.servers }.firstOrNull()
 
     val statusTextRes = when {
         state.isRunning && state.tunnelState == Vpn5gTunnelState.VERIFYING ->
@@ -1096,6 +1288,28 @@ fun Vpn5gHomeScreen(
                 }
             }
 
+            // Auto-failover notice: shown briefly after an unexpected drop
+            // switches the connection to another country's server.
+            state.autoFailoverNotice?.let { notice ->
+                item {
+                    Text(
+                        text = notice,
+                        color = Vpn5gOnDark,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Vpn5gCyan.copy(alpha = 0.2f))
+                            .padding(12.dp),
+                    )
+                }
+                LaunchedEffect(notice) {
+                    delay(8_000L)
+                    onConsumeAutoFailoverNotice()
+                }
+            }
+
             state.notice?.let { notice ->
                 item {
                     Text(
@@ -1152,7 +1366,7 @@ fun Vpn5gHomeScreen(
             }
 
             // "Free Servers" row (X-VPN style): expands/collapses the list.
-            if (freeSections.isNotEmpty()) {
+            if (freeSections.isNotEmpty() && serverTab != Vpn5gServerTab.SPECIAL) {
                 item(key = "free_servers_row") {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1189,7 +1403,7 @@ fun Vpn5gHomeScreen(
             }
 
             // "Auto" row: the best free server, one tap to connect.
-            if (bestServer != null) {
+            if (bestServer != null && serverTab != Vpn5gServerTab.SPECIAL) {
                 item(key = "auto_row") {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1234,28 +1448,189 @@ fun Vpn5gHomeScreen(
                 }
             }
 
-            if (serversExpanded) {
-                freeSections.forEach { country ->
-                    item(key = "country_${country.label}") {
-                        Vpn5gCountrySection(
-                            country = country,
-                            onServerTap = onServerTap,
-                            onLockedTap = null,
+            // Server-list tabs: Free / All locations / Special (X-VPN style).
+            item(key = "server_tabs") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Vpn5gServerTab.entries.forEach { tab ->
+                        val selected = serverTab == tab
+                        val tabLabelRes = when (tab) {
+                            Vpn5gServerTab.FREE -> R.string.vpn5g_tab_free
+                            Vpn5gServerTab.ALL -> R.string.vpn5g_tab_all
+                            Vpn5gServerTab.SPECIAL -> R.string.vpn5g_tab_special
+                        }
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (selected) Vpn5gOnDark.copy(alpha = 0.12f)
+                                    else Color.Transparent
+                                )
+                                .clickable(
+                                    role = Role.Button,
+                                    onClickLabel = stringResource(tabLabelRes),
+                                ) { serverTab = tab }
+                                .padding(vertical = 10.dp),
+                        ) {
+                            Text(
+                                text = stringResource(tabLabelRes),
+                                color = if (selected) Vpn5gCyan else Vpn5gOnDarkMuted,
+                                fontSize = 15.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Premium promo banner (no prices here — plans live on Premium).
+            if (searchQuery.isBlank()) {
+                item(key = "premium_banner") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Vpn5gCyan.copy(alpha = 0.15f))
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = stringResource(R.string.vpn5g_premium_banner_title),
+                            ) { onOpenPremium() }
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_premium_banner_title),
+                            color = Vpn5gCyan,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = stringResource(R.string.vpn5g_premium_banner_body),
+                            color = Vpn5gOnDark,
+                            fontSize = 14.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.vpn5g_premium_banner_button),
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
                         )
                     }
                 }
-                if (freeSections.isNotEmpty() || lockedSections.isNotEmpty()) {
+            }
+
+            // Recommended: the fastest free server, one tap to connect.
+            if (bestServer != null && searchQuery.isBlank() &&
+                serverTab != Vpn5gServerTab.SPECIAL
+            ) {
+                item(key = "recommended_header") {
+                    Text(
+                        text = stringResource(R.string.vpn5g_recommended),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Start,
+                    )
+                }
+                item(key = "recommended_fastest") {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Vpn5gOnDark.copy(alpha = 0.06f))
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = stringResource(R.string.vpn5g_fastest_server),
+                            ) { onServerTap(bestServer.guid) }
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                    ) {
+                        Text(
+                            text = bestServer.flag,
+                            fontSize = 22.sp,
+                            modifier = Modifier.padding(end = 12.dp),
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.vpn5g_fastest_server),
+                                color = Vpn5gOnDark,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = bestServer.name,
+                                color = Vpn5gOnDarkMuted,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Text(
+                            text = if (bestServer.pingMillis > 0L) {
+                                stringResource(R.string.vpn5g_ping_ms, bestServer.pingMillis)
+                            } else {
+                                "—"
+                            },
+                            color = colorPing,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+
+            // Search by country or server name.
+            item(key = "server_search") {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text(stringResource(R.string.vpn5g_search_hint)) },
+                    leadingIcon = { Vpn5gSearchIcon(color = Vpn5gOnDarkMuted, size = 20.dp) },
+                    singleLine = true,
+                    colors = vpn5gSearchFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            if (listExpanded) {
+                val ordered = when (serverTab) {
+                    Vpn5gServerTab.FREE -> freeSections.map { it to false }
+                    Vpn5gServerTab.ALL -> freeSections.map { it to false } +
+                        lockedSections.map { it to true }
+                    Vpn5gServerTab.SPECIAL -> lockedSections.map { it to true }
+                }
+                var promoShown = false
+                ordered.forEach { (country, locked) ->
+                    if (serverTab == Vpn5gServerTab.ALL && locked && !promoShown) {
+                        item(key = "bot_promo") {
+                            Vpn5gBotPromoCard(onOpenBot = onOpenBot)
+                        }
+                        promoShown = true
+                    }
+                    item(key = "country_${country.label}") {
+                        Vpn5gCountrySection(
+                            country = country,
+                            onServerTap = if (locked) {
+                                {}
+                            } else {
+                                onServerTap
+                            },
+                            onLockedTap = if (locked) {
+                                { onLockedCountryTap(country.label) }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                }
+                if (serverTab == Vpn5gServerTab.FREE && ordered.isNotEmpty()) {
                     item(key = "bot_promo") {
                         Vpn5gBotPromoCard(onOpenBot = onOpenBot)
-                    }
-                }
-                lockedSections.forEach { country ->
-                    item(key = "country_${country.label}") {
-                        Vpn5gCountrySection(
-                            country = country,
-                            onServerTap = {},
-                            onLockedTap = { onLockedCountryTap(country.label) },
-                        )
                     }
                 }
             }
@@ -1430,6 +1805,17 @@ private fun Vpn5gCountrySection(
         }
     }
 }
+
+@Composable
+private fun vpn5gSearchFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = Vpn5gOnDark,
+    unfocusedTextColor = Vpn5gOnDark,
+    focusedPlaceholderColor = Vpn5gOnDarkMuted,
+    unfocusedPlaceholderColor = Vpn5gOnDarkMuted,
+    focusedBorderColor = Vpn5gCyan,
+    unfocusedBorderColor = Vpn5gOnDarkMuted,
+    cursorColor = Vpn5gCyan,
+)
 
 @Composable
 private fun Vpn5gBotPromoCard(onOpenBot: () -> Unit) {

@@ -711,4 +711,18 @@
     <string name="vpn5g_protocol_no_servers">سروری با این پروتکل پیدا نشد</string>
     <string name="vpn5g_profile_vpn_settings">تنظیمات VPN</string>
 
+    <!-- v1.1: server-list tabs / search / recommended / banner / auto-failover -->
+    <string name="vpn5g_tab_free">رایگان</string>
+    <string name="vpn5g_tab_all">تمام مکان‌ها</string>
+    <string name="vpn5g_tab_special">ویژه</string>
+    <string name="vpn5g_search_hint">جستجوی مکان با کلمات کلیدی</string>
+    <string name="vpn5g_recommended">توصیه شده</string>
+    <string name="vpn5g_fastest_server">سریع‌ترین سرور</string>
+    <string name="vpn5g_premium_banner_title">ارتقا به حق بیمه</string>
+    <string name="vpn5g_premium_banner_body">همه کشورها، سرعت بیشتر و بدون محدودیت</string>
+    <string name="vpn5g_premium_banner_button">مشاهده طرح‌ها</string>
+    <string name="vpn5g_autofailover_switching">اتصال قطع شد؛ در حال اتصال به سرور %1$s…</string>
+    <string name="vpn5g_autofailover_switched">به سرور «%1$s» وصل شد</string>
+    <string name="vpn5g_autofailover_gave_up">اتصال قطع شد و سرور جایگزینی پیدا نشد؛ دوباره تلاش کنید</string>
+
 </resources>

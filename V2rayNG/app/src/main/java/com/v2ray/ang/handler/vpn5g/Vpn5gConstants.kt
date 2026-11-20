@@ -67,6 +67,9 @@ object Vpn5gConstants {
     /** Max servers tried in one auto-failover chain after a tunnel check fails. */
     const val MAX_TUNNEL_ATTEMPTS = 3
 
+    /** Max reconnect attempts after an unexpected drop, per session. */
+    const val MAX_AUTO_FAILOVER_ATTEMPTS = 2
+
     /** Unique WorkManager name for the 30-minute disconnect work. */
     const val DISCONNECT_WORK_NAME = "vpn5g_30min_disconnect"
 

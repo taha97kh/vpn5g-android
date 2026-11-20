@@ -200,3 +200,26 @@ fun Vpn5gCheckIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier
         drawLine(color, Offset(w * 0.42f, h * 0.78f), Offset(w * 0.84f, h * 0.22f), stroke, StrokeCap.Round)
     }
 }
+
+/** Magnifier for the server search field. */
+@Composable
+fun Vpn5gSearchIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.11f
+        drawCircle(
+            color = color,
+            radius = w * 0.30f,
+            center = Offset(w * 0.42f, h * 0.42f),
+            style = Stroke(width = stroke),
+        )
+        drawLine(
+            color,
+            Offset(w * 0.64f, h * 0.64f),
+            Offset(w * 0.88f, h * 0.88f),
+            stroke,
+            StrokeCap.Round,
+        )
+    }
+}
