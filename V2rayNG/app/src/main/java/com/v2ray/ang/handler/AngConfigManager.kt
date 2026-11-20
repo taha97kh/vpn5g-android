@@ -418,12 +418,14 @@ object AngConfigManager {
      * Parses the configuration from a QR code or string.
      * Only parses and returns ProfileItem, does not save.
      *
+     * VPN 5G note: public (was private) so Vpn5gSync can parse single URIs.
+     *
      * @param str The configuration string.
      * @param subid The subscription ID.
      * @param subItem The subscription item.
      * @return The parsed ProfileItem or null if parsing fails or filtered out.
      */
-    private fun parseConfig(
+    fun parseConfig(
         str: String?,
         subid: String,
         subItem: SubscriptionItem?

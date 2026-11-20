@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name" translatable="false">v2rayNG</string>
+    <string name="app_name" translatable="false">VPN 5G</string>
     <string name="app_widget_name">Switch</string>
     <string name="app_tile_name">Switch</string>
     <string name="app_tile_first_use">Add a profile in the app before using this feature.</string>
@@ -575,5 +575,76 @@
     <string name="sub_info_open_page">Open subscription page</string>
     <string name="sub_info_traffic" translatable="false">%1$s / %2$s</string>
     <string name="sub_info_unlimited">Unlimited</string>
+
+    <!-- VPN 5G strings (Persian defaults; fa locale falls back to these) -->
+    <string name="vpn5g_app_tagline">اینترنت آزاد، سریع و امن</string>
+    <string name="vpn5g_connect">اتصال</string>
+    <string name="vpn5g_disconnect">قطع اتصال</string>
+    <string name="vpn5g_connected">متصل</string>
+    <string name="vpn5g_disconnected">قطع</string>
+    <string name="vpn5g_connecting">در حال اتصال…</string>
+    <string name="vpn5g_no_server_selected">اول یک سرور انتخاب کنید</string>
+    <string name="vpn5g_remaining_time">زمان باقی‌مانده: %1$s</string>
+    <string name="vpn5g_current_server">سرور فعلی</string>
+    <string name="vpn5g_refresh">به‌روزرسانی</string>
+    <string name="vpn5g_refreshing">در حال به‌روزرسانی…</string>
+    <string name="vpn5g_offline_cached">آفلاین — لیست قبلی نمایش داده می‌شود</string>
+    <string name="vpn5g_free_countries">کشورهای رایگان</string>
+    <string name="vpn5g_locked_countries">کشورهای ویژه (اشتراک)</string>
+    <string name="vpn5g_needs_subscription">نیاز به اشتراک</string>
+    <string name="vpn5g_locked_dialog_title">این کشور ویژه است</string>
+    <string name="vpn5g_locked_dialog_body">برای استفاده از سرورهای این کشور، اشتراک تهیه کنید.</string>
+    <string name="vpn5g_open_bot">باز کردن ربات</string>
+    <string name="vpn5g_close">بستن</string>
+    <string name="vpn5g_bot_promo_title">ربات VPN 5G — کانفیگ رایگان</string>
+    <string name="vpn5g_bot_promo_body">کانفیگ‌های تازه، پشتیبانی و خرید اشتراک در ربات تلگرام</string>
+    <string name="vpn5g_nav_home">خانه</string>
+    <string name="vpn5g_nav_guide">راهنما</string>
+    <string name="vpn5g_nav_subscription">اشتراک</string>
+    <string name="vpn5g_nav_about">درباره</string>
+    <string name="vpn5g_advanced_settings">تنظیمات پیشرفته</string>
+    <string name="vpn5g_empty_list">هنوز سروری نیست — برای دریافت لیست، به‌روزرسانی کنید</string>
+    <string name="vpn5g_servers_count">%1$d سرور</string>
+    <string name="vpn5g_ping_ms">%1$d میلی‌ثانیه</string>
+    <string name="vpn5g_timer_ended_title">VPN 5G</string>
+    <string name="vpn5g_timer_ended_body">۳۰ دقیقه تمام شد و اتصال قطع شد. برای اتصال دوباره، در صفحه اصلی یک سرور انتخاب کنید.</string>
+    <string name="vpn5g_imported_config">کانفیگ وارد شد</string>
+    <string name="vpn5g_imported_file">%1$d کانفیگ از فایل وارد شد</string>
+    <string name="vpn5g_import_failed">وارد کردن کانفیگ ناموفق بود</string>
+    <string name="vpn5g_guide_title">راهنمای استفاده</string>
+    <string name="vpn5g_guide_step1_title">۱. اتصال</string>
+    <string name="vpn5g_guide_step1_body">روی یک سرور از لیست کشورهای رایگان بزنید، اجازهٔ VPN را تأیید کنید و متصل شوید.</string>
+    <string name="vpn5g_guide_step2_title">۲. وارد کردن کانفیگ</string>
+    <string name="vpn5g_guide_step2_body">لینک کانفیگ (vmess ،vless ،trojan یا ss) را کپی کنید و در برنامه باز کنید، یا فایل txt. یا json. را از کانال دانلود کنید و روی آن بزنید تا در برنامه باز شود.</string>
+    <string name="vpn5g_guide_step3_title">۳. اگر سروری کار نکرد</string>
+    <string name="vpn5g_guide_step3_body">لیست را به‌روزرسانی کنید و یک سرور دیگر انتخاب کنید؛ فقط سرورهای زنده نمایش داده می‌شوند.</string>
+    <string name="vpn5g_guide_step4_title">۴. قطع خودکار بعد از ۳۰ دقیقه</string>
+    <string name="vpn5g_guide_step4_body">هر اتصال بعد از ۳۰ دقیقه خودکار قطع می‌شود؛ برای ادامه دوباره متصل شوید.</string>
+    <string name="vpn5g_about_title">درباره VPN 5G</string>
+    <string name="vpn5g_about_maker">سازنده: عارف خیراندیش (@4ref.ai)</string>
+    <string name="vpn5g_about_channel">کانال: @VPNCRACKNET</string>
+    <string name="vpn5g_about_bot">ربات: @VPN5G_IRBot</string>
+    <string name="vpn5g_about_support">پشتیبانی: @Aref_5G</string>
+    <string name="vpn5g_about_version">نسخه: %1$s (کد %2$d)</string>
+    <string name="vpn5g_about_build_date">تاریخ ساخت: %1$s</string>
+    <string name="vpn5g_about_core">بر پایه‌ی v2rayNG (GPL-3.0)</string>
+    <string name="vpn5g_subscription_title">وضعیت اشتراک</string>
+    <string name="vpn5g_subscription_none">اشتراکی ثبت نشده است</string>
+    <string name="vpn5g_subscription_none_body">برای تهیه اشتراک و باز کردن کشورهای ویژه، از ربات اقدام کنید.</string>
+    <string name="vpn5g_subscription_plan">طرح: %1$s</string>
+    <string name="vpn5g_subscription_days">روز باقی‌مانده: %1$d</string>
+    <string name="vpn5g_subscription_volume">حجم باقی‌مانده: %1$s گیگابایت</string>
+    <string name="vpn5g_auth_title">ورود با ایمیل</string>
+    <string name="vpn5g_auth_email">ایمیل</string>
+    <string name="vpn5g_auth_email_hint">example@mail.com</string>
+    <string name="vpn5g_auth_send_code">ارسال کد تایید</string>
+    <string name="vpn5g_auth_code">کد تایید ۶ رقمی</string>
+    <string name="vpn5g_auth_confirm">تأیید</string>
+    <string name="vpn5g_auth_forgot">فراموشی رمز عبور</string>
+    <string name="vpn5g_auth_coming_soon">به‌زودی — نیاز به سرور دارد (نسخه‌ی بعد)</string>
+    <string name="vpn5g_auth_invalid_email">ایمیل معتبر وارد کنید</string>
+    <string name="vpn5g_auth_invalid_code">کد باید ۶ رقم باشد</string>
+    <string name="vpn5g_auth_recover_title">بازیابی رمز عبور</string>
+    <string name="vpn5g_auth_recover_body">کد بازیابی به ایمیل شما ارسال می‌شود.</string>
 
 </resources>

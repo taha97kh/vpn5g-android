@@ -81,6 +81,9 @@ data class ProfileItem(
     var proxyChainProfileList: List<String>? = null,
 
     var browserDialerMode: String? = null,
+
+    /** VPN 5G: display country of this server (e.g. "فرانسه"). Empty when unknown. */
+    var country: String = "",
 ) {
 
     companion object {
