@@ -3,9 +3,7 @@ package com.v2ray.ang.ui.vpn5g
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateValue
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -25,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
@@ -41,33 +40,39 @@ val Vpn5gOnDarkMuted = Color(0xFF94A3B8)
 /**
  * Animated gradient background (dark navy with a slowly shifting blue tint).
  *
- * Purely presentational: two [animateValue] values on an infinite transition
- * drive the middle/bottom gradient stops. Render-thread driven, no bitmap
- * animation, no new dependencies. Never gates sync or connect work.
+ * Purely presentational: two [animateFloat] progress values on an infinite
+ * transition drive the middle/bottom gradient stops through [lerp].
+ * Render-thread driven, no bitmap animation, no new dependencies. Never
+ * gates sync or connect work.
+ *
+ * NOTE: this project ships a Compose BOM with no Color animation support
+ * (no `animateColor`, no `Color.VectorConverter`), so colors are driven by
+ * float progress + `lerp` instead. Do not reintroduce `animateValue` with a
+ * `Color` converter here.
  */
 @Composable
 fun Vpn5gAnimatedBackground(content: @Composable BoxScope.() -> Unit) {
     val transition = rememberInfiniteTransition(label = "vpn5g_gradient")
-    val mid by transition.animateValue(
-        initialValue = Vpn5gNavyBottom,
-        targetValue = Color(0xFF172554),
-        typeConverter = Color.VectorConverter,
+    val midProgress by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 8000),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "gradient_mid",
     )
-    val tint by transition.animateValue(
-        initialValue = Color(0xFF1D4ED8),
-        targetValue = Vpn5gAccent,
-        typeConverter = Color.VectorConverter,
+    val mid = lerp(Vpn5gNavyBottom, Color(0xFF172554), midProgress)
+    val tintProgress by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 6000),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "gradient_tint",
     )
+    val tint = lerp(Color(0xFF1D4ED8), Vpn5gAccent, tintProgress)
     Box(
         modifier = Modifier
             .fillMaxSize()
