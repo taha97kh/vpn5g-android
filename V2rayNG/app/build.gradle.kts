@@ -13,8 +13,8 @@ android {
         applicationId = "com.taha97kh.vpn5g"
         minSdk = 24
         targetSdk = 37
-        versionCode = 4
-        versionName = "1.1.2"
+        versionCode = 5
+        versionName = "1.1.3"
 
         // Build date stamped into BuildConfig.BUILD_TIME (VPN 5G About screen).
         buildConfigField("String", "BUILD_TIME", "\"2026-11-20\"")
@@ -39,6 +39,29 @@ android {
         }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        // VPN 5G (v1.1.3): one fixed signing key so future versions update in
+        // place instead of forcing an uninstall — every CI build so far was
+        // signed with a fresh auto-generated debug key. The keystore is
+        // decoded into V2rayNG/app/vpn5g-debug.keystore by CI from a secret;
+        // without the file and the env vars below, the default debug signing
+        // stays, so local builds are unaffected.
+        getByName("debug") {
+            val vpn5gKeystoreFile = file("vpn5g-debug.keystore")
+            val vpn5gStorePassword = System.getenv("VPN5G_KEYSTORE_PASSWORD")
+            val vpn5gKeyAlias = System.getenv("VPN5G_KEY_ALIAS")
+            val vpn5gKeyPassword = System.getenv("VPN5G_KEY_PASSWORD")
+            if (vpn5gKeystoreFile.exists() && !vpn5gStorePassword.isNullOrEmpty() &&
+                !vpn5gKeyAlias.isNullOrEmpty() && !vpn5gKeyPassword.isNullOrEmpty()
+            ) {
+                storeFile = vpn5gKeystoreFile
+                storePassword = vpn5gStorePassword
+                keyAlias = vpn5gKeyAlias
+                keyPassword = vpn5gKeyPassword
+            }
+        }
     }
 
     buildTypes {

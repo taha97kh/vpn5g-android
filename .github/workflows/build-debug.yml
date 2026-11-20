@@ -1,8 +1,10 @@
-# VPN 5G debug build (no signing, no release).
+# VPN 5G debug build (fixed-key signing, no release).
 #
 # Mirrors .github/workflows/build.yml (same SDK/NDK/libhevtun/libv2ray
 # steps) but builds the debug variant and uploads the universal debug APK.
-# No signing secrets are used anywhere in this workflow.
+# The debug APKs are signed with one fixed keystore from secrets
+# (VPN5G_KEYSTORE_*); without those secrets the build falls back to the
+# default debug signing.
 name: Build VPN 5G debug APK
 
 on:
@@ -100,6 +102,24 @@ jobs:
       with:
         distribution: 'temurin'
         java-version: '21'
+
+    - name: Restore VPN 5G signing keystore
+      env:
+        VPN5G_KEYSTORE_BASE64: ${{ secrets.VPN5G_KEYSTORE_BASE64 }}
+        VPN5G_KEYSTORE_PASSWORD: ${{ secrets.VPN5G_KEYSTORE_PASSWORD }}
+        VPN5G_KEY_ALIAS: ${{ secrets.VPN5G_KEY_ALIAS }}
+        VPN5G_KEY_PASSWORD: ${{ secrets.VPN5G_KEY_PASSWORD }}
+      run: |
+        # One fixed signing key so future versions update in place instead of
+        # forcing an uninstall. The keystore is decoded from a secret; its
+        # contents are never printed. If the secret is absent this step is a
+        # no-op and the build keeps the default debug signing.
+        if [ -n "$VPN5G_KEYSTORE_BASE64" ]; then
+          echo "$VPN5G_KEYSTORE_BASE64" | base64 -d > V2rayNG/app/vpn5g-debug.keystore
+          echo "VPN5G_KEYSTORE_PASSWORD=$VPN5G_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+          echo "VPN5G_KEY_ALIAS=$VPN5G_KEY_ALIAS" >> $GITHUB_ENV
+          echo "VPN5G_KEY_PASSWORD=$VPN5G_KEY_PASSWORD" >> $GITHUB_ENV
+        fi
 
     - name: Build debug APK
       run: |
