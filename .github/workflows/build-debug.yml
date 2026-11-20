@@ -25,6 +25,20 @@ jobs:
         submodules: 'recursive'
         fetch-depth: '0'
 
+    - name: Restore VPN 5G icons
+      run: |
+        # push_files cannot carry binary files, so the launcher icons travel
+        # as base64 text (vpn5g-icons/) and are decoded here. Upstream
+        # adaptive-icon leftovers are removed so the PNG icon is used.
+        rm -f V2rayNG/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml V2rayNG/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+        rm -f V2rayNG/app/src/main/res/mipmap-*/ic_launcher_foreground.png
+        for d in hdpi mdpi xhdpi xxhdpi xxxhdpi; do
+          for n in ic_launcher ic_launcher_round; do
+            base64 -d vpn5g-icons/$d-$n.png.b64 > V2rayNG/app/src/main/res/mipmap-$d/$n.png
+          done
+        done
+        ls -l V2rayNG/app/src/main/res/mipmap-*/ic_launcher*.png
+
     - name: Setup Android SDK
       uses: android-actions/setup-android@v4
       with:
