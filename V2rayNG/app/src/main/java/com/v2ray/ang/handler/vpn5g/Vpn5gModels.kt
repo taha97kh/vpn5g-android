@@ -29,6 +29,51 @@ data class AppConfigRemote(
     val subscription_status: SubscriptionStatusRemote? = null,
     /** Admin-managed promo codes (discount / gift). Null when the bot side has none. */
     val codes: List<PromoCodeRemote>? = null,
+    /** Admin-managed subscription plans. Null = none published (no plan cards). */
+    val plans: List<SubscriptionPlanRemote>? = null,
+    /** Direct bank payment gateway settings. Null = not configured. */
+    val payment_gateway: PaymentGatewayRemote? = null,
+    /** Whether the free trial is offered (bot-managed flag). */
+    val trial_enabled: Boolean? = null,
+    /** Free-trial length in hours (24 per the product rule). */
+    val trial_hours: Int? = null,
+)
+
+/**
+ * One subscription plan, published by the bot side in app_config.json.
+ * Prices are NEVER hardcoded in the app: when the bot publishes no plans,
+ * the Premium screen shows no plan cards at all.
+ */
+data class SubscriptionPlanRemote(
+    /** Stable id, e.g. "monthly", "yearly". */
+    val id: String? = null,
+    /** "monthly" or "yearly" (drives the card layout and badge). */
+    val period: String? = null,
+    /** Display name in Persian, e.g. "ماهانه". */
+    val name_fa: String? = null,
+    /** Price in Toman. Null = price not published (card hidden). */
+    val price_toman: Long? = null,
+)
+
+/**
+ * Direct bank payment gateway settings, published by the bot side in
+ * app_config.json. The app NEVER hardcodes gateway credentials or test
+ * values and never constructs payment requests: when the gateway is
+ * configured it opens the published checkout URL in the browser; while
+ * it is not configured the option is shown as coming soon and routes the
+ * user to the bot to complete the purchase manually.
+ */
+data class PaymentGatewayRemote(
+    /** True when the gateway is configured and usable. */
+    val enabled: Boolean? = null,
+    /** Gateway checkout URL the app opens in the browser. */
+    val url: String? = null,
+    /** Merchant id (informational; the app never sends it anywhere). */
+    val merchant_id: String? = null,
+    /** Callback URL the gateway returns to (informational; bot-owned). */
+    val callback_url: String? = null,
+    /** Display name, e.g. "درگاه پرداخت مستقیم بانکی". */
+    val name_fa: String? = null,
 )
 
 /**

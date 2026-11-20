@@ -579,7 +579,6 @@
     <!-- VPN 5G strings (Persian defaults; fa locale falls back to these) -->
     <string name="vpn5g_app_tagline">اینترنت آزاد، سریع و امن</string>
     <string name="vpn5g_connect">اتصال</string>
-    <string name="vpn5g_disconnect">قطع اتصال</string>
     <string name="vpn5g_connected">متصل</string>
     <string name="vpn5g_disconnected">قطع</string>
     <string name="vpn5g_no_server_selected">اول یک سرور انتخاب کنید</string>
@@ -724,5 +723,38 @@
     <string name="vpn5g_autofailover_switching">اتصال قطع شد؛ در حال اتصال به سرور %1$s…</string>
     <string name="vpn5g_autofailover_switched">به سرور «%1$s» وصل شد</string>
     <string name="vpn5g_autofailover_gave_up">اتصال قطع شد و سرور جایگزینی پیدا نشد؛ دوباره تلاش کنید</string>
+
+    <!-- v1.1: premium comparison / plans / trial / bank gateway -->
+    <string name="vpn5g_premium_title">امتیازات ویژه</string>
+    <string name="vpn5g_premium_free">رایگان</string>
+    <string name="vpn5g_premium_name">حق بیمه</string>
+    <string name="vpn5g_premium_speed">سرعت</string>
+    <string name="vpn5g_premium_speed_free">محدود</string>
+    <string name="vpn5g_premium_speed_premium">فوق‌العاده سریع</string>
+    <string name="vpn5g_premium_locations">مکان‌ها</string>
+    <string name="vpn5g_premium_locations_free">%1$d کشور رایگان</string>
+    <string name="vpn5g_premium_locations_premium">همه کشورها (%1$d)</string>
+    <string name="vpn5g_premium_servers">سرورهای جهانی</string>
+    <string name="vpn5g_premium_servers_free">%1$d سرور</string>
+    <string name="vpn5g_premium_servers_premium">همه سرورها (%1$d)</string>
+    <string name="vpn5g_premium_no_ads">بدون تبلیغات</string>
+    <string name="vpn5g_premium_support">پشتیبانی ۲۴/۷</string>
+    <string name="vpn5g_premium_plans_title">طرح‌ها</string>
+    <string name="vpn5g_premium_plans_none">طرح‌ها هنوز منتشر نشده‌اند؛ برای خرید از ربات اقدام کنید.</string>
+    <string name="vpn5g_premium_plan_monthly">ماهانه</string>
+    <string name="vpn5g_premium_plan_yearly">سالانه</string>
+    <string name="vpn5g_premium_most_popular">محبوب‌ترین</string>
+    <string name="vpn5g_premium_price">%1$s تومان %2$s</string>
+    <string name="vpn5g_premium_per_month">/ ماه</string>
+    <string name="vpn5g_premium_per_year">/ سال</string>
+    <string name="vpn5g_premium_trial">%1$d ساعت اول رایگان</string>
+    <string name="vpn5g_premium_trial_note">دوره آزمایشی از طریق ربات تلگرام فعال می‌شود.</string>
+    <string name="vpn5g_premium_continue">ادامه</string>
+    <string name="vpn5g_premium_payment_title">روش پرداخت</string>
+    <string name="vpn5g_premium_pay_gateway">درگاه پرداخت مستقیم بانکی</string>
+    <string name="vpn5g_premium_pay_gateway_body">پرداخت مستقیم با کارت بانکی</string>
+    <string name="vpn5g_premium_pay_bot">خرید از ربات تلگرام</string>
+    <string name="vpn5g_premium_pay_bot_body">پرداخت و فعال‌سازی از طریق ربات</string>
+    <string name="vpn5g_premium_coming_soon">به‌زودی</string>
 
 </resources>

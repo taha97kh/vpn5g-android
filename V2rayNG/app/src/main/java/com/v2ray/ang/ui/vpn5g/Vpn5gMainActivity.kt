@@ -81,7 +81,9 @@ import com.v2ray.ang.enums.PermissionType
 import com.v2ray.ang.extension.toast
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
+import com.v2ray.ang.handler.vpn5g.PaymentGatewayRemote
 import com.v2ray.ang.handler.vpn5g.PromoCodeRemote
+import com.v2ray.ang.handler.vpn5g.SubscriptionPlanRemote
 import com.v2ray.ang.handler.vpn5g.SubscriptionStatusRemote
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthService
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
@@ -158,6 +160,14 @@ data class Vpn5gHomeUiState(
     val protocolFilter: String = Vpn5gProtocol.AUTO,
     /** Brief auto-failover notice ("switched to server X"); auto-dismissed. */
     val autoFailoverNotice: String? = null,
+    /** Admin-managed subscription plans (null = none published). */
+    val plans: List<SubscriptionPlanRemote>? = null,
+    /** Direct bank payment gateway settings (null = not configured). */
+    val paymentGateway: PaymentGatewayRemote? = null,
+    /** Whether the free trial is offered (bot-managed flag). */
+    val trialEnabled: Boolean = false,
+    /** Free-trial length in hours (24 per the product rule). */
+    val trialHours: Int = 24,
 )
 
 /**
@@ -245,6 +255,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     subscriptionStatus = cached.subscription_status,
                     notice = cached.notice,
                     promoCodes = cached.codes,
+                    plans = cached.plans,
+                    paymentGateway = cached.payment_gateway,
+                    trialEnabled = cached.trial_enabled ?: false,
+                    trialHours = cached.trial_hours ?: 24,
                     signedInEmail = Vpn5gAuthService.currentSession()?.email,
                     protocolFilter = Vpn5gProtocol.normalize(
                         MmkvManager.decodeSettingsString(KEY_PROTOCOL_FILTER)
@@ -318,6 +332,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         countries = countries,
                         subscriptionStatus = cached.subscription_status,
                         promoCodes = cached.codes,
+                        plans = cached.plans,
+                        paymentGateway = cached.payment_gateway,
+                        trialEnabled = cached.trial_enabled ?: false,
+                        trialHours = cached.trial_hours ?: 24,
                         signedInEmail = Vpn5gAuthService.currentSession()?.email,
                     )
                 }
@@ -828,6 +846,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onBack = { destination = Vpn5gDestination.HOME },
                             onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
                             onOpenAuth = { destination = Vpn5gDestination.AUTH },
+                            onOpenUrl = { url -> Utils.openUri(this@Vpn5gMainActivity, url) },
                             onPromoInputChange = { viewModel.setPromoInput(it) },
                             onRedeemPromo = { viewModel.redeemPromo() },
                             onOpenPromoBot = {
