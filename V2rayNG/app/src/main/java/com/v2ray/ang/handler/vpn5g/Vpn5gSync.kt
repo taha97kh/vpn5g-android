@@ -27,10 +27,10 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
- * VPN 5G live-config sync.
+ * VPN5G IRBOT live-config sync.
  *
  * Fetches live_configs.json (+ sub.txt and any extra sources from
- * app_config.json), TCP-pings every candidate, and replaces the "VPN 5G"
+ * app_config.json), TCP-pings every candidate, and replaces the "VPN5G IRBOT"
  * group with only the servers that answered. Dead configs are never stored
  * or shown. Runs on Dispatchers.IO; never throws.
  */
@@ -46,7 +46,7 @@ object Vpn5gSync {
     )
 
     /**
-     * Finds the "VPN 5G" subscription group, creating it on first use.
+     * Finds the "VPN5G IRBOT" subscription group, creating it on first use.
      */
     fun ensureSubscriptionId(): String {
         val existing = MmkvManager.decodeSubscriptions()

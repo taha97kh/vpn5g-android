@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.v2ray.ang.R
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthConfig
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthService
+import com.v2ray.ang.handler.vpn5g.Vpn5gEmailPolicy
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.AppConfig
 import kotlinx.coroutines.flow.MutableStateFlow
