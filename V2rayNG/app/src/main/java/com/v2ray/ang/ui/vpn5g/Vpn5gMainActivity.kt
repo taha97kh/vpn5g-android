@@ -1322,10 +1322,11 @@ fun Vpn5gHomeScreen(
                             .background(Vpn5gCyan.copy(alpha = 0.2f))
                             .padding(12.dp),
                     )
-                }
-                LaunchedEffect(notice) {
-                    delay(8_000L)
-                    onConsumeAutoFailoverNotice()
+                    // Inside item{} so LaunchedEffect runs in a @Composable context.
+                    LaunchedEffect(notice) {
+                        delay(8_000L)
+                        onConsumeAutoFailoverNotice()
+                    }
                 }
             }
 
