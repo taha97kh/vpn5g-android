@@ -105,11 +105,12 @@ object Vpn5gSync {
                 return@withContext Vpn5gSyncResult(offline = true, notice = remoteConfig.notice)
             }
 
-            val unique = candidates.distinctBy { it.uri }
             val subId = ensureSubscriptionId()
 
-            // Parse first (local, cheap), then TCP-ping the parsed host:port.
-            val parsed = unique.mapNotNull { candidate ->
+            // Parse first (local, cheap), then validate, then TCP-ping the
+            // parsed host:port. Invalid configs are dropped here — never
+            // pinged, never stored, never shown (v1.1.4 §5).
+            val parsed = candidates.mapNotNull { candidate ->
                 val profile = try {
                     AngConfigManager.parseConfig(candidate.uri, subId, null)
                 } catch (e: Exception) {
@@ -120,8 +121,28 @@ object Vpn5gSync {
                 profile to candidate
             }
 
+            var invalid = 0
+            val validated = parsed.mapNotNull { (profile, candidate) ->
+                val validation = Vpn5gServerValidator.validate(profile)
+                if (!validation.isValid) {
+                    invalid++
+                    return@mapNotNull null
+                }
+                Vpn5gServerValidator.normalize(profile)
+                profile to candidate
+            }
+            // Dedupe by server identity (scheme://host:port:uuid-or-password),
+            // not by raw URI text — the same server under a different remark
+            // is one server.
+            val unique = validated.distinctBy { (profile, _) ->
+                Vpn5gServerValidator.dedupeKey(profile)
+            }
+            if (invalid > 0) {
+                LogUtil.i(AppConfig.TAG, "Vpn5gSync: dropped $invalid invalid configs")
+            }
+
             val semaphore = Semaphore(MAX_CONCURRENT_PINGS)
-            val pinged = parsed.map { (profile, _) ->
+            val pinged = unique.map { (profile, _) ->
                 async {
                     semaphore.withPermit {
                         val host = profile.server.orEmpty()
@@ -166,9 +187,10 @@ object Vpn5gSync {
             }
 
             Vpn5gSyncResult(
-                fetched = unique.size,
+                fetched = candidates.size,
                 live = live.size,
                 dropped = dropped,
+                invalid = invalid,
                 perCountry = perCountry,
                 offline = false,
                 notice = remoteConfig.notice,
@@ -374,6 +396,8 @@ object Vpn5gSync {
             if (entries.isEmpty()) return@withContext 0
             val profiles = linkedMapOf<String, ProfileItem>()
             val rawConfigs = mutableMapOf<String, String>()
+            val seenKeys = mutableSetOf<String>()
+            var invalid = 0
             entries.forEach { entry ->
                 val uri = entry.uri?.trim().orEmpty()
                 if (uri.isEmpty()) return@forEach
@@ -383,10 +407,21 @@ object Vpn5gSync {
                     LogUtil.e(AppConfig.TAG, "Vpn5gSync: fallback parse failed", e)
                     null
                 } ?: return@forEach
+                // Same validation as the live path (v1.1.4 §5): a broken
+                // entry in the bundled snapshot is dropped, never shown.
+                if (!Vpn5gServerValidator.validate(profile).isValid) {
+                    invalid++
+                    return@forEach
+                }
+                Vpn5gServerValidator.normalize(profile)
+                if (!seenKeys.add(Vpn5gServerValidator.dedupeKey(profile))) return@forEach
                 profile.country = entry.country?.trim().orEmpty().ifEmpty { "بین‌الملل" }
                 val guid = Utils.getUuid()
                 profiles[guid] = profile
                 rawConfigs[guid] = ""
+            }
+            if (invalid > 0) {
+                LogUtil.i(AppConfig.TAG, "Vpn5gSync: fallback dropped $invalid invalid entries")
             }
             if (profiles.isEmpty()) return@withContext 0
             MmkvManager.saveServerProfiles(

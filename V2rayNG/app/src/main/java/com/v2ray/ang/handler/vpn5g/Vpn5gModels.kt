@@ -114,6 +114,8 @@ data class Vpn5gSyncResult(
     val fetched: Int = 0,
     val live: Int = 0,
     val dropped: Int = 0,
+    /** Configs dropped by server validation (v1.1.4 §5). */
+    val invalid: Int = 0,
     val perCountry: Map<String, Int> = emptyMap(),
     val offline: Boolean = false,
     val notice: String? = null,

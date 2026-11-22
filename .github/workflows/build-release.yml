@@ -1,11 +1,12 @@
-# VPN 5G debug build (fixed-key signing, no release).
+# VPN 5G release build (fixed-key signing, debuggable=false).
 #
 # Mirrors .github/workflows/build.yml (same SDK/NDK/libhevtun/libv2ray
-# steps) but builds the debug variant and uploads the universal debug APK.
-# The debug APKs are signed with one fixed keystore from secrets
-# (VPN5G_KEYSTORE_*); without those secrets the build falls back to the
-# default debug signing.
-name: Build VPN 5G debug APK
+# steps) but builds the Play Store release variant and uploads the
+# universal release APK. The release APK is signed with one fixed keystore
+# from secrets (VPN5G_KEYSTORE_*); without those secrets the release
+# signing config is incomplete and the build fails — it never ships an
+# unsigned release or falls back to a debug key.
+name: Build VPN 5G release APK
 
 on:
   workflow_dispatch:
@@ -113,7 +114,7 @@ jobs:
         # One fixed signing key so future versions update in place instead of
         # forcing an uninstall. The keystore is decoded from a secret; its
         # contents are never printed. If the secret is absent this step is a
-        # no-op and the build keeps the default debug signing.
+        # no-op and the release build fails at signing time — by design.
         if [ -n "$VPN5G_KEYSTORE_BASE64" ]; then
           echo "$VPN5G_KEYSTORE_BASE64" | base64 -d > V2rayNG/app/vpn5g-debug.keystore
           echo "VPN5G_KEYSTORE_PASSWORD=$VPN5G_KEYSTORE_PASSWORD" >> $GITHUB_ENV
@@ -121,16 +122,23 @@ jobs:
           echo "VPN5G_KEY_PASSWORD=$VPN5G_KEY_PASSWORD" >> $GITHUB_ENV
         fi
 
-    - name: Build debug APK
+    - name: Run unit tests
       run: |
         cd ${{ github.workspace }}/V2rayNG
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
-        ./gradlew assembleDebug
+        ./gradlew testPlaystoreDebugUnitTest
 
-    - name: Upload universal debug APK
+    - name: Build release APK
+      run: |
+        cd ${{ github.workspace }}/V2rayNG
+        echo "sdk.dir=${ANDROID_HOME}" > local.properties
+        chmod 755 gradlew
+        ./gradlew assemblePlaystoreRelease
+
+    - name: Upload universal release APK
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
-        name: vpn5g-debug-apk
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/debug/*universal*.apk
+        name: vpn5g-release-apk
+        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/playstore/release/*universal*.apk

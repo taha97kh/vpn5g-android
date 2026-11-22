@@ -593,7 +593,6 @@
     <string name="vpn5g_bot_promo_title">ربات VPN5G IRBOT — کانفیگ رایگان</string>
     <string name="vpn5g_bot_promo_body">کانفیگ‌های تازه، پشتیبانی و خرید اشتراک در ربات تلگرام</string>
     <string name="vpn5g_nav_home">خانه</string>
-    <string name="vpn5g_advanced_settings">تنظیمات پیشرفته</string>
     <string name="vpn5g_empty_list">هنوز سروری نیست — برای دریافت لیست، به‌روزرسانی کنید</string>
     <string name="vpn5g_servers_count">%1$d سرور</string>
     <string name="vpn5g_ping_ms">%1$d میلی‌ثانیه</string>
@@ -641,11 +640,15 @@
     <!-- v1.1: X-VPN-style home, tunnel verification, routing, profile, promo codes -->
     <string name="vpn5g_nav_premium">حق بیمه</string>
     <string name="vpn5g_nav_browser">مرورگر</string>
-    <string name="vpn5g_nav_routing">مسیریابی</string>
     <string name="vpn5g_nav_me">من</string>
-    <string name="vpn5g_status_verifying">در حال بررسی تونل…</string>
-    <string name="vpn5g_status_tunnel_failed">تونل برقرار نشد</string>
     <string name="vpn5g_status_not_connected">متصل نیست</string>
+    <!-- v1.1.4: six connect states — plain words, no technical errors -->
+    <string name="vpn5g_connect_checking_internet">در حال بررسی اینترنت…</string>
+    <string name="vpn5g_connect_finding_server">در حال پیدا کردن بهترین سرور…</string>
+    <string name="vpn5g_connect_connecting">در حال اتصال…</string>
+    <string name="vpn5g_connect_creating_tunnel">در حال ایجاد تونل امن…</string>
+    <string name="vpn5g_connect_retrying">اتصال ناموفق؛ در حال تلاش مجدد…</string>
+    <string name="vpn5g_no_internet">اینترنت در دسترس نیست؛ اتصال را بررسی کنید</string>
     <string name="vpn5g_loading_servers">در حال دریافت سرورها…</string>
     <string name="vpn5g_free_servers">سرورهای رایگان</string>
     <string name="vpn5g_auto_server">خودکار</string>
@@ -654,16 +657,6 @@
     <string name="vpn5g_tunnel_failed_retry">این سرور تونل نکرد؛ در حال تلاش با سرور بعدی…</string>
     <string name="vpn5g_tunnel_failed_all">هیچ سروری تونل نکرد؛ لیست را به‌روزرسانی کنید و دوباره تلاش کنید</string>
     <string name="vpn5g_guide_links_title">لینک‌های مفید</string>
-    <string name="vpn5g_routing_title">تنظیمات تونل</string>
-    <string name="vpn5g_routing_body">انتخاب کنید کدام برنامه‌ها از VPN عبور کنند.</string>
-    <string name="vpn5g_routing_enable">تونل برای برنامه‌های انتخاب‌شده</string>
-    <string name="vpn5g_routing_enable_body">وقتی فعال است، فقط برنامه‌های انتخاب‌شده از VPN استفاده می‌کنند.</string>
-    <string name="vpn5g_routing_mode_title">حالت تونل</string>
-    <string name="vpn5g_routing_mode_bypass">عبور مستقیم برنامه‌های انتخاب‌شده</string>
-    <string name="vpn5g_routing_mode_bypass_body">برنامه‌های انتخاب‌شده از VPN عبور نمی‌کنند؛ بقیه از VPN استفاده می‌کنند.</string>
-    <string name="vpn5g_routing_mode_proxy_body">فقط برنامه‌های انتخاب‌شده از VPN استفاده می‌کنند؛ بقیه مستقیم متصل می‌شوند.</string>
-    <string name="vpn5g_routing_choose_apps">انتخاب برنامه‌ها (%1$d انتخاب شده)</string>
-    <string name="vpn5g_routing_apply_note">تغییرات بعد از اتصال دوباره اعمال می‌شود.</string>
     <string name="vpn5g_profile_account">حساب کاربری</string>
     <string name="vpn5g_profile_not_signed_in">وارد نشده‌اید</string>
     <string name="vpn5g_auth_register_title">ثبت‌نام با ایمیل</string>
@@ -687,22 +680,6 @@
     <string name="vpn5g_promo_already">این کد قبلاً در این دستگاه استفاده شده است</string>
     <string name="vpn5g_promo_invalid">کد معتبر نیست</string>
     <string name="vpn5g_promo_confirm_bot">تأیید در ربات تلگرام</string>
-
-    <!-- v1.1: protocol picker -->
-    <string name="vpn5g_protocol_title">پروتکل</string>
-    <string name="vpn5g_protocol_auto">خودکار</string>
-    <string name="vpn5g_protocol_auto_body">بهترین گزینه برای شبکه شما</string>
-    <string name="vpn5g_protocol_recommended">توصیه شده</string>
-    <string name="vpn5g_protocol_vless">VLESS</string>
-    <string name="vpn5g_protocol_vless_body">سریع و سبک</string>
-    <string name="vpn5g_protocol_vmess">VMess</string>
-    <string name="vpn5g_protocol_vmess_body">پروتکل اصلی V2Ray</string>
-    <string name="vpn5g_protocol_trojan">Trojan</string>
-    <string name="vpn5g_protocol_trojan_body">پنهان‌کاری بالا در شبکه‌های سخت</string>
-    <string name="vpn5g_protocol_ss">Shadowsocks</string>
-    <string name="vpn5g_protocol_ss_body">ساده و سریع</string>
-    <string name="vpn5g_protocol_no_servers">سروری با این پروتکل پیدا نشد</string>
-    <string name="vpn5g_profile_vpn_settings">تنظیمات VPN</string>
 
     <!-- v1.1: server-list tabs / search / recommended / banner / auto-failover -->
     <string name="vpn5g_tab_free">رایگان</string>

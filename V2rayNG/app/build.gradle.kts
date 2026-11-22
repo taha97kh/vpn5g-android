@@ -13,11 +13,11 @@ android {
         applicationId = "com.taha97kh.vpn5g"
         minSdk = 24
         targetSdk = 37
-        versionCode = 5
-        versionName = "1.1.3"
+        versionCode = 6
+        versionName = "1.1.4"
 
         // Build date stamped into BuildConfig.BUILD_TIME (VPN 5G About screen).
-        buildConfigField("String", "BUILD_TIME", "\"2026-11-20\"")
+        buildConfigField("String", "BUILD_TIME", "\"2026-11-22\"")
 
         val abiFilterList = (properties["ABI_FILTERS"] as? String)?.split(';')
         splits {
@@ -62,10 +62,31 @@ android {
                 keyPassword = vpn5gKeyPassword
             }
         }
+        // v1.1.4: the Release build is signed with the same fixed key as
+        // Debug (same keystore file + env vars), so the Play Store
+        // universal APK updates in place. Without the file/env vars the
+        // build fails loudly at signing time instead of shipping an
+        // unsigned release — never fall back to the debug key here.
+        create("release") {
+            val vpn5gKeystoreFile = file("vpn5g-debug.keystore")
+            val vpn5gStorePassword = System.getenv("VPN5G_KEYSTORE_PASSWORD")
+            val vpn5gKeyAlias = System.getenv("VPN5G_KEY_ALIAS")
+            val vpn5gKeyPassword = System.getenv("VPN5G_KEY_PASSWORD")
+            if (vpn5gKeystoreFile.exists() && !vpn5gStorePassword.isNullOrEmpty() &&
+                !vpn5gKeyAlias.isNullOrEmpty() && !vpn5gKeyPassword.isNullOrEmpty()
+            ) {
+                storeFile = vpn5gKeystoreFile
+                storePassword = vpn5gStorePassword
+                keyAlias = vpn5gKeyAlias
+                keyPassword = vpn5gKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

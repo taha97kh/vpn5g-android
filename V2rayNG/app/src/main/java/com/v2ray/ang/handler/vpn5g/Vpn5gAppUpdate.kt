@@ -43,7 +43,7 @@ object Vpn5gAppUpdate {
 
     /** Latest-release endpoint for the public repo (no auth needed). */
     const val RELEASES_LATEST_URL =
-        "https://api.github.com/repos/nefrin2love/vpn5g-android/releases/latest"
+        "https://api.github.com/repos/VPN5G/vpn5g-android/releases/latest"
 
     /** The update check runs at most this often (once per day). */
     const val UPDATE_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L

@@ -44,17 +44,17 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CHANNEL_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_URL
 
 /**
- * "Me" screen: account (email auth), subscription remaining, advanced
- * settings, and about (channel, bot, support, version).
+ * "Me" screen: account (email auth), subscription remaining, and about
+ * (channel, bot, support, version). Advanced settings (protocol, routing,
+ * upstream MainActivity) were removed in v1.1.4 — the engine is fully
+ * automatic and manages protocol, routing, MTU and DNS itself.
  */
 @Composable
 fun Vpn5gProfileScreen(
     state: Vpn5gHomeUiState,
     onBack: () -> Unit,
     onOpenAuth: () -> Unit,
-    onOpenProtocol: () -> Unit,
     onSignOut: () -> Unit,
-    onOpenAdvanced: () -> Unit,
     onOpenUrl: (String) -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
@@ -176,23 +176,9 @@ fun Vpn5gProfileScreen(
             }
         }
 
-        // VPN settings (protocol) + advanced settings + about.
+        // About links.
         Vpn5gStaggeredItem(index = 4, visible = entered) {
             Column(modifier = Modifier.fillMaxWidth()) {
-                TextButton(onClick = onOpenProtocol, modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = stringResource(R.string.vpn5g_profile_vpn_settings),
-                        color = Vpn5gAccentLight,
-                        fontSize = 14.sp,
-                    )
-                }
-                TextButton(onClick = onOpenAdvanced, modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = stringResource(R.string.vpn5g_advanced_settings),
-                        color = Vpn5gAccentLight,
-                        fontSize = 14.sp,
-                    )
-                }
                 Spacer(Modifier.height(8.dp))
                 // Channel / Bot / Support as neomorphism buttons (v1.1.2).
                 NeuLinkButton(

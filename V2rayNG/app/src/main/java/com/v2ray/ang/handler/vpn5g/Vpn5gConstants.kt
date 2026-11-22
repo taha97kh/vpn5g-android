@@ -58,6 +58,10 @@ object Vpn5gConstants {
     const val KEY_REDEEMED_CODES_JSON = "vpn5g_redeemed_codes_json"
     /** GUIDs of servers whose tunnel check failed in this process run. */
     const val KEY_TUNNEL_FAILED_GUIDS = "vpn5g_tunnel_failed_guids"
+    /** GUIDs of servers whose tunnel check failed, kept 6h (v1.1.4 §5). */
+    const val KEY_FAILED_GUIDS_JSON = "vpn5g_failed_guids_json"
+    /** How long a failed server stays out of the auto picker (v1.1.4 §5). */
+    const val FAILED_GUID_TTL_MS = 6L * 60L * 60L * 1000L
     /** Selected protocol filter id ("auto", "vless", "vmess", "trojan", "ss"). */
     const val KEY_PROTOCOL_FILTER = "vpn5g_protocol_filter"
     /** Last successful app-update check, epoch millis (v1.1.3, at most daily). */

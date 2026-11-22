@@ -50,6 +50,100 @@ kept intact; the fork credit is in the About screen
   message instead of raw core text; payment-gateway `!!` made a safe
   call.
 
+## v1.1.4 (2026-11-22, versionCode 6)
+
+Comprehensive redesign, bug fixes and professional upgrade. **One
+reinstall is required**: this release is signed with the new fixed key
+of the VPN5G GitHub account (the 1.1.3 key lives only in the suspended
+account's secrets), so 1.1.3 users uninstall once; from 1.1.4 on,
+updates install in place again. Release build: `assemblePlaystoreRelease`
+(`build-release.yml`, artifact `vpn5g-release-apk`), `debuggable=false`,
+same fixed key as Debug. In-app updater now points at
+`github.com/VPN5G/vpn5g-android`.
+
+- **One-button automatic connect (§1)**: the power button runs the whole
+  chain — real internet check (active network + a short HTTPS probe),
+  then the fastest free server with a measured ping, then the transport
+  MTU profile, then the service. The home shows only six plain states
+  (checking internet / finding server / connecting / creating tunnel /
+  connected / retrying); no technical error is ever shown. **"Connected"
+  appears only after real traffic passed through the tunnel** (exit-IP
+  check): the old "service running" and "ping OK" shortcuts are gone, an
+  UNKNOWN verdict now counts as a failure (retry), and the tunnel is
+  re-verified every 60 s while connected — a dead tunnel drops and the
+  drop detector fails over instead of showing "connected". Returning to
+  the app re-reads the daemon state.
+- **No advanced settings in the UI (§2)**: the protocol picker, the
+  routing screen and the "advanced settings" link to the upstream
+  MainActivity are removed (bottom nav is now Home / Premium / Guide /
+  Me). The engine still supports every protocol; it picks and manages
+  protocol, MTU, DNS and routing itself.
+- **Self-contained engine (§3)**: unchanged — bundled Xray Core + TUN
+  libraries, VpnService, no other VPN app needed.
+- **Security fixes (§4)**: `debuggable=false` in Release; Release is
+  signed with the fixed key (new `release` signing config, same
+  keystore file + `VPN5G_KEYSTORE_*` env vars as Debug); `allowBackup`
+  is now `false` (no backup of sensitive data); cleartext is off
+  (manifest `usesCleartextTraffic=false` + network security config
+  `cleartextTrafficPermitted=false`); user-installed CAs are no longer
+  trusted by default (system CAs only). The local HTTP/SOCKS inbounds
+  never set a listen address, so Xray binds its default 127.0.0.1 —
+  loopback-only, verified by code review. No secrets in the APK, no
+  credentials or configs in logs (the validator logs only reason
+  counts, never URIs). Third-party library versions
+  (`libs.versions.toml`): AGP 9.5.1, Kotlin 2.4.21, JUnit 6.1.3, MMKV
+  1.3.17, Gson 2.15.0, OkHttp 5.5.1, coroutines 1.11.0, lifecycle 2.11.0,
+  CameraX 1.6.2, Compose BOM 2026.09.00, Coil 3.6.3, desugar 2.1.5. No
+  CVE scan was possible offline — that is a CI/networked follow-up, not
+  claimed here.
+- **Server-system fix (§5)**: every config is validated before ping or
+  display — only VLESS / VMess / Trojan / Shadowsocks; non-empty host;
+  port 1–65535; well-formed IPv6 literals; UUID passwords for
+  VLESS/VMess; non-empty passwords for Trojan/Shadowsocks; TLS requires
+  SNI; REALITY requires public key + short id; gRPC requires a service
+  name; WebSocket/XHTTP path defaults to `/`. Dedupe is by server
+  identity (`scheme://host:port:uuid-or-password`), not raw URI text.
+  Bundled fallback re-validated: **641 → 524 entries** (71 duplicates
+  removed; 46 invalid: 29 REALITY without key/sid, 8 non-UUID
+  passwords, 4 gRPC without service name, 3 TLS without SNI, 1 port 0,
+  1 unparseable). A server that fails tunnel verification stays out of
+  the auto picker for 6 hours.
+- **DNS / MTU / UDP / routing (§6)**: MTU follows the active transport
+  (Wi-Fi 1500, cellular 1400) instead of forcing 1500 everywhere; DNS
+  is in-tunnel only (Global TUN mode, no split-DNS path); UDP is never
+  blocked by VPN5G — any stored "block UDP 443" (QUIC) rule is stripped
+  from the stored routing ruleset before connect. Note: the upstream
+  routing presets still ship that rule, but VPN5G never imports them
+  and the sanitizer removes it from any stored ruleset.
+- **Stable connection + auto-recovery (§7)**: Wi-Fi/mobile handover
+  (existing `NetworkMonitor`), IP change, screen off, background return,
+  Xray crash and DNS loss go through the existing drop detector and
+  bounded failover (max 2 per session, different country first); the
+  60-second re-verification and the on-resume state re-read are new.
+- **Professional minimal UI (§8)**: home keeps logo, status, big
+  Connect/Disconnect, selected server and the 30-minute countdown;
+  status and the header pill come from the connect state machine.
+  There is no data-usage row: no traffic-stats API exists in the
+  codebase, so none is invented.
+- **Brand watermarks (§9)**: `VPNCRACKNET`, `VPN5G_IRBOT`, `AREF_5G`
+  drawn faint (alpha ~0.07–0.08, slightly rotated) behind the power
+  button, the update button and the four primary subscription buttons.
+  Decorative only: no semantics (TalkBack never reads them), no touch
+  handling, no readability impact.
+- **Independence from side services (§10)**: the bundled fallback and
+  the local cache are unchanged; when the config service is unreachable
+  the app shows the last good list (or the fallback on first launch)
+  and marks itself offline.
+- **Tests (§11)**: 30 new JVM tests (`Vpn5gServerValidatorTest`,
+  `Vpn5gAutoConnectTest`) cover every validation branch, the state
+  machine (including "CONNECTED only from CREATING_TUNNEL on
+  VERIFIED"), the best-server picker and the failed-server TTL store.
+  They run in CI (`testPlaystoreDebugUnitTest` in `build-release.yml`).
+  Device/server tests (real tunnel, DNS, IPv4/IPv6, TCP, UDP,
+  QUIC/HTTP3, handover, screen off, dead-server switch, CPU/RAM,
+  multi-device) were NOT run on this server — they need Aref's phone
+  and live servers; see the 1.1.4 delivery report for the full list.
+
 ## Created files
 
 ### New code — `V2rayNG/app/src/main/java/com/v2ray/ang/handler/vpn5g/`

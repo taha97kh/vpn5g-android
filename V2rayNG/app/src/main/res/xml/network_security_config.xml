@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<network-security-config xmlns:tools="http://schemas.android.com/tools">
-    <base-config cleartextTrafficPermitted="true">
+<!-- v1.1.4 §4: cleartext is off everywhere and user-installed CAs are
+     NOT trusted by default. Every app endpoint (config sources, update
+     check, Supabase) is HTTPS; a plain-HTTP URL is a configuration error,
+     not something the app silently accepts. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
-            <certificates
-                src="user"
-                tools:ignore="AcceptsUserCertificates" />
         </trust-anchors>
     </base-config>
 </network-security-config>
