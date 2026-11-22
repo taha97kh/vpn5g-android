@@ -2121,17 +2121,10 @@ private fun Vpn5gUpdateCard(
                     ),
                     modifier = Modifier.weight(1f),
                 ) {
-                    // Subtle brand watermark behind the label (v1.1.4 §9).
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Vpn5gBrandWatermark(Modifier.fillMaxSize())
-                        Text(
-                            text = stringResource(R.string.vpn5g_update_button),
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
+                    Text(
+                        text = stringResource(R.string.vpn5g_update_button),
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
                 TextButton(onClick = onDismiss) {
                     Text(
@@ -2448,8 +2441,14 @@ fun Vpn5gHomeScreen(
 
             // Connection failed (v1.1.5 §2): the precise reason, still
             // Disconnected, with a retry. The card only appears in the
-            // FAILED state, when lastError is set.
-            if (state.connectState == Vpn5gConnectState.FAILED) {
+            // FAILED state, when lastError is set — and only when there
+            // is no manual-failure card: a failed manual pick sets both
+            // lastError and manualServerFailed, and the manual card
+            // below (reason + return-to-auto) is the only card shown,
+            // so the same reason is never shown twice, stacked.
+            if (state.connectState == Vpn5gConnectState.FAILED &&
+                state.manualServerFailed == null
+            ) {
                 item(key = "failed_card") {
                     Vpn5gErrorCard(
                         title = stringResource(R.string.vpn5g_connect_failed),
@@ -3241,8 +3240,6 @@ private fun Vpn5gPowerButton(
             }
             .padding(10.dp),
     ) {
-        // Subtle brand watermark behind the glyph (v1.1.4 §9).
-        Vpn5gBrandWatermark(Modifier.fillMaxSize())
         Canvas(modifier = Modifier.fillMaxSize()) {
             val stroke = size.width * 0.035f
             // Track ring.

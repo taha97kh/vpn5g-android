@@ -231,13 +231,37 @@ same fixed key as Debug. In-app updater now points at
   off, disconnect/reconnect, relaunch, CPU/RAM, multi-device) were
   NOT run on this server — they need Aref's phone and live servers;
   see the 1.1.5 delivery report for the full list.
-- **Refinement — watermarks behind the text, effectively invisible
-  (2026-11-23, same 1.1.5)**: `Vpn5gBrandWatermark` now draws the three
-  house names (VPNCRACKNET / VPN5G_IRBOT / AREF_5G) at alpha 0.02 with
-  no rotation, clipped to the button bounds, always as the first child
-  of the button content Box — strictly behind the label, which fully
-  covers them. The look stays clean; the composable is kept as a
-  background layer, only the visibility changed.
+- **Watermarks removed entirely (2026-11-23, same 1.1.5, field
+  test)**: alpha 0.02 did NOT hide them on a real device — the three
+  house names were still readable behind the Me buttons and inside the
+  power circle. `Vpn5gBrandWatermark` is deleted, with all 6 call
+  sites (update button, power circle, 4 subscription buttons); nothing
+  of it is drawn anywhere anymore. (Note: the Me buttons never had a
+  watermark call site in any release — the field-test screenshot
+  suggests the installed build on the phone was not this commit; the
+  removal guarantees no build can render them.)
+- **Tunnel verification hardened (same 1.1.5, field test)**: a manual
+  France pick (TCP ping 82 ms) failed verification with a single
+  5-second probe fetch — one slow first fetch through a cold core
+  killed a server that may have been healthy. `verify()` now retries
+  the exit-IP fetch in up to 3 rounds inside a 15 s budget (7 s per
+  fetch, 500 ms between rounds), trying the primary IP API
+  (`api.ip.sb`) and then an ipify fallback each round; the verdict
+  logic is extracted as pure `evaluateExitIp()` (unit-tested). A truly
+  dead server still fails every round and ends FAILED. The manual
+  failure still ends the session (never silently replaced), but the
+  failed connect now shows ONE error card: the generic FAILED card is
+  suppressed when the manual-failure card (reason + return-to-auto)
+  is shown, instead of the same reason stacked twice.
+- **Open question — the France servers themselves**: the two
+  `afrcloud22.mmv.kr` entries are a Cloudflare Worker front whose
+  WebSocket upgrade returned 403 "WebSocket Connection Blocked" from
+  this server's egress (egress-specific, not proven for Iran), and
+  the REALITY entry cannot be handshake-tested from here at all. If
+  Auto mode on the phone also fails every server, the verify path
+  above was the cause; if Auto connects, the France backends behind
+  the front are dead and the entries should be dropped from
+  `live_configs.json`.
 - **Refinement — never disconnect during the connect attempt, switch
   fast (§2, same 1.1.5)**: the connect chain now tries up to 8 servers
   before FAILED (was 3; bounded, each attempt has its own timeouts and

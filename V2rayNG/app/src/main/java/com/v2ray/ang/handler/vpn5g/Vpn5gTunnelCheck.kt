@@ -4,12 +4,13 @@ import com.v2ray.ang.AppConfig
 import com.v2ray.ang.dto.IPAPIInfo
 import com.v2ray.ang.dto.UrlContentRequest
 import com.v2ray.ang.handler.SettingsManager
-import com.v2ray.ang.handler.SpeedtestManager
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Post-connect tunnel verification.
@@ -24,15 +25,27 @@ import kotlinx.coroutines.withContext
  * Verification (runs on Dispatchers.IO, never on the main thread):
  *  1. [publicIpDirect] — the device's public IP with no proxy (baseline,
  *     captured in the background while disconnected).
- *  2. After the daemon reports running, [publicIpViaTunnel] — the public IP
- *     seen through the core's local HTTP inbound
- *     ([SpeedtestManager.getRemoteIPInfo]); that request can only succeed
- *     when the outbound actually carries traffic.
+ *  2. After the daemon reports running, the public IP seen through the
+ *     core's local HTTP inbound — that request can only succeed when the
+ *     outbound actually carries traffic. The fetch goes through the
+ *     local HTTP proxy on purpose: the app's own process is excluded
+ *     from the VPN tunnel (CoreVpnService disallows its own package),
+ *     so a direct fetch from the app would bypass the tunnel and prove
+ *     nothing; the loopback HTTP inbound is the only path whose traffic
+ *     the core carries.
  *  3. VERIFIED when the tunnel fetch returns an IP that differs from the
  *     baseline (or when no baseline exists but the tunnel fetch succeeds);
  *     FAILED when the tunnel fetch fails or the exit IP is unchanged.
  * UNKNOWN when the local HTTP inbound is unavailable (port 0) — the check
  * cannot run and must not fail the connection on its own.
+ *
+ * One slow first fetch must not kill a healthy server: a cold core on
+ * mobile data routinely needs several seconds for the WS/TLS handshake
+ * plus the probe round-trip, so [verify] retries the fetch (primary IP
+ * API, then the ipify fallback) in up to [MAX_VERIFY_ROUNDS] rounds
+ * inside a bounded [TUNNEL_TIMEOUT_MS] budget. A truly dead server
+ * fails every round and still ends FAILED — the budget, not an
+ * unbounded loop, bounds the cost.
  *
  * Never throws; every failure mode is a [TunnelResult].
  */
@@ -47,7 +60,16 @@ object Vpn5gTunnelCheck {
     )
 
     private const val DIRECT_TIMEOUT_MS = 8_000
-    private const val TUNNEL_TIMEOUT_MS = 10_000
+    /** Overall budget for one verify() call, covering all fetch rounds. */
+    private const val TUNNEL_TIMEOUT_MS = 15_000
+    /** Per-fetch timeout through the local HTTP proxy. */
+    private const val TUNNEL_FETCH_TIMEOUT_MS = 7_000
+    /** How many fetch rounds verify() tries before giving up on a server. */
+    private const val MAX_VERIFY_ROUNDS = 3
+    /** Pause between fetch rounds. */
+    private const val VERIFY_RETRY_DELAY_MS = 500L
+    /** Fallback probe when the primary IP API yields nothing. */
+    private const val FALLBACK_IP_URL = "https://api.ipify.org?format=json"
 
     /** The device's public IP fetched directly (no proxy), or null. */
     suspend fun publicIpDirect(timeoutMs: Int = DIRECT_TIMEOUT_MS): String? =
@@ -63,38 +85,35 @@ object Vpn5gTunnelCheck {
             }
         }
 
-    /** The public IP seen through the running core's local proxy, or null. */
-    suspend fun publicIpViaTunnel(): String? = withContext(Dispatchers.IO) {
-        try {
-            SpeedtestManager.getRemoteIPInfo()?.ipAddress?.trim()?.takeIf { it.isNotEmpty() }
-        } catch (e: Exception) {
-            LogUtil.e(AppConfig.TAG, "Vpn5gTunnelCheck: tunnel IP fetch failed", e)
-            null
-        }
-    }
-
-    /** Full verification against a previously captured [baselineIp]. */
-    suspend fun verify(
-        baselineIp: String?,
-        timeoutMs: Int = TUNNEL_TIMEOUT_MS,
-    ): TunnelResult = withContext(Dispatchers.IO) {
-        if (SettingsManager.getHttpPort() == 0) {
-            return@withContext TunnelResult(
-                Verdict.UNKNOWN,
-                detail = "no local proxy port",
-            )
-        }
-        // getRemoteIPInfo has its own 5s timeout; the caller bounds the call.
-        val tunnelIp = try {
-            withContext(Dispatchers.IO) {
-                kotlinx.coroutines.withTimeoutOrNull(timeoutMs.toLong()) {
-                    publicIpViaTunnel()
-                }
+    /**
+     * One exit-IP fetch through the running core's local HTTP inbound,
+     * or null when it yields nothing. The proxy is the loopback HTTP
+     * inbound (port from [SettingsManager.getHttpPort]); the request
+     * only succeeds when the core's outbound carries it.
+     */
+    private suspend fun fetchExitIp(url: String, timeoutMs: Int): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                val httpPort = SettingsManager.getHttpPort()
+                if (httpPort == 0) return@withContext null
+                val body = HttpUtil.getUrlContent(
+                    UrlContentRequest(
+                        url = url,
+                        timeout = timeoutMs,
+                        httpPort = httpPort,
+                        proxyUsername = SettingsManager.getSocksUsername(),
+                        proxyPassword = SettingsManager.getSocksPassword(),
+                    )
+                ) ?: return@withContext null
+                parseIp(body)
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "Vpn5gTunnelCheck: tunnel IP fetch failed", e)
+                null
             }
-        } catch (e: Exception) {
-            LogUtil.e(AppConfig.TAG, "Vpn5gTunnelCheck: verify failed", e)
-            null
         }
+
+    /** Pure verdict from a fetched tunnel IP against the baseline. */
+    fun evaluateExitIp(tunnelIp: String?, baselineIp: String?): TunnelResult =
         when {
             tunnelIp.isNullOrBlank() -> TunnelResult(
                 Verdict.FAILED,
@@ -107,6 +126,32 @@ object Vpn5gTunnelCheck {
             )
             else -> TunnelResult(Verdict.VERIFIED, exitIp = tunnelIp)
         }
+
+    /** Full verification against a previously captured [baselineIp]. */
+    suspend fun verify(
+        baselineIp: String?,
+        timeoutMs: Int = TUNNEL_TIMEOUT_MS,
+    ): TunnelResult = withContext(Dispatchers.IO) {
+        if (SettingsManager.getHttpPort() == 0) {
+            return@withContext TunnelResult(
+                Verdict.UNKNOWN,
+                detail = "no local proxy port",
+            )
+        }
+        val tunnelIp = withTimeoutOrNull(timeoutMs.toLong()) {
+            var attempt = 0
+            var ip: String? = null
+            while (attempt < MAX_VERIFY_ROUNDS && ip.isNullOrBlank()) {
+                attempt++
+                ip = fetchExitIp(AppConfig.IP_API_URL, TUNNEL_FETCH_TIMEOUT_MS)
+                    ?: fetchExitIp(FALLBACK_IP_URL, TUNNEL_FETCH_TIMEOUT_MS)
+                if (ip.isNullOrBlank() && attempt < MAX_VERIFY_ROUNDS) {
+                    delay(VERIFY_RETRY_DELAY_MS)
+                }
+            }
+            ip
+        }
+        evaluateExitIp(tunnelIp, baselineIp)
     }
 
     private fun parseIp(json: String): String? {

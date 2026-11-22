@@ -276,14 +276,7 @@ fun Vpn5gSubscriptionScreen(
                         ),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        // Subtle brand watermark behind the label (v1.1.4 §9).
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Vpn5gBrandWatermark(Modifier.fillMaxSize())
-                            Text(text = stringResource(R.string.vpn5g_premium_continue), fontSize = 16.sp)
-                        }
+                        Text(text = stringResource(R.string.vpn5g_premium_continue), fontSize = 16.sp)
                     }
                 }
             }
@@ -359,14 +352,7 @@ fun Vpn5gSubscriptionScreen(
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    // Subtle brand watermark behind the label (v1.1.4 §9).
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Vpn5gBrandWatermark(Modifier.fillMaxSize())
-                        Text(text = stringResource(R.string.vpn5g_promo_redeem), fontSize = 16.sp)
-                    }
+                    Text(text = stringResource(R.string.vpn5g_promo_redeem), fontSize = 16.sp)
                 }
                 when (state.promoStatus) {
                     Vpn5gPromoStatus.VALID -> {
@@ -386,14 +372,7 @@ fun Vpn5gSubscriptionScreen(
                             ),
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            // Subtle brand watermark behind the label (v1.1.4 §9).
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Vpn5gBrandWatermark(Modifier.fillMaxSize())
-                                Text(text = stringResource(R.string.vpn5g_promo_confirm_bot), fontSize = 16.sp)
-                            }
+                            Text(text = stringResource(R.string.vpn5g_promo_confirm_bot), fontSize = 16.sp)
                         }
                     }
                     Vpn5gPromoStatus.UNKNOWN_CODE -> {
@@ -446,14 +425,7 @@ fun Vpn5gSubscriptionScreen(
                 ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                // Subtle brand watermark behind the label (v1.1.4 §9).
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Vpn5gBrandWatermark(Modifier.fillMaxSize())
-                    Text(text = stringResource(R.string.vpn5g_open_bot), fontSize = 16.sp)
-                }
+                Text(text = stringResource(R.string.vpn5g_open_bot), fontSize = 16.sp)
             }
         }
         Vpn5gStaggeredItem(index = 7, visible = entered) {
