@@ -602,17 +602,6 @@
     <string name="vpn5g_imported_file">%1$d کانفیگ از فایل وارد شد</string>
     <string name="vpn5g_import_failed">وارد کردن کانفیگ ناموفق بود</string>
     <string name="vpn5g_guide_title">راهنمای استفاده</string>
-    <string name="vpn5g_guide_step1_title">۱. اتصال</string>
-    <string name="vpn5g_guide_step1_body">روی یک سرور از لیست کشورهای رایگان بزنید، اجازهٔ VPN را تأیید کنید و متصل شوید.</string>
-    <string name="vpn5g_guide_step2_title">۲. وارد کردن کانفیگ</string>
-    <string name="vpn5g_guide_step2_body">لینک کانفیگ (vmess ،vless ،trojan یا ss) را کپی کنید و در برنامه باز کنید، یا فایل txt. یا json. را از کانال دانلود کنید و روی آن بزنید تا در برنامه باز شود.</string>
-    <string name="vpn5g_guide_step3_title">۳. اگر سروری کار نکرد</string>
-    <string name="vpn5g_guide_step3_body">لیست را به‌روزرسانی کنید و یک سرور دیگر انتخاب کنید؛ فقط سرورهای زنده نمایش داده می‌شوند.</string>
-    <string name="vpn5g_guide_step4_title">۴. قطع خودکار بعد از ۳۰ دقیقه</string>
-    <string name="vpn5g_guide_step4_body">هر اتصال بعد از ۳۰ دقیقه خودکار قطع می‌شود؛ برای ادامه دوباره متصل شوید.</string>
-    <string name="vpn5g_about_channel">کانال: @VPNCRACKNET</string>
-    <string name="vpn5g_about_bot">ربات: @VPN5G_IRBot</string>
-    <string name="vpn5g_about_support">پشتیبانی: @Aref_5G</string>
     <string name="vpn5g_about_version">نسخه: %1$s (کد %2$d)</string>
     <string name="vpn5g_about_build_date">تاریخ ساخت: %1$s</string>
     <string name="vpn5g_about_core">بر پایه‌ی نرم‌افزار آزاد (GPL-3.0)</string>
@@ -639,12 +628,12 @@
 
     <!-- v1.1: X-VPN-style home, tunnel verification, routing, profile, promo codes -->
     <string name="vpn5g_nav_premium">حق بیمه</string>
-    <string name="vpn5g_nav_browser">مرورگر</string>
+    <string name="vpn5g_nav_guide">راهنما</string>
     <string name="vpn5g_nav_me">من</string>
     <string name="vpn5g_status_not_connected">متصل نیست</string>
     <!-- v1.1.4: six connect states — plain words, no technical errors -->
     <string name="vpn5g_connect_checking_internet">در حال بررسی اینترنت…</string>
-    <string name="vpn5g_connect_finding_server">در حال پیدا کردن بهترین سرور…</string>
+    <string name="vpn5g_connect_finding_server">در حال آزمایش سرور…</string>
     <string name="vpn5g_connect_connecting">در حال اتصال…</string>
     <string name="vpn5g_connect_creating_tunnel">در حال ایجاد تونل امن…</string>
     <string name="vpn5g_connect_retrying">اتصال ناموفق؛ در حال تلاش مجدد…</string>
@@ -656,7 +645,8 @@
     <string name="vpn5g_exit_ip">آی‌پی خروجی: %1$s</string>
     <string name="vpn5g_tunnel_failed_retry">این سرور تونل نکرد؛ در حال تلاش با سرور بعدی…</string>
     <string name="vpn5g_tunnel_failed_all">هیچ سروری تونل نکرد؛ لیست را به‌روزرسانی کنید و دوباره تلاش کنید</string>
-    <string name="vpn5g_guide_links_title">لینک‌های مفید</string>
+    <string name="vpn5g_tunnel_failed">این سرور تونل نکرد؛ ترافیک از داخل VPN عبور نکرد</string>
+    <string name="vpn5g_tunnel_unknown">نتوانستیم عبور ترافیک از داخل VPN را تأیید کنیم</string>
     <string name="vpn5g_profile_account">حساب کاربری</string>
     <string name="vpn5g_profile_not_signed_in">وارد نشده‌اید</string>
     <string name="vpn5g_auth_register_title">ثبت‌نام با ایمیل</string>
@@ -748,4 +738,96 @@
     <string name="vpn5g_update_downloading">در حال دانلود… %1$d٪</string>
     <string name="vpn5g_update_download_failed">دانلود ناموفق بود؛ دوباره تلاش کن</string>
 
+    <!-- v1.1.5: connect states, manual server picker, expandable sections. -->
+    <string name="vpn5g_connect_verifying_tunnel">در حال بررسی اینترنت از داخل VPN…</string>
+    <string name="vpn5g_connect_switching_server">در حال تغییر سرور…</string>
+    <string name="vpn5g_connect_failed">اتصال ناموفق</string>
+    <string name="vpn5g_error_restart_failed">تغییر سرور انجام نشد؛ دوباره تلاش کنید</string>
+    <string name="vpn5g_retry">تلاش دوباره</string>
+    <string name="vpn5g_manual_label">دستی</string>
+    <string name="vpn5g_manual_failed_title">سرور «%1$s» کار نکرد</string>
+    <string name="vpn5g_manual_back_to_auto">بازگشت به خودکار</string>
+    <string name="vpn5g_manual_not_found">این سرور دیگر در لیست نیست؛ سرور دیگری انتخاب کنید یا به خودکار برگردید</string>
+    <string name="vpn5g_manual_not_free">این سرور دیگر رایگان نیست؛ سرور دیگری انتخاب کنید یا به خودکار برگردید</string>
+    <string name="vpn5g_manual_no_ping">این سرور پینگ ندارد؛ سرور دیگری انتخاب کنید یا به خودکار برگردید</string>
+    <string name="vpn5g_manual_failed_recently">این سرور به‌تازگی تونل نکرده و تا ۶ ساعت کنار گذاشته شده؛ سرور دیگری انتخاب کنید یا به خودکار برگردید</string>
+    <string name="vpn5g_manual_invalid">تنظیمات این سرور خراب است؛ سرور دیگری انتخاب کنید یا به خودکار برگردید</string>
+    <string name="vpn5g_manual_dropped">اتصال به سرور دستی قطع شد؛ برای اتصال دوباره سرور دیگری انتخاب کنید یا به حالت خودکار برگردید</string>
+    <string name="vpn5g_picker_back">بازگشت به کشورها</string>
+    <string name="vpn5g_picker_healthy">سالم</string>
+    <string name="vpn5g_picker_no_ping">بدون پینگ</string>
+    <string name="vpn5g_auto_info_body">در حالت خودکار، برنامه سریع‌ترین سرور رایگان را که پینگ دارد انتخاب می‌کند؛ اگر سروری تونل نکند یا اتصال قطع شود، خودکار به سرور بعدی می‌رود. با زدن ردیف «خودکار» دوباره به همین حالت برمی‌گردید.</string>
+    <string name="vpn5g_expand_details">نمایش جزئیات</string>
+    <string name="vpn5g_collapse_details">پنهان کردن جزئیات</string>
+    <string name="vpn5g_link_channel" translatable="false">VPNCRACKNET</string>
+    <string name="vpn5g_link_bot" translatable="false">VPN5G_IRBOT</string>
+    <string name="vpn5g_link_support" translatable="false">Aref_5G</string>
+
+    <!-- v1.1.5: OTP states (§7 — Android side only). -->
+    <string name="vpn5g_auth_code_sent">درخواست کد ثبت شد؛ اگر تا چند دقیقه کد نرسید، پوشهٔ اسپم را بررسی کن یا دوباره درخواست بده.</string>
+    <string name="vpn5g_auth_resend">ارسال مجدد کد</string>
+    <string name="vpn5g_auth_resend_in">ارسال مجدد تا %1$d ثانیهٔ دیگر</string>
+    <string name="vpn5g_auth_code_not_arrived">اگر کد نرسید، پوشهٔ اسپم را بررسی کن یا دوباره درخواست بده.</string>
+    <string name="vpn5g_auth_code_locked">کد را چند بار اشتباه وارد کردی؛ کد تازه بگیر و با دقت وارد کن</string>
+
+    <!-- v1.1.5: guide, 20 sections (§5). -->
+    <string name="vpn5g_guide_faq_title">سوالات متداول</string>
+    <string name="vpn5g_guide_s01_title">۱. اتصال با یک دکمه</string>
+    <string name="vpn5g_guide_s01_body">روی دکمهٔ بزرگ وسط صفحه بزن. برنامه اول اینترنت را بررسی می‌کند، بعد سریع‌ترین سرور رایگان را انتخاب می‌کند، تونل را می‌سازد و فقط وقتی ترافیک واقعاً از داخل VPN رد شد، «متصل» نشان می‌دهد. اگر سروری کار نکرد، خودکار سراغ سرور بعدی می‌رود.</string>
+    <string name="vpn5g_guide_s02_title">۲. انتخاب خودکار سرور</string>
+    <string name="vpn5g_guide_s02_body">در حالت خودکار، برنامه از بین سرورهای رایگان، سریع‌ترین سروری را که پینگ دارد انتخاب می‌کند. سروری که به‌تازگی تونل نکرده باشد تا ۶ ساعت کنار گذاشته می‌شود و دوباره امتحان نمی‌شود.</string>
+    <string name="vpn5g_guide_s03_title">۳. انتخاب دستی سرور</string>
+    <string name="vpn5g_guide_s03_body">روی ردیف «سرورهای رایگان» بزن، کشور را انتخاب کن، بعد سرور را. انتخاب تو ذخیره می‌شود و دفعهٔ بعد هم به همان سرور وصل می‌شوی، مگر اینکه دوباره «خودکار» را بزنی. اگر سرور دستی خراب باشد، برنامه بی‌صدا سرور دیگری نمی‌گیرد؛ خطای دقیق را نشان می‌دهد و می‌توانی به خودکار برگردی.</string>
+    <string name="vpn5g_guide_s04_title">۴. سرورهای رایگان</string>
+    <string name="vpn5g_guide_s04_body">۲۰ سرور سریعِ دارای پینگ رایگان‌اند؛ بقیه ویژه‌اند. سروری که پینگ ندارد هیچ‌وقت نمایش داده نمی‌شود و هیچ‌وقت هم اول امتحان نمی‌شود.</string>
+    <string name="vpn5g_guide_s05_title">۵. کشورهای ویژه و اشتراک</string>
+    <string name="vpn5g_guide_s05_body">کشورهایی که قفل دارند با اشتراک باز می‌شوند. اشتراک را از ربات تلگرام می‌گیری؛ وضعیت اشتراکت در صفحهٔ «من» و صفحهٔ «حق بیمه» نمایش داده می‌شود.</string>
+    <string name="vpn5g_guide_s06_title">۶. اگر سروری کار نکرد</string>
+    <string name="vpn5g_guide_s06_body">برنامه خودکار سرور بعدی را امتحان می‌کند (حداکثر ۳ بار در هر اتصال). اگر هیچ سروری تونل نکرد، خطای دقیق را می‌بینی و همچنان «متصل نیست» می‌مانی؛ لیست را به‌روزرسانی کن و دوباره تلاش کن.</string>
+    <string name="vpn5g_guide_s07_title">۷. قطع خودکار بعد از ۳۰ دقیقه</string>
+    <string name="vpn5g_guide_s07_body">هر اتصال بعد از ۳۰ دقیقه خودکار قطع می‌شود؛ این محدودیت نسخهٔ رایگان است. برای ادامه، دوباره روی دکمهٔ اتصال بزن.</string>
+    <string name="vpn5g_guide_s08_title">۸. بررسی واقعی تونل</string>
+    <string name="vpn5g_guide_s08_body">بعد از اتصال، برنامه آی‌پی خروجی را از داخل تونل می‌گیرد و با آی‌پی قبل از اتصال مقایسه می‌کند. اگر آی‌پی عوض نشده باشد یا درخواستی برنگردد، یعنی تونل کار نمی‌کند و «متصل» نشان داده نمی‌شود. هر ۶۰ ثانیه هم همین بررسی تکرار می‌شود.</string>
+    <string name="vpn5g_guide_s09_title">۹. اینترنت و DNS</string>
+    <string name="vpn5g_guide_s09_body">DNS از داخل تونل انجام می‌شود تا نشت DNS نداشته باشی. اندازهٔ بسته (MTU) هم خودکار تنظیم می‌شود: در وای‌فای ۱۵۰۰ و در اینترنت موبایل ۱۴۰۰.</string>
+    <string name="vpn5g_guide_s10_title">۱۰. تغییر سرور هنگام اتصال</string>
+    <string name="vpn5g_guide_s10_body">روی هر سرور دیگری که بزنی، اتصال فعلی کاملاً قطع می‌شود و تونل با سرور جدید از اول ساخته و بررسی می‌شود. همیشه فقط یک تونل فعال است.</string>
+    <string name="vpn5g_guide_s11_title">۱۱. وارد کردن کانفیگ</string>
+    <string name="vpn5g_guide_s11_body">لینک کانفیگ (vmess ،vless ،trojan یا ss) را کپی کن و در برنامه باز کن، یا فایل txt. یا json. را از کانال دانلود کن و روی آن بزن تا در برنامه باز شود. کانفیگ خراب یا ناقص (مثلاً بدون SNI یا بدون کلید REALITY) وارد نمی‌شود.</string>
+    <string name="vpn5g_guide_s12_title">۱۲. به‌روزرسانی لیست سرورها</string>
+    <string name="vpn5g_guide_s12_body">لیست را با کشیدن صفحه به پایین به‌روز کن؛ برنامه هر ۵ دقیقه هم خودکار به‌روز می‌کند. سرورها از سرویس‌های آنلاین گرفته می‌شوند؛ اگر اینترنت نباشد، آخرین لیست ذخیره‌شده نمایش داده می‌شود.</string>
+    <string name="vpn5g_guide_s13_title">۱۳. حساب کاربری و کد تایید</string>
+    <string name="vpn5g_guide_s13_body">ثبت‌نام و ورود فقط با ایمیل Gmail و کد ۶ رقمی است؛ رمزی در کار نیست. کد را از ایمیلت برمی‌داری و اینجا وارد می‌کنی. ارسال مجدد کد هر ۶۰ ثانیه یک بار ممکن است و بعد از ۵ بار کد اشتباه، باید کد تازه بگیری. توجه: کدها با سرویس ایمیل ارسال می‌شوند؛ اگر کد نرسید، اول پوشهٔ اسپم را بررسی کن، بعد دوباره درخواست بده.</string>
+    <string name="vpn5g_guide_s14_title">۱۴. بازیابی حساب</string>
+    <string name="vpn5g_guide_s14_body">اگر از حسابت خارج شدی، در صفحهٔ ورود «فراموشی رمز عبور» را بزن؛ کد ورود به همان ایمیلت فرستاده می‌شود و با همان کد وارد حسابت می‌شوی.</string>
+    <string name="vpn5g_guide_s15_title">۱۵. کد تخفیف / هدیه</string>
+    <string name="vpn5g_guide_s15_body">اگر از ربات کد تخفیف یا هدیه گرفته‌ای، در صفحهٔ «حق بیمه» واردش کن. کد اینجا بررسی می‌شود، ولی فعال‌سازی نهایی در ربات انجام می‌شود.</string>
+    <string name="vpn5g_guide_s16_title">۱۶. به‌روزرسانی برنامه</string>
+    <string name="vpn5g_guide_s16_body">وقتی نسخهٔ جدید منتشر شود، برنامه خودش خبرت می‌کند؛ با یک دکمه دانلود می‌شود و نصب‌کنندهٔ سیستم باز می‌شود. از نسخهٔ ۱٫۱٫۴ به بعد، به‌روزرسانی روی نسخهٔ قبلی نصب می‌شود.</string>
+    <string name="vpn5g_guide_s17_title">۱۷. حریم خصوصی و امنیت</string>
+    <string name="vpn5g_guide_s17_body">برنامه رمز عبور، کد تایید یا آدرس کامل کانفیگ را هیچ‌جا ثبت نمی‌کند. اتصال‌ها فقط با HTTPS انجام می‌شوند، نسخهٔ نهایی قابل اشکال‌زدایی نیست و پشتیبان‌گیری از داده‌های برنامه خاموش است.</string>
+    <string name="vpn5g_guide_s18_title">۱۸. مصرف باتری و داده</string>
+    <string name="vpn5g_guide_s18_body">وقتی متصل‌ای، سرویس در پس‌زمینه فعال می‌ماند تا اتصال قطع نشود. با خاموش شدن صفحه، اتصال قطع نمی‌شود. اتصال بعد از ۳۰ دقیقه خودکار قطع می‌شود.</string>
+    <string name="vpn5g_guide_s19_title">۱۹. مشکلات رایج</string>
+    <string name="vpn5g_guide_s19_body">«اینترنت در دسترس نیست»: اینترنت گوشی را بررسی کن. «هیچ سروری تونل نکرد»: لیست را به‌روز کن و دوباره تلاش کن. «اجازهٔ VPN داده نشد»: موقع اتصال، اجازهٔ VPN را در پنجرهٔ سیستم تأیید کن. «کد تایید نرسید»: پوشهٔ اسپم را ببین و بعد از ۶۰ ثانیه دوباره درخواست بده.</string>
+    <string name="vpn5g_guide_s20_title">۲۰. راه ارتباط با پشتیبانی</string>
+    <string name="vpn5g_guide_s20_body">اگر مشکلی داشتی که اینجا جوابش نیست، از همین سه راه با ما در تماس باش:</string>
+
+    <!-- v1.1.5: FAQ (§5). -->
+    <string name="vpn5g_faq_q01">چرا کد تایید به ایمیلم نمی‌رسد؟</string>
+    <string name="vpn5g_faq_a01">کدها با سرویس ایمیل ارسال می‌شوند. اول پوشهٔ اسپم و تبلیغات را بررسی کن، مطمئن شو ایمیلت Gmail است، و بعد از ۶۰ ثانیه دوباره درخواست بده. اگر هنوز نرسید، از پشتیبانی بپرس؛ سرویس ارسال ایمیل در حال راه‌اندازی است و ممکن است کدها با تأخیر برسند.</string>
+    <string name="vpn5g_faq_q02">چرا اتصال بعد از ۳۰ دقیقه قطع می‌شود؟</string>
+    <string name="vpn5g_faq_a02">این محدودیت نسخهٔ رایگان است؛ هر اتصال ۳۰ دقیقه طول می‌کشد. برای ادامه، دوباره روی دکمهٔ اتصال بزن.</string>
+    <string name="vpn5g_faq_q03">چرا بعضی کشورها قفل‌اند؟</string>
+    <string name="vpn5g_faq_a03">فقط ۲۰ سرور سریع رایگان‌اند؛ بقیهٔ کشورها ویژه‌اند و با اشتراک باز می‌شوند. اشتراک را از ربات تلگرام می‌گیری.</string>
+    <string name="vpn5g_faq_q04">چرا لیست سرورها خالی است؟</string>
+    <string name="vpn5g_faq_a04">لیست از اینترنت گرفته می‌شود؛ اگر آفلاین باشی، آخرین لیست ذخیره‌شده نشان داده می‌شود. صفحه را به پایین بکش تا دوباره به‌روز شود و مطمئن شو اینترنت وصل است.</string>
+    <string name="vpn5g_faq_q05">پینگ یعنی چه؟</string>
+    <string name="vpn5g_faq_a05">پینگ زمان رفت‌وبرگشت به سرور است (به میلی‌ثانیه)؛ هرچه کمتر باشد، سرور سریع‌تر است. برنامه همیشه سریع‌ترین سرور رایگان را انتخاب می‌کند.</string>
+    <string name="vpn5g_faq_q06">می‌توانم کانفیگ خودم را اضافه کنم؟</string>
+    <string name="vpn5g_faq_a06">بله؛ لینک کانفیگ (vmess ،vless ،trojan یا ss) را در برنامه باز کن یا فایل txt. یا json. را وارد کن. کانفیگ باید کامل و معتبر باشد، وگرنه وارد نمی‌شود.</string>
+    <string name="vpn5g_faq_q07">روی وای‌فای و اینترنت موبایل فرق می‌کند؟</string>
+    <string name="vpn5g_faq_a07">نه؛ برنامه روی هر دو کار می‌کند و اندازهٔ بسته را خودکار با نوع شبکه تنظیم می‌کند. اگر شبکه عوض شود، برنامه تونل را دوباره بررسی می‌کند.</string>
+    <string name="vpn5g_faq_q08">VPN وصل است ولی هیچ‌چیز باز نمی‌شود؛ چه کار کنم؟</string>
+    <string name="vpn5g_faq_a08">برنامه هر ۶۰ ثانیه تونل را بررسی می‌کند؛ اگر تونل واقعاً کار نکند، خودش اتصال را قطع می‌کند و سرور بعدی را امتحان می‌کند. اگر مشکل ادامه داشت، قطع کن، لیست را به‌روز کن و به سرور دیگری وصل شو.</string>
 </resources>

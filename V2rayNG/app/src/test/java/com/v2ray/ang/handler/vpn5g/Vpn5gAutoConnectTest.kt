@@ -38,6 +38,8 @@ class Vpn5gAutoConnectTest {
         assertEquals(Vpn5gConnectState.CONNECTING, state)
         state = Vpn5gAutoConnect.transition(state, Vpn5gConnectEvent.SERVICE_STARTED)
         assertEquals(Vpn5gConnectState.CREATING_TUNNEL, state)
+        state = Vpn5gAutoConnect.transition(state, Vpn5gConnectEvent.TUNNEL_READY)
+        assertEquals(Vpn5gConnectState.VERIFYING_TUNNEL, state)
         state = Vpn5gAutoConnect.transition(state, Vpn5gConnectEvent.VERIFIED)
         assertEquals(Vpn5gConnectState.CONNECTED, state)
     }
@@ -46,7 +48,9 @@ class Vpn5gAutoConnectTest {
 
     @Test
     fun test_connected_is_unreachable_without_verification() {
-        // VERIFIED from any state other than CREATING_TUNNEL is a no-op.
+        // VERIFIED from any state other than VERIFYING_TUNNEL is a no-op —
+        // including CREATING_TUNNEL, where the tunnel exists but has not
+        // been verified yet.
         assertEquals(
             Vpn5gConnectState.IDLE,
             Vpn5gAutoConnect.transition(Vpn5gConnectState.IDLE, Vpn5gConnectEvent.VERIFIED),
@@ -60,8 +64,21 @@ class Vpn5gAutoConnectTest {
             Vpn5gAutoConnect.transition(Vpn5gConnectState.CHECKING_INTERNET, Vpn5gConnectEvent.VERIFIED),
         )
         assertEquals(
+            Vpn5gConnectState.CREATING_TUNNEL,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.CREATING_TUNNEL, Vpn5gConnectEvent.VERIFIED),
+        )
+        assertEquals(
             Vpn5gConnectState.RETRYING,
             Vpn5gAutoConnect.transition(Vpn5gConnectState.RETRYING, Vpn5gConnectEvent.VERIFIED),
+        )
+        assertEquals(
+            Vpn5gConnectState.SWITCHING_SERVER,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.SWITCHING_SERVER, Vpn5gConnectEvent.VERIFIED),
+        )
+        // Only VERIFYING_TUNNEL + VERIFIED connects.
+        assertEquals(
+            Vpn5gConnectState.CONNECTED,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.VERIFYING_TUNNEL, Vpn5gConnectEvent.VERIFIED),
         )
         // SERVICE_STARTED alone never connects either: it only moves the
         // chain to CREATING_TUNNEL, where verification still has to pass.
@@ -77,9 +94,16 @@ class Vpn5gAutoConnectTest {
             Vpn5gConnectState.RETRYING,
             Vpn5gAutoConnect.transition(Vpn5gConnectState.CONNECTED, Vpn5gConnectEvent.VERIFY_FAILED),
         )
+        // A failed verification while the tunnel is being built or
+        // verified switches to the next server instead of retrying the
+        // same one.
         assertEquals(
-            Vpn5gConnectState.RETRYING,
+            Vpn5gConnectState.SWITCHING_SERVER,
             Vpn5gAutoConnect.transition(Vpn5gConnectState.CREATING_TUNNEL, Vpn5gConnectEvent.VERIFY_FAILED),
+        )
+        assertEquals(
+            Vpn5gConnectState.SWITCHING_SERVER,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.VERIFYING_TUNNEL, Vpn5gConnectEvent.VERIFY_FAILED),
         )
     }
 
@@ -112,35 +136,99 @@ class Vpn5gAutoConnectTest {
     }
 
     @Test
-    fun test_restarting_reverifies() {
+    fun test_restarting_switches_server() {
+        // A restart/switch while connecting, connected or retrying lands
+        // in SWITCHING_SERVER (v1.1.5 §2: the clean-restart failover);
+        // the restart only returns to CREATING_TUNNEL once the daemon
+        // reports the new core started.
         assertEquals(
-            Vpn5gConnectState.CREATING_TUNNEL,
+            Vpn5gConnectState.SWITCHING_SERVER,
             Vpn5gAutoConnect.transition(Vpn5gConnectState.CONNECTED, Vpn5gConnectEvent.RESTARTING),
         )
         assertEquals(
-            Vpn5gConnectState.CREATING_TUNNEL,
+            Vpn5gConnectState.SWITCHING_SERVER,
             Vpn5gAutoConnect.transition(Vpn5gConnectState.CONNECTING, Vpn5gConnectEvent.RESTARTING),
         )
         assertEquals(
-            Vpn5gConnectState.CREATING_TUNNEL,
+            Vpn5gConnectState.SWITCHING_SERVER,
             Vpn5gAutoConnect.transition(Vpn5gConnectState.RETRYING, Vpn5gConnectEvent.RESTARTING),
+        )
+        assertEquals(
+            Vpn5gConnectState.SWITCHING_SERVER,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.VERIFYING_TUNNEL, Vpn5gConnectEvent.SWITCHING),
+        )
+        assertEquals(
+            Vpn5gConnectState.CREATING_TUNNEL,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.SWITCHING_SERVER, Vpn5gConnectEvent.SERVICE_STARTED),
+        )
+        // While switching, further restart/switch/verify-failed events
+        // are absorbed — the cycle is already in flight.
+        assertEquals(
+            Vpn5gConnectState.SWITCHING_SERVER,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.SWITCHING_SERVER, Vpn5gConnectEvent.VERIFY_FAILED),
         )
     }
 
     @Test
-    fun test_disconnect_and_give_up_always_land_in_idle() {
+    fun test_user_disconnect_always_lands_in_idle() {
         for (from in Vpn5gConnectState.entries) {
             assertEquals(
                 Vpn5gConnectState.IDLE,
                 Vpn5gAutoConnect.transition(from, Vpn5gConnectEvent.USER_DISCONNECT),
                 "USER_DISCONNECT from $from",
             )
+        }
+    }
+
+    @Test
+    fun test_give_up_lands_in_failed_except_idle_and_connected() {
+        // v1.1.5 §2: giving up after a failed connect shows the precise
+        // error (FAILED) instead of silently returning to IDLE. Only a
+        // clean stop (CONNECTED — e.g. the 30-minute timer) and the
+        // already-idle state stay IDLE.
+        for (from in Vpn5gConnectState.entries) {
+            val expected = when (from) {
+                Vpn5gConnectState.IDLE -> Vpn5gConnectState.IDLE
+                Vpn5gConnectState.CONNECTED -> Vpn5gConnectState.IDLE
+                Vpn5gConnectState.FAILED -> Vpn5gConnectState.FAILED
+                else -> Vpn5gConnectState.FAILED
+            }
             assertEquals(
-                Vpn5gConnectState.IDLE,
+                expected,
                 Vpn5gAutoConnect.transition(from, Vpn5gConnectEvent.GIVE_UP),
                 "GIVE_UP from $from",
             )
         }
+    }
+
+    @Test
+    fun test_failed_retries_from_start() {
+        assertEquals(
+            Vpn5gConnectState.CHECKING_INTERNET,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.FAILED, Vpn5gConnectEvent.START),
+        )
+        // Other events while failed are no-ops until the user retries.
+        assertEquals(
+            Vpn5gConnectState.FAILED,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.FAILED, Vpn5gConnectEvent.SERVER_FOUND),
+        )
+        assertEquals(
+            Vpn5gConnectState.FAILED,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.FAILED, Vpn5gConnectEvent.VERIFIED),
+        )
+    }
+
+    @Test
+    fun test_tunnel_ready_moves_to_verifying() {
+        assertEquals(
+            Vpn5gConnectState.VERIFYING_TUNNEL,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.CREATING_TUNNEL, Vpn5gConnectEvent.TUNNEL_READY),
+        )
+        // Repeated ready events while verifying are idempotent.
+        assertEquals(
+            Vpn5gConnectState.VERIFYING_TUNNEL,
+            Vpn5gAutoConnect.transition(Vpn5gConnectState.VERIFYING_TUNNEL, Vpn5gConnectEvent.TUNNEL_READY),
+        )
     }
 
     @Test

@@ -9,6 +9,7 @@ import com.v2ray.ang.R
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthConfig
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthService
 import com.v2ray.ang.handler.vpn5g.Vpn5gEmailPolicy
+import com.v2ray.ang.handler.vpn5g.Vpn5gOtpPolicy
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.AppConfig
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +35,10 @@ data class Vpn5gAuthUiState(
     val signedInEmail: String? = null,
     /** False until a Supabase project is configured (see Vpn5gAuthConfig). */
     val backendConfigured: Boolean = Vpn5gAuthConfig.isConfigured(),
+    /** Epoch millis of the last accepted code send (resend cooldown). */
+    val lastCodeSentMs: Long = 0L,
+    /** Wrong-code tries in this session (lockout after the limit). */
+    val wrongCodeAttempts: Int = 0,
 )
 
 /**
@@ -63,6 +68,7 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
                 emailErrorRes = null,
                 codeErrorRes = null,
                 errorRes = null,
+                wrongCodeAttempts = 0,
             )
         }
     }
@@ -111,7 +117,12 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
             }
             when (result) {
                 Vpn5gAuthService.AuthResult.CodeSent ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.CODE_SENT) }
+                    _uiState.update {
+                        it.copy(
+                            phase = Vpn5gAuthPhase.CODE_SENT,
+                            lastCodeSentMs = System.currentTimeMillis(),
+                        )
+                    }
                 Vpn5gAuthService.AuthResult.NotConfigured ->
                     _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_coming_soon) }
                 is Vpn5gAuthService.AuthResult.Error ->
@@ -122,6 +133,21 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
                     }
             }
         }
+    }
+
+    /**
+     * Resend the code (v1.1.5 §7): allowed only after the 60-second
+     * cooldown (Supabase rate-limits faster resends). The screen disables
+     * the button while cooling down; this is the second guard.
+     */
+    fun resendCode() {
+        if (!Vpn5gOtpPolicy.canResend(
+                _uiState.value.lastCodeSentMs, System.currentTimeMillis()
+            )
+        ) {
+            return
+        }
+        sendCode()
     }
 
     /** Step 2 of the code flows: verify the 6-digit code. */
@@ -136,12 +162,44 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
             when (val result = Vpn5gAuthService.verifyOtp(state.email.trim(), state.code)) {
                 is Vpn5gAuthService.AuthResult.SignedIn ->
                     _uiState.update {
-                        it.copy(phase = Vpn5gAuthPhase.DONE, signedInEmail = result.session.email)
+                        it.copy(
+                            phase = Vpn5gAuthPhase.DONE,
+                            signedInEmail = result.session.email,
+                            wrongCodeAttempts = 0,
+                        )
                     }
                 Vpn5gAuthService.AuthResult.NotConfigured ->
                     _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_coming_soon) }
-                is Vpn5gAuthService.AuthResult.Error ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = mapError(result.message)) }
+                is Vpn5gAuthService.AuthResult.Error -> {
+                    // A wrong or expired code counts against the session
+                    // limit (v1.1.5 §7): after the limit the user must
+                    // take a fresh code instead of guessing forever.
+                    val errorRes = mapError(result.message)
+                    _uiState.update {
+                        if (result.message == "code_wrong_or_expired") {
+                            val attempts = it.wrongCodeAttempts + 1
+                            if (Vpn5gOtpPolicy.isLockedOut(attempts)) {
+                                it.copy(
+                                    phase = Vpn5gAuthPhase.ERROR,
+                                    errorRes = R.string.vpn5g_auth_code_locked,
+                                    wrongCodeAttempts = 0,
+                                    code = "",
+                                )
+                            } else {
+                                it.copy(
+                                    phase = Vpn5gAuthPhase.ERROR,
+                                    errorRes = errorRes,
+                                    wrongCodeAttempts = attempts,
+                                )
+                            }
+                        } else {
+                            it.copy(
+                                phase = Vpn5gAuthPhase.ERROR,
+                                errorRes = errorRes,
+                            )
+                        }
+                    }
+                }
                 else ->
                     _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_generic_error) }
             }

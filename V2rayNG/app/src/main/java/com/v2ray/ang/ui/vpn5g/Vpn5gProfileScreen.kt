@@ -58,6 +58,11 @@ fun Vpn5gProfileScreen(
     onOpenUrl: (String) -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
+    // Section expansion is transient presentation state only (v1.1.5
+    // §4). Both sections start open, as before; the user can collapse
+    // either one.
+    var accountExpanded by remember { mutableStateOf(true) }
+    var subscriptionExpanded by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) { entered = true }
 
     Column(
@@ -80,16 +85,13 @@ fun Vpn5gProfileScreen(
             )
         }
 
-        // Account.
+        // Account (expandable, v1.1.5 §4).
         Vpn5gStaggeredItem(index = 2, visible = entered) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = stringResource(R.string.vpn5g_profile_account),
-                    color = Vpn5gOnDark,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(4.dp))
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_profile_account),
+                expanded = accountExpanded,
+                onToggleExpand = { accountExpanded = !accountExpanded },
+            ) {
                 if (state.signedInEmail.isNullOrBlank()) {
                     Text(
                         text = stringResource(R.string.vpn5g_profile_not_signed_in),
@@ -126,15 +128,13 @@ fun Vpn5gProfileScreen(
         }
 
         // Subscription remaining (remote values only; never invented).
+        // Expandable (v1.1.5 §4).
         Vpn5gStaggeredItem(index = 3, visible = entered) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = stringResource(R.string.vpn5g_subscription_title),
-                    color = Vpn5gOnDark,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(4.dp))
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_subscription_title),
+                expanded = subscriptionExpanded,
+                onToggleExpand = { subscriptionExpanded = !subscriptionExpanded },
+            ) {
                 val status = state.subscriptionStatus
                 if (status == null) {
                     Text(
@@ -176,23 +176,26 @@ fun Vpn5gProfileScreen(
             }
         }
 
-        // About links.
+        // About links (v1.1.5 §6): exactly three buttons, exactly these
+        // names, in this order — no extra text, address or description
+        // under them. The version lines below are app info, not link
+        // descriptions.
         Vpn5gStaggeredItem(index = 4, visible = entered) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Spacer(Modifier.height(8.dp))
                 // Channel / Bot / Support as neomorphism buttons (v1.1.2).
                 NeuLinkButton(
-                    label = stringResource(R.string.vpn5g_about_channel),
+                    label = stringResource(R.string.vpn5g_link_channel),
                     onClick = { onOpenUrl(CHANNEL_URL) },
                 )
                 Spacer(Modifier.height(12.dp))
                 NeuLinkButton(
-                    label = stringResource(R.string.vpn5g_about_bot),
+                    label = stringResource(R.string.vpn5g_link_bot),
                     onClick = { onOpenUrl(BOT_URL) },
                 )
                 Spacer(Modifier.height(12.dp))
                 NeuLinkButton(
-                    label = stringResource(R.string.vpn5g_about_support),
+                    label = stringResource(R.string.vpn5g_link_support),
                     onClick = { onOpenUrl(SUPPORT_URL) },
                 )
                 Spacer(Modifier.height(8.dp))

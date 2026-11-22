@@ -151,16 +151,22 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 enum class Vpn5gDestination {
-    HOME, PREMIUM, BROWSER, ME, AUTH
+    HOME, PREMIUM, GUIDE, ME, AUTH
 }
 
 /** Server-list tabs on the home screen (X-VPN server-list style). */
 enum class Vpn5gServerTab { FREE, ALL, SPECIAL }
 
 /** Post-connect tunnel state. The UI must never show a false "connected". */
-enum class Vpn5gTunnelState { IDLE, VERIFYING, VERIFIED, FAILED, UNKNOWN }
+enum class Vpn5gTunnelState { IDLE, VERIFYING, VERIFIED, FAILED, UNKNOWN, SWITCHING }
 
 enum class Vpn5gPromoStatus { IDLE, VALID, UNKNOWN_CODE, EXHAUSTED, ALREADY_REDEEMED, INVALID }
+
+/** A manually picked server that turned out unusable (v1.1.5 §3). */
+data class Vpn5gManualFailure(
+    val serverName: String,
+    val reasonText: String,
+)
 
 data class Vpn5gHomeUiState(
     val isLoading: Boolean = true,
@@ -168,6 +174,14 @@ data class Vpn5gHomeUiState(
     val isRunning: Boolean = false,
     /** One-button connect state (v1.1.4 §1): the home text comes from here. */
     val connectState: Vpn5gConnectState = Vpn5gConnectState.IDLE,
+    /** Auto pick vs the user's manual pick (v1.1.5 §3). */
+    val connectMode: Vpn5gConnectMode = Vpn5gConnectMode.AUTO,
+    /** GUID of the manually picked free server; null in auto mode. */
+    val manualGuid: String? = null,
+    /** The manual pick failed: precise reason + return-to-auto offer. */
+    val manualServerFailed: Vpn5gManualFailure? = null,
+    /** Precise failure reason for the FAILED state; null otherwise. */
+    val lastError: String? = null,
     val offline: Boolean = false,
     val notice: String? = null,
     val countries: List<Vpn5gCountryUi> = emptyList(),
@@ -246,6 +260,16 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     private var verifyAttempts = 0
     private var tunnelFailedStop = false
     private var baselineIp: String? = null
+    /**
+     * True while the verification loop's own failover restart is in flight
+     * (v1.1.5 §2 root fix): the daemon stop that belongs to that restart
+     * must not cancel the waiting verification job or trigger the drop
+     * detector — the job owns the restart and waits for the service to
+     * come back with the next server. Written by the verify job, read on
+     * the broadcast (main) thread.
+     */
+    @Volatile
+    private var failoverRestartInProgress = false
 
     // Auto-failover on an unexpected drop (v1.1): when the service stops
     // without the user asking, without the 30-minute timer ending, and
@@ -335,6 +359,21 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
             refreshSelection()
             enrichCountries()
+        }
+
+        // Restore the manual server pick (v1.1.5 §3): the choice survives
+        // restarts; the pick is re-validated on every connect, so a stale
+        // stored GUID can never connect to a dead server.
+        val savedManualGuid = MmkvManager.decodeSettingsString(
+            Vpn5gConstants.KEY_MANUAL_SERVER_GUID
+        )?.takeIf { it.isNotBlank() }
+        if (savedManualGuid != null) {
+            _uiState.update {
+                it.copy(
+                    connectMode = Vpn5gConnectMode.MANUAL,
+                    manualGuid = savedManualGuid,
+                )
+            }
         }
 
         // Auto-refresh on entry (and every 5 minutes while open).
@@ -476,22 +515,120 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * One-button automatic connect (v1.1.4 §1): real internet check →
-     * pick the fastest free server (or the tapped one) → apply the
-     * transport MTU profile → hand the GUID to the Activity, which
-     * starts the service. Every failure lands in RETRYING with a short
-     * Persian message, never a technical error. Only one chain runs at
-     * a time; a new tap cancels the previous one.
+     * The display name of a server GUID ("نامشخص" when the GUID is gone
+     * from the list), for precise manual-failure messages.
      */
-    fun beginConnect(preferredGuid: String?) {
+    private fun manualServerName(guid: String? = _uiState.value.manualGuid): String {
+        val app = getApplication<Application>()
+        if (guid.isNullOrBlank()) return app.getString(R.string.vpn5g_country_unknown)
+        val server = _uiState.value.countries.flatMap { it.servers }
+            .firstOrNull { it.guid == guid } ?: return app.getString(R.string.vpn5g_country_unknown)
+        return displayCountryName(server, app.getString(R.string.vpn5g_country_unknown))
+    }
+
+    /**
+     * Pick a free server by hand (v1.1.5 §3): the choice is validated
+     * exactly like the auto pick (free, pinged, not recently failed) and
+     * structurally (the stored profile must still parse), then persisted
+     * for the next connect and made the engine's selected server. A bad
+     * pick is refused with the precise reason and leaves the previous
+     * mode untouched. Returns false when the pick was refused.
+     */
+    fun selectManualServer(guid: String): Boolean {
+        val app = getApplication<Application>()
+        val failed = Vpn5gFailedServers.prune(
+            Vpn5gFailedServers.load(), System.currentTimeMillis()
+        )
+        val resolution = Vpn5gManualServer.resolve(
+            _uiState.value.countries, guid, failed, System.currentTimeMillis()
+        )
+        val profile = resolution.server?.let { MmkvManager.decodeServerConfig(guid) }
+        val structurallyValid = profile != null &&
+            Vpn5gServerValidator.validate(profile).isValid
+        if (resolution.server == null || !structurallyValid) {
+            val reasonRes = when {
+                resolution.server != null -> R.string.vpn5g_manual_invalid
+                resolution.problem == Vpn5gManualServer.Problem.NOT_FREE ->
+                    R.string.vpn5g_manual_not_free
+                resolution.problem == Vpn5gManualServer.Problem.NO_PING ->
+                    R.string.vpn5g_manual_no_ping
+                resolution.problem == Vpn5gManualServer.Problem.FAILED_RECENTLY ->
+                    R.string.vpn5g_manual_failed_recently
+                else -> R.string.vpn5g_manual_not_found
+            }
+            val reason = app.getString(reasonRes)
+            _uiState.update {
+                it.copy(manualServerFailed = Vpn5gManualFailure(manualServerName(guid), reason))
+            }
+            return false
+        }
+        MmkvManager.encodeSettings(Vpn5gConstants.KEY_MANUAL_SERVER_GUID, guid)
+        MmkvManager.setSelectServer(guid)
+        setManualServerState(guid)
+        return true
+    }
+
+    /**
+     * Record a manual pick without validating it: the caller already
+     * chose the server explicitly (a tap while connected) and the
+     * tunnel verification after the switch is the judge.
+     */
+    fun setManualServer(guid: String) {
+        MmkvManager.encodeSettings(Vpn5gConstants.KEY_MANUAL_SERVER_GUID, guid)
+        MmkvManager.setSelectServer(guid)
+        setManualServerState(guid)
+    }
+
+    private fun setManualServerState(guid: String) {
+        _uiState.update {
+            it.copy(
+                connectMode = Vpn5gConnectMode.MANUAL,
+                manualGuid = guid,
+                manualServerFailed = null,
+            )
+        }
+    }
+
+    /** Return to automatic server selection (v1.1.5 §3). */
+    fun selectAutoMode() {
+        MmkvManager.encodeSettings(Vpn5gConstants.KEY_MANUAL_SERVER_GUID, "")
+        _uiState.update {
+            it.copy(
+                connectMode = Vpn5gConnectMode.AUTO,
+                manualGuid = null,
+                manualServerFailed = null,
+            )
+        }
+    }
+
+    fun clearManualFailure() {
+        _uiState.update { it.copy(manualServerFailed = null) }
+    }
+
+    /**
+     * One-button connect (v1.1.4 §1, v1.1.5 §2–§3): real internet check →
+     * resolve the server (the user's manual pick in MANUAL mode, validated
+     * exactly like the auto pick; the fastest free server in AUTO mode) →
+     * apply the transport MTU profile → hand the GUID to the Activity,
+     * which starts the service. A bad manual pick fails fast with the
+     * precise reason and stays Disconnected (FAILED) instead of silently
+     * switching to another server — the user returns to auto explicitly.
+     * Every failure lands in RETRYING (transient) or FAILED (gave up) with
+     * a short Persian message, never a technical error. Only one chain
+     * runs at a time; a new tap cancels the previous one.
+     */
+    fun beginConnect() {
         connectChainJob?.cancel()
         connectChainJob = viewModelScope.launch {
+            userStopRequested = false
             _uiState.update {
                 it.copy(
                     connectState = Vpn5gAutoConnect.transition(
                         it.connectState, Vpn5gConnectEvent.START
                     ),
                     errorMessage = null,
+                    lastError = null,
+                    manualServerFailed = null,
                 )
             }
             val app = getApplication<Application>()
@@ -519,35 +656,89 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // On a first launch the live refresh may still be syncing, so
             // wait briefly for a pickable server instead of failing the
             // tap; the 15-second bound keeps a truly empty list from
-            // hanging the button.
+            // hanging the button. A manual pick that is gone, locked,
+            // unpinged or recently failed fails fast — waiting cannot fix
+            // any of those — while a pick that is merely not synced yet
+            // waits for the list like the auto pick does.
             val deadline = System.currentTimeMillis() + 15_000L
             var guid: String? = null
+            var manualProblem: Vpn5gManualServer.Problem? = null
             while (System.currentTimeMillis() < deadline) {
                 val failed = Vpn5gFailedServers.prune(
                     Vpn5gFailedServers.load(), System.currentTimeMillis()
                 )
-                guid = if (preferredGuid != null) {
-                    // resolveConnectGuid runs after the reset so its
-                    // no-ping switch notice is not cleared.
-                    resolveConnectGuid(preferredGuid)
+                if (_uiState.value.connectMode == Vpn5gConnectMode.MANUAL) {
+                    val resolution = Vpn5gManualServer.resolve(
+                        _uiState.value.countries,
+                        _uiState.value.manualGuid,
+                        failed,
+                        System.currentTimeMillis(),
+                    )
+                    manualProblem = resolution.problem
+                    guid = resolution.server?.guid
+                    if (guid != null) break
+                    // Only a missing server can appear while syncing.
+                    if (manualProblem != Vpn5gManualServer.Problem.NOT_FOUND) break
                 } else {
-                    Vpn5gAutoConnect.pickBestServer(
+                    guid = Vpn5gAutoConnect.pickBestServer(
                         _uiState.value.countries, triedGuids + failed.keys
                     )?.guid
+                    if (guid != null) break
                 }
-                if (guid != null) break
                 delay(500L)
             }
             if (guid == null) {
-                _uiState.update {
-                    it.copy(
-                        connectState = Vpn5gAutoConnect.transition(
-                            it.connectState, Vpn5gConnectEvent.SERVER_MISSING
-                        ),
-                        errorMessage = app.getString(R.string.vpn5g_no_server_selected),
-                    )
+                if (_uiState.value.connectMode == Vpn5gConnectMode.MANUAL) {
+                    val reasonRes = when (manualProblem) {
+                        Vpn5gManualServer.Problem.NOT_FREE -> R.string.vpn5g_manual_not_free
+                        Vpn5gManualServer.Problem.NO_PING -> R.string.vpn5g_manual_no_ping
+                        Vpn5gManualServer.Problem.FAILED_RECENTLY -> R.string.vpn5g_manual_failed_recently
+                        else -> R.string.vpn5g_manual_not_found
+                    }
+                    val reason = app.getString(reasonRes)
+                    val serverName = manualServerName()
+                    _uiState.update {
+                        it.copy(
+                            connectState = Vpn5gAutoConnect.transition(
+                                it.connectState, Vpn5gConnectEvent.GIVE_UP
+                            ),
+                            lastError = reason,
+                            manualServerFailed = Vpn5gManualFailure(serverName, reason),
+                        )
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            connectState = Vpn5gAutoConnect.transition(
+                                it.connectState, Vpn5gConnectEvent.SERVER_MISSING
+                            ),
+                            errorMessage = app.getString(R.string.vpn5g_no_server_selected),
+                        )
+                    }
                 }
                 return@launch
+            }
+            // A manual pick is re-validated structurally before it is
+            // tried, exactly like the auto pipeline validates every config
+            // at sync time — a corrupt stored profile never reaches the
+            // tunnel, and the user gets the precise reason instead.
+            if (_uiState.value.connectMode == Vpn5gConnectMode.MANUAL) {
+                val profile = MmkvManager.decodeServerConfig(guid)
+                if (profile == null ||
+                    !Vpn5gServerValidator.validate(profile).isValid
+                ) {
+                    val reason = app.getString(R.string.vpn5g_manual_invalid)
+                    _uiState.update {
+                        it.copy(
+                            connectState = Vpn5gAutoConnect.transition(
+                                it.connectState, Vpn5gConnectEvent.GIVE_UP
+                            ),
+                            lastError = reason,
+                            manualServerFailed = Vpn5gManualFailure(manualServerName(), reason),
+                        )
+                    }
+                    return@launch
+                }
             }
             _uiState.update {
                 it.copy(
@@ -721,6 +912,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update {
             it.copy(
                 autoFailoverNotice = null,
+                lastError = null,
             )
         }
     }
@@ -753,6 +945,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 connectState = Vpn5gAutoConnect.transition(
                     it.connectState, Vpn5gConnectEvent.USER_DISCONNECT
                 ),
+                lastError = null,
+                manualServerFailed = null,
             )
         }
     }
@@ -841,9 +1035,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // The service started: a connect chain in flight moves to
             // CREATING_TUNNEL. A plain state re-read while already
             // CONNECTED (e.g. Activity resume) leaves the state alone.
+            // A failover/manual-switch restart also lands here, from
+            // SWITCHING_SERVER (v1.1.5 §2).
             val chainState = _uiState.value.connectState
             if (chainState == Vpn5gConnectState.CONNECTING ||
-                chainState == Vpn5gConnectState.RETRYING
+                chainState == Vpn5gConnectState.RETRYING ||
+                chainState == Vpn5gConnectState.SWITCHING_SERVER
             ) {
                 _uiState.update {
                     it.copy(
@@ -864,12 +1061,18 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
         } else {
             Vpn5gTimer.cancelDisconnect(app)
-            verifyJob?.cancel()
-            verifyJob = null
+            // A planned failover restart's own stop must not kill the
+            // verification job that is waiting for the restart (v1.1.5
+            // §2 root fix) — the job owns the stop/start cycle and the
+            // next verify attempt. Every other stop cancels verification.
+            if (!failoverRestartInProgress) {
+                verifyJob?.cancel()
+                verifyJob = null
+            }
             viewModelScope.launch(Dispatchers.IO) {
                 baselineIp = Vpn5gTunnelCheck.publicIpDirect()
             }
-            if (!tunnelFailedStop) {
+            if (!tunnelFailedStop && !failoverRestartInProgress) {
                 _uiState.update {
                     it.copy(
                         tunnelState = Vpn5gTunnelState.IDLE,
@@ -943,10 +1146,26 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      * ping), bounded to [MAX_AUTO_FAILOVER_ATTEMPTS] attempts per session.
      * Servers that failed tunnel verification within the last 6 hours are
      * excluded. Shows a brief notice of the switch; gives up with a
-     * message when no server is left.
+     * message when no server is left. In MANUAL mode the user's pick is
+     * never silently replaced (v1.1.5 §3): a drop ends the session with
+     * the precise reason and a return-to-auto offer instead.
      */
     private fun attemptAutoFailover() {
         val app = getApplication<Application>()
+        if (_uiState.value.connectMode == Vpn5gConnectMode.MANUAL) {
+            autoFailoverPending = false
+            val reason = app.getString(R.string.vpn5g_manual_dropped)
+            _uiState.update {
+                it.copy(
+                    connectState = Vpn5gAutoConnect.transition(
+                        it.connectState, Vpn5gConnectEvent.GIVE_UP
+                    ),
+                    lastError = reason,
+                    manualServerFailed = Vpn5gManualFailure(manualServerName(), reason),
+                )
+            }
+            return
+        }
         if (autoFailoverAttempts >= MAX_AUTO_FAILOVER_ATTEMPTS) {
             autoFailoverPending = false
             _uiState.update {
@@ -954,6 +1173,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     connectState = Vpn5gAutoConnect.transition(
                         it.connectState, Vpn5gConnectEvent.GIVE_UP
                     ),
+                    lastError = app.getString(R.string.vpn5g_autofailover_gave_up),
                     autoFailoverNotice = app.getString(
                         R.string.vpn5g_autofailover_gave_up
                     ),
@@ -982,6 +1202,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     connectState = Vpn5gAutoConnect.transition(
                         it.connectState, Vpn5gConnectEvent.GIVE_UP
                     ),
+                    lastError = app.getString(R.string.vpn5g_autofailover_gave_up),
                     autoFailoverNotice = app.getString(
                         R.string.vpn5g_autofailover_gave_up
                     ),
@@ -1016,15 +1237,31 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Post-connect verification loop. After the daemon reports running, the
-     * exit IP is fetched through the tunnel and compared with the baseline:
-     * a failed fetch or an unchanged exit IP means the server does not
-     * tunnel, and the next best free server is tried (bounded attempts).
-     * A server that fails verification is never left showing "connected".
+     * Post-connect verification loop (v1.1.4 §1, v1.1.5 §2 root fix).
+     * After the daemon reports running, the exit IP is fetched through
+     * the tunnel and compared with the baseline: a failed fetch or an
+     * unchanged exit IP means the server does not tunnel.
+     *
+     * Root fix for the 1.1.4 failover: starting a new server while the old
+     * core is still running does NOT switch servers — CoreServiceManager
+     * refuses a second core (`startCoreLoop` returns false while running)
+     * and CoreVpnService then stops the service entirely. So a failover
+     * never starts the next server directly; it asks the Activity for a
+     * clean restart-or-start (the daemon's MSG_STATE_RESTART path stops
+     * the old core first, waits, then starts the next server — exactly
+     * one active core, no stale TUN or sockets). This job waits for that
+     * stop/start cycle instead of dying on it, and the 6-hour failed
+     * store keeps the dead server out of the picker.
+     *
+     * In MANUAL mode a failed manual server is never silently replaced:
+     * the chain stops with the precise reason and offers a return to
+     * auto. A server that fails verification is never left showing
+     * "connected".
      */
     private fun startTunnelVerification() {
         verifyJob?.cancel()
         verifyJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
             // verifyAttempts is a session field, not a local: a failover
             // restart may cancel and recreate this job, and the bound must
             // still hold for the whole session.
@@ -1033,7 +1270,13 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 if (!_uiState.value.isRunning) return@launch
                 val guid = MmkvManager.getSelectServer() ?: return@launch
                 _uiState.update {
-                    it.copy(tunnelState = Vpn5gTunnelState.VERIFYING, tunnelMessage = null)
+                    it.copy(
+                        connectState = Vpn5gAutoConnect.transition(
+                            it.connectState, Vpn5gConnectEvent.TUNNEL_READY
+                        ),
+                        tunnelState = Vpn5gTunnelState.VERIFYING,
+                        tunnelMessage = null,
+                    )
                 }
                 val result = Vpn5gTunnelCheck.verify(baselineIp)
                 when (result.verdict) {
@@ -1073,6 +1316,38 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                                 failed, guid, System.currentTimeMillis()
                             )
                         )
+                        val failedReason = when (result.verdict) {
+                            Vpn5gTunnelCheck.Verdict.UNKNOWN ->
+                                getApplication<Application>()
+                                    .getString(R.string.vpn5g_tunnel_unknown)
+                            else ->
+                                getApplication<Application>()
+                                    .getString(R.string.vpn5g_tunnel_failed)
+                        }
+                        // Manual pick failed: stop here with the precise
+                        // reason and a return-to-auto offer — never switch
+                        // silently to another server (v1.1.5 §3).
+                        if (_uiState.value.connectMode == Vpn5gConnectMode.MANUAL &&
+                            guid == _uiState.value.manualGuid
+                        ) {
+                            tunnelFailedStop = true
+                            LauncherManager.stopService(getApplication())
+                            Vpn5gSounds.playError()
+                            _uiState.update {
+                                it.copy(
+                                    connectState = Vpn5gAutoConnect.transition(
+                                        it.connectState, Vpn5gConnectEvent.GIVE_UP
+                                    ),
+                                    tunnelState = Vpn5gTunnelState.FAILED,
+                                    tunnelMessage = failedReason,
+                                    lastError = failedReason,
+                                    manualServerFailed = Vpn5gManualFailure(
+                                        manualServerName(guid), failedReason
+                                    ),
+                                )
+                            }
+                            return@launch
+                        }
                         val failedCountry = _uiState.value.countries
                             .flatMap { it.servers }
                             .firstOrNull { it.guid == guid }?.country
@@ -1084,14 +1359,16 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                             tunnelFailedStop = true
                             LauncherManager.stopService(getApplication())
                             Vpn5gSounds.playError()
+                            val reason = getApplication<Application>()
+                                .getString(R.string.vpn5g_tunnel_failed_all)
                             _uiState.update {
                                 it.copy(
                                     connectState = Vpn5gAutoConnect.transition(
                                         it.connectState, Vpn5gConnectEvent.GIVE_UP
                                     ),
                                     tunnelState = Vpn5gTunnelState.FAILED,
-                                    tunnelMessage = getApplication<Application>()
-                                        .getString(R.string.vpn5g_tunnel_failed_all),
+                                    tunnelMessage = reason,
+                                    lastError = reason,
                                 )
                             }
                             return@launch
@@ -1099,15 +1376,20 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         _uiState.update {
                             it.copy(
                                 connectState = Vpn5gAutoConnect.transition(
-                                    it.connectState, Vpn5gConnectEvent.VERIFY_FAILED
+                                    it.connectState, Vpn5gConnectEvent.SWITCHING
                                 ),
+                                tunnelState = Vpn5gTunnelState.SWITCHING,
                                 tunnelMessage = getApplication<Application>()
                                     .getString(R.string.vpn5g_tunnel_failed_retry),
                             )
                         }
                         // The restart below is intentional: do not let the
-                        // drop detector treat it as an unexpected disconnect.
+                        // drop detector treat it as an unexpected disconnect,
+                        // and do not let the daemon stop cancel this job —
+                        // the job waits for the restart to come back with
+                        // the next server.
                         suppressAutoFailover = true
+                        failoverRestartInProgress = true
                         _failoverEvent.emit(next.guid)
                         // Switch immediately: wait only until the restart
                         // actually happens (service stops, then runs again
@@ -1126,9 +1408,27 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         ) {
                             delay(200L)
                         }
-                        if (!_uiState.value.isRunning) return@launch
+                        failoverRestartInProgress = false
+                        if (!_uiState.value.isRunning) {
+                            val reason = getApplication<Application>()
+                                .getString(R.string.vpn5g_error_restart_failed)
+                            _uiState.update {
+                                it.copy(
+                                    connectState = Vpn5gAutoConnect.transition(
+                                        it.connectState, Vpn5gConnectEvent.GIVE_UP
+                                    ),
+                                    tunnelState = Vpn5gTunnelState.FAILED,
+                                    tunnelMessage = reason,
+                                    lastError = reason,
+                                )
+                            }
+                            return@launch
+                        }
                     }
                 }
+            }
+            } finally {
+                failoverRestartInProgress = false
             }
         }
     }
@@ -1319,10 +1619,15 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         var lockedCountry by remember { mutableStateOf<String?>(null) }
 
         // Tunnel failover: the ViewModel asks for the next server; the
-        // Activity performs the permission-aware start.
+        // Activity restarts the daemon cleanly onto it (v1.1.5 §2 root
+        // fix). A plain start while the old core is still running does
+        // NOT switch servers — it stops the service — so the failover
+        // goes through the daemon's restart path (stop, wait, start with
+        // the new select server), falling back to the permission-aware
+        // start when the daemon is already stopped.
         LaunchedEffect(Unit) {
             viewModel.failoverEvent.collect { guid ->
-                requestServiceStart(guid)
+                requestServiceRestartOrStart(guid)
             }
         }
 
@@ -1382,6 +1687,10 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onToggleConnect = { toggleConnect() },
                             onServerTap = { guid -> onServerTap(guid) },
                             onAutoConnect = { connectBestServer() },
+                            onSelectManualServer = { guid -> viewModel.selectManualServer(guid) },
+                            onSelectAutoMode = { viewModel.selectAutoMode() },
+                            onClearManualFailure = { viewModel.clearManualFailure() },
+                            onRetryConnect = { viewModel.beginConnect() },
                             onLockedCountryTap = { lockedCountry = it },
                             onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
                             onOpenPremium = { destination = Vpn5gDestination.PREMIUM },
@@ -1403,7 +1712,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                                 }
                             },
                         )
-                        Vpn5gDestination.BROWSER -> Vpn5gGuideScreen(
+                        Vpn5gDestination.GUIDE -> Vpn5gGuideScreen(
                             onBack = { destination = Vpn5gDestination.HOME },
                             onOpenUrl = { url -> Utils.openUri(this@Vpn5gMainActivity, url) },
                         )
@@ -1471,7 +1780,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         val destinations = listOf(
             Vpn5gDestination.HOME to R.string.vpn5g_nav_home,
             Vpn5gDestination.PREMIUM to R.string.vpn5g_nav_premium,
-            Vpn5gDestination.BROWSER to R.string.vpn5g_nav_browser,
+            Vpn5gDestination.GUIDE to R.string.vpn5g_nav_guide,
             Vpn5gDestination.ME to R.string.vpn5g_nav_me,
         )
         val selectedIndex = destinations
@@ -1526,7 +1835,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             when (target) {
                                 Vpn5gDestination.HOME -> Vpn5gHomeIcon(iconColor)
                                 Vpn5gDestination.PREMIUM -> Vpn5gCrownIcon(iconColor)
-                                Vpn5gDestination.BROWSER -> Vpn5gGlobeIcon(iconColor)
+                                Vpn5gDestination.GUIDE -> Vpn5gHelpIcon(iconColor)
                                 Vpn5gDestination.ME -> Vpn5gPersonIcon(iconColor)
                                 Vpn5gDestination.AUTH -> {
                                     // Never a bottom-bar destination.
@@ -1551,16 +1860,19 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             LauncherManager.stopService(this)
             return
         }
-        // One-button automatic connect (v1.1.4 §1): the ViewModel runs
-        // the internet check, picks the server and applies the MTU
-        // profile, then hands the GUID back on connectEvent.
-        viewModel.beginConnect(state.selectedGuid)
+        // One-button connect (v1.1.5 §2–§3): the ViewModel runs the
+        // internet check and resolves the server from the current mode
+        // (manual pick or auto), then hands the GUID back on connectEvent.
+        viewModel.beginConnect()
     }
 
     private fun connectBestServer() {
         val state = viewModel.uiState.value
         if (state.isRunning) return
-        viewModel.beginConnect(null)
+        // The "Auto" row always means automatic selection (v1.1.5 §3):
+        // picking auto again clears any manual pick.
+        viewModel.selectAutoMode()
+        viewModel.beginConnect()
     }
 
     private fun onServerTap(guid: String) {
@@ -1570,14 +1882,36 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             viewModel.resetTunnelAttempts()
             // Resolve after the reset so a no-ping switch notice survives.
             val resolved = viewModel.resolveConnectGuid(guid)
-            // The tunnel is rebuilt and re-verified on the new server.
+            // Tapping a server while connected also makes it the manual
+            // pick (v1.1.5 §3): the tunnel is rebuilt and re-verified on
+            // the new server, and the pick survives the next connect.
+            // The post-switch verification judges the server; the pick
+            // itself is recorded without a pre-validation side effect.
+            viewModel.setManualServer(resolved)
             viewModel.markSwitching()
             viewModel.markRestarting()
             MmkvManager.setSelectServer(resolved)
             LauncherManager.restartService(this)
             return
         }
-        viewModel.beginConnect(guid)
+        // A tap while disconnected picks the server by hand, then the
+        // one-button chain validates and connects to it (v1.1.5 §3).
+        viewModel.selectManualServer(guid)
+        viewModel.beginConnect()
+    }
+
+    /**
+     * Clean server switch for failover (v1.1.5 §2 root fix): when the
+     * daemon is running, restart it onto the new server — the daemon
+     * stops the old core first, waits 500 ms, then starts the new one,
+     * so exactly one core and one TUN ever exist. When the daemon is
+     * already stopped (unexpected drop), fall back to the
+     * permission-aware start. The select server is set first, because
+     * the daemon's restart path starts whatever is selected.
+     */
+    private fun requestServiceRestartOrStart(guid: String) {
+        MmkvManager.setSelectServer(guid)
+        LauncherManager.restartServiceOrStart(this) { requestServiceStart(guid) }
     }
 
     /** Mirrors MainActivity.requestServiceStart exactly. */
@@ -1762,6 +2096,10 @@ fun Vpn5gHomeScreen(
     onToggleConnect: () -> Unit,
     onServerTap: (String) -> Unit,
     onAutoConnect: () -> Unit,
+    onSelectManualServer: (String) -> Boolean,
+    onSelectAutoMode: () -> Unit,
+    onClearManualFailure: () -> Unit,
+    onRetryConnect: () -> Unit,
     onLockedCountryTap: (String) -> Unit,
     onOpenBot: () -> Unit,
     onOpenPremium: () -> Unit,
@@ -1770,9 +2108,15 @@ fun Vpn5gHomeScreen(
     onDismissUpdate: () -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
-    var serversExpanded by rememberSaveable { mutableStateOf(true) }
     var serverTab by rememberSaveable { mutableStateOf(Vpn5gServerTab.FREE) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    // Free-servers picker (v1.1.5 §3): the row expands to a country
+    // list, then to that country's servers. Transient presentation
+    // state only; the pick itself lives in the ViewModel.
+    var freePickerExpanded by rememberSaveable { mutableStateOf(false) }
+    var pickerCountry by rememberSaveable { mutableStateOf<String?>(null) }
+    // Auto-row info panel (v1.1.5 §4). Transient presentation state only.
+    var autoInfoExpanded by rememberSaveable { mutableStateOf(false) }
     // Premium tab (v1.1.2): country groups start collapsed; tapping a
     // country reveals its servers. Transient presentation state only.
     var specialExpanded by remember { mutableStateOf(setOf<String>()) }
@@ -1808,7 +2152,6 @@ fun Vpn5gHomeScreen(
     }
     val freeSections = splitSections.filter { it.isFree }
     val lockedSections = splitSections.filter { !it.isFree }
-    val listExpanded = serversExpanded || searchQuery.isNotBlank()
     val freeCount = freeSections.sumOf { it.servers.size }
     // Free servers always have a measured ping (top-20 selection), so
     // the fastest free server is the best one; never fall back to a
@@ -1818,20 +2161,26 @@ fun Vpn5gHomeScreen(
         .minByOrNull { it.pingMillis }
 
     // The home text comes from the connect state machine only (v1.1.4
-    // §1): "connected" appears only after real traffic passed through
-    // the tunnel — never from the service running or a ping.
+    // §1, v1.1.5 §2): "connected" appears only after real traffic passed
+    // through the tunnel — never from the service running or a ping.
+    // The seven spec states are shown verbatim; FAILED shows the precise
+    // reason in the error card below the button.
     val statusTextRes = when (state.connectState) {
         Vpn5gConnectState.CHECKING_INTERNET -> R.string.vpn5g_connect_checking_internet
         Vpn5gConnectState.FINDING_SERVER -> R.string.vpn5g_connect_finding_server
         Vpn5gConnectState.CONNECTING -> R.string.vpn5g_connect_connecting
         Vpn5gConnectState.CREATING_TUNNEL -> R.string.vpn5g_connect_creating_tunnel
+        Vpn5gConnectState.VERIFYING_TUNNEL -> R.string.vpn5g_connect_verifying_tunnel
+        Vpn5gConnectState.SWITCHING_SERVER -> R.string.vpn5g_connect_switching_server
         Vpn5gConnectState.CONNECTED -> R.string.vpn5g_connected
         Vpn5gConnectState.RETRYING -> R.string.vpn5g_connect_retrying
+        Vpn5gConnectState.FAILED -> R.string.vpn5g_connect_failed
         Vpn5gConnectState.IDLE -> R.string.vpn5g_status_not_connected
     }
     val statusColor = when (state.connectState) {
         Vpn5gConnectState.CONNECTED -> colorPing
-        Vpn5gConnectState.RETRYING -> colorPingRed
+        Vpn5gConnectState.RETRYING,
+        Vpn5gConnectState.FAILED -> colorPingRed
         Vpn5gConnectState.IDLE -> Vpn5gOnDarkMuted
         else -> Vpn5gCyan
     }
@@ -2038,6 +2387,44 @@ fun Vpn5gHomeScreen(
                 }
             }
 
+            // Connection failed (v1.1.5 §2): the precise reason, still
+            // Disconnected, with a retry. The card only appears in the
+            // FAILED state, when lastError is set.
+            if (state.connectState == Vpn5gConnectState.FAILED) {
+                item(key = "failed_card") {
+                    Vpn5gErrorCard(
+                        title = stringResource(R.string.vpn5g_connect_failed),
+                        body = state.lastError
+                            ?: stringResource(R.string.vpn5g_start_failed),
+                        primaryLabel = stringResource(R.string.vpn5g_retry),
+                        onPrimaryClick = onRetryConnect,
+                        secondaryLabel = null,
+                        onSecondaryClick = null,
+                    )
+                }
+            }
+
+            // Manual pick failed (v1.1.5 §3): the precise reason for the
+            // picked server, with a return-to-auto action. The pick is
+            // never silently replaced.
+            state.manualServerFailed?.let { failure ->
+                item(key = "manual_failed_card") {
+                    Vpn5gErrorCard(
+                        title = stringResource(
+                            R.string.vpn5g_manual_failed_title, failure.serverName
+                        ),
+                        body = failure.reasonText,
+                        primaryLabel = stringResource(R.string.vpn5g_manual_back_to_auto),
+                        onPrimaryClick = {
+                            onSelectAutoMode()
+                            onClearManualFailure()
+                        },
+                        secondaryLabel = stringResource(R.string.vpn5g_close),
+                        onSecondaryClick = onClearManualFailure,
+                    )
+                }
+            }
+
             state.notice?.let { notice ->
                 item {
                     Text(
@@ -2090,88 +2477,248 @@ fun Vpn5gHomeScreen(
                 }
             }
 
-            // "Free Servers" row (X-VPN style): expands/collapses the list.
+            // "Free Servers" picker (v1.1.5 §3): a real dropdown — tap
+            // the row for the country list (flag + server count + best
+            // ping), tap a country for its servers with health + real
+            // ping, tap a server to pick it by hand. The pick is
+            // persisted and validated exactly like the auto pick; a bad
+            // pick is refused with the precise reason, never silently
+            // replaced. The list below (tabs + sections) is untouched.
             if (freeSections.isNotEmpty() && serverTab != Vpn5gServerTab.SPECIAL) {
                 item(key = "free_servers_row") {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Vpn5gOnDark.copy(alpha = 0.06f))
-                            .clickable(
-                                role = Role.Button,
-                                onClickLabel = stringResource(R.string.vpn5g_free_servers),
-                            ) { serversExpanded = !serversExpanded }
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                    val manualServer = state.manualGuid?.let { guid ->
+                        freeSections.flatMap { it.servers }
+                            .firstOrNull { it.guid == guid }
+                    }
+                    val manualSubtitle =
+                        if (state.connectMode == Vpn5gConnectMode.MANUAL && manualServer != null) {
+                            stringResource(R.string.vpn5g_manual_label) + ": " +
+                                manualServer.flag + " " + displayCountryName(
+                                manualServer,
+                                stringResource(R.string.vpn5g_country_unknown),
+                            ) + " — " + stringResource(
+                                R.string.vpn5g_ping_ms, manualServer.pingMillis
+                            )
+                        } else {
+                            null
+                        }
+                    Vpn5gExpandableSection(
+                        title = stringResource(R.string.vpn5g_free_servers),
+                        subtitle = manualSubtitle,
+                        badge = stringResource(R.string.vpn5g_servers_count, freeCount),
+                        leading = { Vpn5gBoltIcon(color = Vpn5gCyan, size = 26.dp) },
+                        expanded = freePickerExpanded,
+                        onToggleExpand = {
+                            freePickerExpanded = !freePickerExpanded
+                            if (!freePickerExpanded) pickerCountry = null
+                        },
                     ) {
-                        Vpn5gBoltIcon(color = Vpn5gCyan, size = 26.dp)
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_free_servers),
-                            color = Vpn5gOnDark,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = stringResource(R.string.vpn5g_servers_count, freeCount),
-                            color = Vpn5gOnDarkMuted,
-                            fontSize = 13.sp,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Vpn5gChevronIcon(
-                            color = Vpn5gOnDarkMuted,
-                        )
+                        if (pickerCountry == null) {
+                            freeSections.forEach { section ->
+                                val bestPing = section.servers
+                                    .filter { it.pingMillis > 0 }
+                                    .minOfOrNull { it.pingMillis }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable(
+                                            role = Role.Button,
+                                            onClickLabel = section.label,
+                                        ) { pickerCountry = section.label }
+                                        .padding(vertical = 10.dp),
+                                ) {
+                                    Text(
+                                        text = section.label,
+                                        color = Vpn5gOnDark,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Text(
+                                        text = stringResource(
+                                            R.string.vpn5g_servers_count,
+                                            section.servers.size,
+                                        ),
+                                        color = Vpn5gOnDarkMuted,
+                                        fontSize = 13.sp,
+                                    )
+                                    if (bestPing != null) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = stringResource(
+                                                R.string.vpn5g_ping_ms, bestPing
+                                            ),
+                                            color = colorPing,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Vpn5gChevronIcon(color = Vpn5gOnDarkMuted)
+                                }
+                            }
+                        } else {
+                            val pickedSection = freeSections
+                                .firstOrNull { it.label == pickerCountry }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable(
+                                        role = Role.Button,
+                                        onClickLabel = stringResource(
+                                            R.string.vpn5g_picker_back
+                                        ),
+                                    ) { pickerCountry = null }
+                                    .padding(vertical = 10.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.vpn5g_picker_back),
+                                    color = Vpn5gAccentLight,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                            pickedSection?.servers?.forEach { server ->
+                                val selected = server.guid == state.manualGuid
+                                val hasPing = server.pingMillis > 0
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (selected) Vpn5gAccent.copy(alpha = 0.35f)
+                                            else Color.Transparent
+                                        )
+                                        .clickable(
+                                            enabled = hasPing,
+                                            role = Role.Button,
+                                            onClickLabel = displayCountryName(
+                                                server,
+                                                stringResource(
+                                                    R.string.vpn5g_country_unknown
+                                                ),
+                                            ),
+                                        ) {
+                                            if (onSelectManualServer(server.guid)) {
+                                                freePickerExpanded = false
+                                                pickerCountry = null
+                                            }
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 10.dp),
+                                ) {
+                                    Text(
+                                        text = server.flag,
+                                        fontSize = 22.sp,
+                                        modifier = Modifier.padding(end = 12.dp),
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = displayCountryName(
+                                                server,
+                                                stringResource(
+                                                    R.string.vpn5g_country_unknown
+                                                ),
+                                            ),
+                                            color = Vpn5gOnDark,
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                        Text(
+                                            text = if (hasPing) {
+                                                stringResource(
+                                                    R.string.vpn5g_picker_healthy
+                                                )
+                                            } else {
+                                                stringResource(
+                                                    R.string.vpn5g_picker_no_ping
+                                                )
+                                            },
+                                            color = if (hasPing) {
+                                                colorPing
+                                            } else {
+                                                Vpn5gOnDarkMuted
+                                            },
+                                            fontSize = 13.sp,
+                                        )
+                                    }
+                                    Text(
+                                        text = if (hasPing) {
+                                            stringResource(
+                                                R.string.vpn5g_ping_ms,
+                                                server.pingMillis,
+                                            )
+                                        } else {
+                                            "—"
+                                        },
+                                        color = colorPing,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    if (selected) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Vpn5gCheckIcon(color = Vpn5gCyan, size = 20.dp)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
 
-            // "Auto" row: the best free server, one tap to connect.
+            // "Auto" row (v1.1.5 §3–§4): the best free server, one tap to
+            // connect — it works independently of any manual pick (tapping
+            // it clears the manual pick first). The chevron opens an info
+            // panel explaining auto mode and, while a manual pick is
+            // active, offers the return to auto.
             if (bestServer != null && serverTab != Vpn5gServerTab.SPECIAL) {
                 item(key = "auto_row") {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Vpn5gOnDark.copy(alpha = 0.06f))
-                            .clickable(
-                                role = Role.Button,
-                                onClickLabel = stringResource(R.string.vpn5g_auto_connect),
-                            ) { onAutoConnect() }
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                    Vpn5gExpandableSection(
+                        title = stringResource(R.string.vpn5g_auto_server),
+                        subtitle = bestServer.flag + " " + displayCountryName(
+                            bestServer,
+                            stringResource(R.string.vpn5g_country_unknown),
+                        ),
+                        badge = if (bestServer.pingMillis > 0L) {
+                            stringResource(R.string.vpn5g_ping_ms, bestServer.pingMillis)
+                        } else {
+                            "—"
+                        },
+                        leading = { Vpn5gRoutesIcon(color = Vpn5gCyan, size = 26.dp) },
+                        expanded = autoInfoExpanded,
+                        onToggleExpand = { autoInfoExpanded = !autoInfoExpanded },
+                        onHeaderClick = onAutoConnect,
                     ) {
-                        Vpn5gRoutesIcon(color = Vpn5gCyan, size = 26.dp)
-                        Spacer(Modifier.width(12.dp))
                         Text(
-                            text = stringResource(R.string.vpn5g_auto_server),
-                            color = Vpn5gOnDark,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = bestServer.flag + " " + displayCountryName(
-                                bestServer,
-                                stringResource(R.string.vpn5g_country_unknown),
-                            ),
+                            text = stringResource(R.string.vpn5g_auto_info_body),
                             color = Vpn5gOnDarkMuted,
                             fontSize = 14.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
                         )
-                        Text(
-                            text = if (bestServer.pingMillis > 0L) {
-                                stringResource(R.string.vpn5g_ping_ms, bestServer.pingMillis)
-                            } else {
-                                "—"
-                            },
-                            color = colorPing,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
+                        if (state.connectMode == Vpn5gConnectMode.MANUAL) {
+                            Spacer(Modifier.height(12.dp))
+                            Button(
+                                onClick = {
+                                    onSelectAutoMode()
+                                    autoInfoExpanded = false
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Vpn5gAccent,
+                                    contentColor = Color.White,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.vpn5g_manual_back_to_auto
+                                    ),
+                                    fontSize = 15.sp,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -2337,56 +2884,56 @@ fun Vpn5gHomeScreen(
                 }
             }
 
-            if (listExpanded) {
-                // Free tab (v1.1.2): no server rows at all — only the
-                // free-service card and the auto row above.
-                val ordered = when (serverTab) {
-                    Vpn5gServerTab.FREE -> emptyList()
-                    Vpn5gServerTab.ALL -> freeSections.map { it to false } +
-                        lockedSections.map { it to true }
-                    Vpn5gServerTab.SPECIAL -> lockedSections.map { it to true }
+            // Free tab (v1.1.2): no server rows at all — only the
+            // free-service picker and the auto row above. The list is
+            // always shown on the other tabs (v1.1.5 §3: the free-servers
+            // row is now the picker, not a list toggle).
+            val ordered = when (serverTab) {
+                Vpn5gServerTab.FREE -> emptyList()
+                Vpn5gServerTab.ALL -> freeSections.map { it to false } +
+                    lockedSections.map { it to true }
+                Vpn5gServerTab.SPECIAL -> lockedSections.map { it to true }
+            }
+            var promoShown = false
+            ordered.forEach { (country, locked) ->
+                if (serverTab == Vpn5gServerTab.ALL && locked && !promoShown) {
+                    item(key = "bot_promo") {
+                        Vpn5gBotPromoCard(onOpenBot = onOpenBot)
+                    }
+                    promoShown = true
                 }
-                var promoShown = false
-                ordered.forEach { (country, locked) ->
-                    if (serverTab == Vpn5gServerTab.ALL && locked && !promoShown) {
-                        item(key = "bot_promo") {
-                            Vpn5gBotPromoCard(onOpenBot = onOpenBot)
-                        }
-                        promoShown = true
-                    }
-                    item(key = "country_${if (locked) "locked" else "free"}_${country.label}") {
-                        // Premium tab (v1.1.2): fast servers grouped by
-                        // country; tapping a country reveals its servers.
-                        val expandable = serverTab == Vpn5gServerTab.SPECIAL
-                        Vpn5gCountrySection(
-                            country = country,
-                            onServerTap = if (locked) {
-                                {}
-                            } else {
-                                onServerTap
-                            },
-                            onLockedTap = if (locked) {
-                                { onLockedCountryTap(country.label) }
-                            } else {
-                                null
-                            },
-                            expandable = expandable,
-                            expanded = !expandable ||
-                                country.label in specialExpanded,
-                            onToggleExpand = if (expandable) {
-                                {
-                                    specialExpanded =
-                                        if (country.label in specialExpanded) {
-                                            specialExpanded - country.label
-                                        } else {
-                                            specialExpanded + country.label
-                                        }
-                                }
-                            } else {
-                                null
-                            },
-                        )
-                    }
+                item(key = "country_${if (locked) "locked" else "free"}_${country.label}") {
+                    // Premium tab (v1.1.2): fast servers grouped by
+                    // country; tapping a country reveals its servers.
+                    val expandable = serverTab == Vpn5gServerTab.SPECIAL
+                    Vpn5gCountrySection(
+                        country = country,
+                        onServerTap = if (locked) {
+                            {}
+                        } else {
+                            onServerTap
+                        },
+                        onLockedTap = if (locked) {
+                            { onLockedCountryTap(country.label) }
+                        } else {
+                            null
+                        },
+                        expandable = expandable,
+                        expanded = !expandable ||
+                            country.label in specialExpanded,
+                        onToggleExpand = if (expandable) {
+                            {
+                                specialExpanded =
+                                    if (country.label in specialExpanded) {
+                                        specialExpanded - country.label
+                                    } else {
+                                        specialExpanded + country.label
+                                    }
+                            }
+                        } else {
+                            null
+                        },
+                    )
                 }
             }
 
@@ -2410,6 +2957,71 @@ private fun displayCountryName(server: Vpn5gServerUi, unknown: String): String {
     return server.countryNameFa.ifBlank { server.country }.ifBlank { unknown }
 }
 
+/**
+ * Failure card (v1.1.5 §2–§3): the precise reason in plain words, never
+ * a technical error, with a primary action (retry / return to auto) and
+ * an optional secondary action (dismiss). Shown only in the FAILED state
+ * or when the manual pick failed — the app stays Disconnected behind it.
+ */
+@Composable
+private fun Vpn5gErrorCard(
+    title: String,
+    body: String,
+    primaryLabel: String,
+    onPrimaryClick: () -> Unit,
+    secondaryLabel: String?,
+    onSecondaryClick: (() -> Unit)?,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(colorPingRed.copy(alpha = 0.15f))
+            .padding(14.dp),
+    ) {
+        Text(
+            text = title,
+            color = Vpn5gOnDark,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = body,
+            color = Vpn5gOnDark,
+            fontSize = 14.sp,
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Button(
+                onClick = onPrimaryClick,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Vpn5gAccent,
+                    contentColor = Color.White,
+                ),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(text = primaryLabel, fontSize = 15.sp)
+            }
+            if (secondaryLabel != null && onSecondaryClick != null) {
+                TextButton(
+                    onClick = onSecondaryClick,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = secondaryLabel,
+                        color = Vpn5gAccentLight,
+                        fontSize = 15.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** Big circular power button with a cyan ring (X-VPN style). */
 @Composable
 private fun Vpn5gPowerButton(
@@ -2417,14 +3029,19 @@ private fun Vpn5gPowerButton(
     remainingFraction: Float?,
     onClick: () -> Unit,
 ) {
-    // Derived from the connect state machine only (v1.1.4 §1): the ring
-    // spins while a tunnel is being created, shows the session arc only
-    // once the tunnel is verified, and turns red while retrying.
+    // Derived from the connect state machine only (v1.1.4 §1, v1.1.5
+    // §2): the ring spins while a tunnel is being created or verified
+    // or while the chain is switching servers, shows the session arc
+    // only once the tunnel is verified, and turns red while retrying or
+    // failed.
     val isVerifying = connectState == Vpn5gConnectState.CHECKING_INTERNET ||
         connectState == Vpn5gConnectState.FINDING_SERVER ||
         connectState == Vpn5gConnectState.CONNECTING ||
-        connectState == Vpn5gConnectState.CREATING_TUNNEL
-    val isFailed = connectState == Vpn5gConnectState.RETRYING
+        connectState == Vpn5gConnectState.CREATING_TUNNEL ||
+        connectState == Vpn5gConnectState.VERIFYING_TUNNEL ||
+        connectState == Vpn5gConnectState.SWITCHING_SERVER
+    val isFailed = connectState == Vpn5gConnectState.RETRYING ||
+        connectState == Vpn5gConnectState.FAILED
     val connected = connectState == Vpn5gConnectState.CONNECTED
     val ringColor = when {
         isFailed -> colorPingRed

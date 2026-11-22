@@ -144,6 +144,94 @@ same fixed key as Debug. In-app updater now points at
   multi-device) were NOT run on this server — they need Aref's phone
   and live servers; see the 1.1.4 delivery report for the full list.
 
+## v1.1.5 (2026-11-23, versionCode 7)
+
+- **Root-cause fix — connect never switched to the next server (§2)**:
+  in 1.1.4 the verify-loop failover emitted `startService(newGuid)`
+  while the old core was still running; `CoreServiceManager` refused
+  ("Core already running") and the service then stopped itself, so the
+  VPN died instead of switching and the state stranded in RETRYING.
+  Failover (and the manual switch while running) now goes through the
+  daemon's clean restart path (`LauncherManager.restartServiceOrStart`:
+  stop → 500 ms → start with the new server), and the verify job waits
+  out the stop/start cycle instead of dying on it (`failoverRestartInProgress`
+  guards both the verify-job cancel and the drop detector). The drop
+  detector is unchanged as the second failover path.
+- **Connect state machine (§2)**: 10 states now — IDLE,
+  CHECKING_INTERNET, FINDING_SERVER, CONNECTING, CREATING_TUNNEL,
+  VERIFYING_TUNNEL (new — "checking internet from inside the VPN"),
+  SWITCHING_SERVER (new — failover / manual switch),
+  CONNECTED, RETRYING, FAILED (new). CONNECTED is emitted only from
+  VERIFYING_TUNNEL on VERIFIED (real in-tunnel request + DNS check,
+  unchanged criterion from 1.1.4). GIVE_UP lands in FAILED except from
+  CONNECTED → IDLE (30-minute timer / clean stop never shows an error).
+  A failed connect/retry shows the precise cause and stays
+  Disconnected; bounded retries (3 verification attempts), no infinite
+  loops; failed servers stay excluded for 6h (verified through the new
+  flows — the TTL store from 1.1.4 is now consulted by the manual
+  resolver as well as the auto picker).
+- **Manual server picker (§3)**: the "سرورهای رایگان" row is now a real
+  two-level dropdown — countries with flag + server count + best ping,
+  then that country's free servers with health ("سالم" / "بدون پینگ")
+  and real ping. A tap validates the pick exactly like auto
+  (exists, free, has ping, not failed in the last 6h, structurally
+  valid) and persists it (`KEY_MANUAL_SERVER_GUID`) for the next
+  connect. A bad pick shows the precise reason and offers "بازگشت به
+  خودکار"; a manual pick that fails mid-session ends the session with
+  the reason — it is never silently replaced. The "خودکار" row works
+  independently (one tap connects; its chevron opens an info panel
+  with a return-to-auto action while manual is active). Picking auto
+  again clears the stored manual GUID.
+- **Expandable sections (§4)**: new reusable `Vpn5gExpandableSection`
+  (smooth expand/collapse animation, closable, accessible chevron as
+  its own semantic node) now wraps every option: free servers, auto,
+  subscription status, comparison, plans, payment, promo, account,
+  subscription, guide sections and FAQ. No dead/demo menus — every
+  control works.
+- **Guide tab (§5)**: the bottom-nav "مرورگر" tab (which opened the
+  About screen) is now "راهنما" with a matching help icon
+  (`Vpn5gHelpIcon`). The Guide screen holds all 20 Persian sections
+  from the spec plus a separate FAQ (8 questions, tap to reveal the
+  answer). All text describes only what the app really does — including
+  the honest OTP note that codes are sent by the email service and may
+  be delayed until the SMTP backend is set up.
+- **Me page (§6)**: only three buttons, exactly `VPNCRACKNET` /
+  `VPN5G_IRBOT` / `Aref_5G` in that order, with the real links
+  (channel, bot, support) and no extra text under them. Account and
+  subscription blocks are expandable; version/build date stay in a
+  separate app-info block below the buttons.
+- **Theme (§8)**: dark teal-green/black theme unchanged; big connect
+  button; status text now covers all 10 connect states; dropdown
+  animations smooth; full RTL; Persian font unchanged. Advanced
+  settings stay out of the UI; the engine keeps all capabilities.
+- **OTP states (§7 — Android side only)**: code-sent note + resend
+  button with a 60-second countdown, and a 5-wrong-codes lockout that
+  requires a fresh code (policy in `Vpn5gOtpPolicy`, unit-tested).
+  The backend is NOT done: the Supabase custom-SMTP setup still needs
+  Aref to create the Gmail app password for VPN5G.IRBOT@gmail.com
+  himself — no fake sending was implemented and §7 is not marked
+  complete. See the 1.1.5 delivery report.
+- **Re-audit (§9)**: manifest, cleartext, CA trust, backup, logging,
+  and release signing re-checked against the 1.1.4 list — no new
+  issues; the only findings are pre-existing dead code carried over
+  (`Vpn5gProtocol.kt` + test, `KEY_PROTOCOL_FILTER`, `Vpn5gGlobeIcon`),
+  left untouched as out of scope.
+- **Independence (§10)**: no dependence on any other VPN app — the
+  app still uses only VpnService + its internal Xray engine; config
+  sources and email are the only external services, and a down service
+  produces a precise error, never a fake state.
+- **Tests (§11)**: `Vpn5gAutoConnectTest` updated for the new table
+  (happy path through VERIFYING_TUNNEL, GIVE_UP, SWITCHING, FAILED
+  retry, VERIFIED-only-from-VERIFYING_TUNNEL); new
+  `Vpn5gManualServerTest` (resolve branches) and
+  `Vpn5gOtpPolicyTest` (60 s cooldown + 5-attempt lockout). They run
+  in CI (`testPlaystoreDebugUnitTest` in `build-release.yml`). Device/
+  server tests (real connect, failover, manual pick, DNS leak, IPv4/
+  IPv6, TCP, UDP, QUIC/HTTP3, Wi-Fi, mobile data, handover, screen
+  off, disconnect/reconnect, relaunch, CPU/RAM, multi-device) were
+  NOT run on this server — they need Aref's phone and live servers;
+  see the 1.1.5 delivery report for the full list.
+
 ## Created files
 
 ### New code — `V2rayNG/app/src/main/java/com/v2ray/ang/handler/vpn5g/`

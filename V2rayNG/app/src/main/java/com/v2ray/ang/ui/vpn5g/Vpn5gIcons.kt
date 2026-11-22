@@ -136,6 +136,35 @@ fun Vpn5gGlobeIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier
     }
 }
 
+/** Question mark in a circle, for the Guide tab (v1.1.5 §5). */
+@Composable
+fun Vpn5gHelpIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.09f
+        drawCircle(
+            color = color,
+            radius = w * 0.44f,
+            center = Offset(w * 0.5f, h * 0.5f),
+            style = Stroke(width = stroke),
+        )
+        // Question-mark hook.
+        val hook = Path().apply {
+            moveTo(w * 0.38f, h * 0.36f)
+            cubicTo(w * 0.38f, h * 0.22f, w * 0.62f, h * 0.22f, w * 0.62f, h * 0.34f)
+            cubicTo(w * 0.62f, h * 0.44f, w * 0.52f, h * 0.46f, w * 0.50f, h * 0.54f)
+        }
+        drawPath(hook, color, style = Stroke(width = stroke, cap = StrokeCap.Round))
+        // Dot.
+        drawCircle(
+            color = color,
+            radius = w * 0.055f,
+            center = Offset(w * 0.5f, h * 0.68f),
+        )
+    }
+}
+
 @Composable
 fun Vpn5gRoutesIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier.size(size)) {

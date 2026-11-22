@@ -36,6 +36,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.v2ray.ang.R
+import com.v2ray.ang.handler.vpn5g.Vpn5gOtpPolicy
+import kotlinx.coroutines.delay
 
 /**
  * Registration / login and recovery screens, wired to
@@ -60,6 +62,21 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
 
     var entered by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { entered = true }
+
+    // Resend countdown (v1.1.5 §7): transient presentation state only.
+    // The ViewModel owns the last-send timestamp; the screen only counts
+    // down from it, one second at a time, until a resend is allowed.
+    var resendWaitSeconds by remember { mutableStateOf(0L) }
+    LaunchedEffect(state.lastCodeSentMs, state.phase) {
+        while (true) {
+            val wait = Vpn5gOtpPolicy.resendWaitSeconds(
+                state.lastCodeSentMs, System.currentTimeMillis()
+            )
+            resendWaitSeconds = wait
+            if (wait <= 0L) break
+            delay(1_000L)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -197,8 +214,42 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
             }
         }
 
-        if (state.mode == Vpn5gAuthMode.RECOVER && state.phase == Vpn5gAuthPhase.IDLE) {
+        // Code-sent note + resend (v1.1.5 §7): shown after a code was
+        // sent. The note is honest — the backend accepted the request;
+        // delivery depends on the email service, so it says where to
+        // look when the code does not arrive instead of promising
+        // instant delivery. Resend is limited to once per 60 seconds.
+        if (state.phase == Vpn5gAuthPhase.CODE_SENT || state.phase == Vpn5gAuthPhase.VERIFYING) {
             Vpn5gStaggeredItem(index = 7, visible = entered) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_auth_code_sent),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
+                    )
+                    TextButton(
+                        onClick = { authViewModel.resendCode() },
+                        enabled = !busy && resendWaitSeconds <= 0L,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = if (resendWaitSeconds > 0L) {
+                                stringResource(
+                                    R.string.vpn5g_auth_resend_in, resendWaitSeconds
+                                )
+                            } else {
+                                stringResource(R.string.vpn5g_auth_resend)
+                            },
+                            color = Vpn5gAccentLight,
+                            fontSize = 14.sp,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (state.mode == Vpn5gAuthMode.RECOVER && state.phase == Vpn5gAuthPhase.IDLE) {
+            Vpn5gStaggeredItem(index = 8, visible = entered) {
                 Text(
                     text = stringResource(R.string.vpn5g_auth_recover_body),
                     color = Vpn5gOnDarkMuted,
@@ -208,7 +259,7 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
         }
 
         state.errorRes?.let { errorRes ->
-            Vpn5gStaggeredItem(index = 8, visible = entered) {
+            Vpn5gStaggeredItem(index = 9, visible = entered) {
                 Text(
                     text = stringResource(errorRes),
                     color = Color(0xFFF87171),
@@ -219,7 +270,7 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
         }
 
         // Mode switch links.
-        Vpn5gStaggeredItem(index = 9, visible = entered) {
+        Vpn5gStaggeredItem(index = 10, visible = entered) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (state.mode == Vpn5gAuthMode.LOGIN) {
                     TextButton(

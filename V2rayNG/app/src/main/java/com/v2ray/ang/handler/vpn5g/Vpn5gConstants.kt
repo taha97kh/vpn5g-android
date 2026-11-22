@@ -56,6 +56,8 @@ object Vpn5gConstants {
     const val KEY_AUTH_SESSION_JSON = "vpn5g_auth_session_json"
     /** Redeemed promo codes, stored as a JSON array of code strings. */
     const val KEY_REDEEMED_CODES_JSON = "vpn5g_redeemed_codes_json"
+    /** GUID of the manually picked free server ("" = auto mode, v1.1.5 §3). */
+    const val KEY_MANUAL_SERVER_GUID = "vpn5g_manual_server_guid"
     /** GUIDs of servers whose tunnel check failed in this process run. */
     const val KEY_TUNNEL_FAILED_GUIDS = "vpn5g_tunnel_failed_guids"
     /** GUIDs of servers whose tunnel check failed, kept 6h (v1.1.4 §5). */

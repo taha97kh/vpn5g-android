@@ -75,6 +75,14 @@ fun Vpn5gSubscriptionScreen(
     onOpenPromoBot: () -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
+    // Section expansion is transient presentation state only (v1.1.5
+    // §4). All sections start open, as before, except the long
+    // comparison table, which starts closed.
+    var statusExpanded by remember { mutableStateOf(true) }
+    var comparisonExpanded by remember { mutableStateOf(false) }
+    var plansExpanded by remember { mutableStateOf(true) }
+    var paymentExpanded by remember { mutableStateOf(true) }
+    var promoExpanded by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) { entered = true }
 
     // Plans as published by the bot (valid entries only: id + price + a
@@ -122,13 +130,17 @@ fun Vpn5gSubscriptionScreen(
         }
 
         val status = state.subscriptionStatus
-        if (status == null) {
-            Vpn5gStaggeredItem(index = 1, visible = entered) {
-                Column {
+        Vpn5gStaggeredItem(index = 1, visible = entered) {
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_subscription_title),
+                expanded = statusExpanded,
+                onToggleExpand = { statusExpanded = !statusExpanded },
+            ) {
+                if (status == null) {
                     Text(
                         text = stringResource(R.string.vpn5g_subscription_none),
                         color = Vpn5gOnDark,
-                        fontSize = 17.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                     )
                     Spacer(Modifier.height(4.dp))
@@ -137,17 +149,12 @@ fun Vpn5gSubscriptionScreen(
                         color = Vpn5gOnDarkMuted,
                         fontSize = 14.sp,
                     )
-                }
-            }
-        } else {
-            Vpn5gStaggeredItem(index = 1, visible = entered) {
-                Column {
+                } else {
                     status.plan_name?.let { plan ->
                         Text(
                             text = stringResource(R.string.vpn5g_subscription_plan, plan),
                             color = Vpn5gOnDark,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
                         )
                         Spacer(Modifier.height(8.dp))
                     }
@@ -181,20 +188,11 @@ fun Vpn5gSubscriptionScreen(
 
         // Free vs Premium comparison (counts come from the live list).
         Vpn5gStaggeredItem(index = 2, visible = entered) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Vpn5gOnDark.copy(alpha = 0.06f))
-                    .padding(16.dp)
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_premium_title),
+                expanded = comparisonExpanded,
+                onToggleExpand = { comparisonExpanded = !comparisonExpanded },
             ) {
-                Text(
-                    text = stringResource(R.string.vpn5g_premium_title),
-                    color = Vpn5gOnDark,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(8.dp))
                 Vpn5gCompareRow(
                     feature = "",
                     free = stringResource(R.string.vpn5g_premium_free),
@@ -239,24 +237,19 @@ fun Vpn5gSubscriptionScreen(
 
         // Plans from remote config (never hardcoded). No plans published
         // means no cards — the user buys through the bot instead.
-        if (plans.isEmpty()) {
-            Vpn5gStaggeredItem(index = 3, visible = entered) {
-                Text(
-                    text = stringResource(R.string.vpn5g_premium_plans_none),
-                    color = Vpn5gOnDarkMuted,
-                    fontSize = 14.sp,
-                )
-            }
-        } else {
-            Vpn5gStaggeredItem(index = 3, visible = entered) {
-                Column {
+        Vpn5gStaggeredItem(index = 3, visible = entered) {
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_premium_plans_title),
+                expanded = plansExpanded,
+                onToggleExpand = { plansExpanded = !plansExpanded },
+            ) {
+                if (plans.isEmpty()) {
                     Text(
-                        text = stringResource(R.string.vpn5g_premium_plans_title),
-                        color = Vpn5gOnDark,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
+                        text = stringResource(R.string.vpn5g_premium_plans_none),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
                     )
-                    Spacer(Modifier.height(8.dp))
+                } else {
                     plans.forEach { plan ->
                         Vpn5gPlanCard(
                             plan = plan,
@@ -299,14 +292,11 @@ fun Vpn5gSubscriptionScreen(
         // Payment methods for the selected plan.
         if (showPayment && plans.isNotEmpty()) {
             Vpn5gStaggeredItem(index = 4, visible = entered) {
-                Column {
-                    Text(
-                        text = stringResource(R.string.vpn5g_premium_payment_title),
-                        color = Vpn5gOnDark,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.height(8.dp))
+                Vpn5gExpandableSection(
+                    title = stringResource(R.string.vpn5g_premium_payment_title),
+                    expanded = paymentExpanded,
+                    onToggleExpand = { paymentExpanded = !paymentExpanded },
+                ) {
                     // Direct bank gateway (config-driven). While it is not
                     // configured the row is shown as coming soon and routes
                     // to the bot to complete the purchase manually.
@@ -340,14 +330,11 @@ fun Vpn5gSubscriptionScreen(
         }
 
         Vpn5gStaggeredItem(index = 5, visible = entered) {
-            Column {
-                Text(
-                    text = stringResource(R.string.vpn5g_promo_title),
-                    color = Vpn5gOnDark,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(4.dp))
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_promo_title),
+                expanded = promoExpanded,
+                onToggleExpand = { promoExpanded = !promoExpanded },
+            ) {
                 Text(
                     text = stringResource(R.string.vpn5g_promo_body),
                     color = Vpn5gOnDarkMuted,
