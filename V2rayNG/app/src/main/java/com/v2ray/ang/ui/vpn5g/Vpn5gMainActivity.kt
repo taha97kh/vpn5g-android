@@ -115,6 +115,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gAppUpdate
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthService
 import com.v2ray.ang.handler.vpn5g.Vpn5gAutoConnect
 import com.v2ray.ang.handler.vpn5g.Vpn5gConnectEvent
+import com.v2ray.ang.handler.vpn5g.Vpn5gConnectMode
 import com.v2ray.ang.handler.vpn5g.Vpn5gConnectState
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
@@ -126,10 +127,12 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_TUNNEL_ATTEMPTS
 import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gFailedServers
 import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
+import com.v2ray.ang.handler.vpn5g.Vpn5gManualServer
 import com.v2ray.ang.handler.vpn5g.Vpn5gNetworkProfile
 import com.v2ray.ang.handler.vpn5g.Vpn5gPromoCodes
 import com.v2ray.ang.handler.vpn5g.Vpn5gRemoteConfig
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerUi
+import com.v2ray.ang.handler.vpn5g.Vpn5gServerValidator
 import com.v2ray.ang.handler.vpn5g.Vpn5gSounds
 import com.v2ray.ang.handler.vpn5g.Vpn5gSync
 import com.v2ray.ang.handler.vpn5g.Vpn5gTimer
