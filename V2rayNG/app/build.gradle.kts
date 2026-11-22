@@ -229,6 +229,9 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.coil.compose)
+    // Coil 3 ships no network stack: without this, remote announcement
+    // images (v1.1.5) fail silently and only the text shows.
+    implementation(libs.coil.network.okhttp)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 

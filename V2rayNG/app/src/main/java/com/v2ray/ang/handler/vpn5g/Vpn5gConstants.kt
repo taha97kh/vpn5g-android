@@ -72,11 +72,31 @@ object Vpn5gConstants {
     /** Bundled fallback assets (assets/vpn5g/). */
     const val ASSET_FALLBACK_SERVERS = "vpn5g/fallback_servers.json"
 
-    /** Max servers tried in one auto-failover chain after a tunnel check fails. */
-    const val MAX_TUNNEL_ATTEMPTS = 3
+    /** Max servers tried in one auto-failover chain after a tunnel check fails.
+     * v1.1.5 refinement: a connect attempt must never give up after one
+     * failure — it keeps switching to the next best server until a real
+     * tunnel is verified, or the candidates run out. The bound is 8
+     * servers per chain (each attempt has its own timeouts and the 6h
+     * failed store keeps dead servers out), so the chain always ends:
+     * no infinite loop, worst case ~8 attempts before FAILED. */
+    const val MAX_TUNNEL_ATTEMPTS = 8
 
     /** Max reconnect attempts after an unexpected drop, per session. */
     const val MAX_AUTO_FAILOVER_ATTEMPTS = 2
+
+    /**
+     * Debounce after an unexpected drop before the drop detector fails
+     * over to another server (v1.1.5 refinement: was a fixed 3,000 ms).
+     * Intentional restarts are already excluded by suppressAutoFailover,
+     * so this wait only covers a transient daemon hiccup that recovers
+     * on its own; 800 ms switches servers fast while still letting a
+     * self-recovering service cancel the failover. While waiting, the
+     * UI stays in RETRYING (connecting family) — never Disconnected.
+     */
+    const val DROP_FAILOVER_DEBOUNCE_MS = 800L
+
+    /** Dismiss key of the app announcement the user closed (\"\" = none). */
+    const val KEY_ANNOUNCEMENT_DISMISSED = "vpn5g_announcement_dismissed"
 
     /** Unique WorkManager name for the 30-minute disconnect work. */
     const val DISCONNECT_WORK_NAME = "vpn5g_30min_disconnect"

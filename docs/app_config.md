@@ -33,6 +33,7 @@ valid JSON; the app ignores unknown fields.
 |---|---|---|---|---|
 | `free_countries` | array of strings | no | — | IGNORED since v1.1.1 (kept only so old files still parse). The free tier is now the **50 fastest-pinging configs** after each sync/ping, whichever countries they are in; everything else is premium-locked. |
 | `notice` | string \| null | no | `null` | Short announcement shown at the top of the home screen (e.g. maintenance). `null` or absent hides it. |
+| `announcement` | object \| null | no | `null` | Admin-published app announcement (v1.1.5): a dismissible card on the home screen. `null` or absent hides it. See below. |
 | `config_sources` | array of strings (URLs) | no | `[]` | Extra config sources fetched in addition to the built-in defaults. Each URL must return plain-text config URIs, one per line (`vmess://`, `vless://`, `trojan://`, `ss://`). Duplicates are de-duplicated; a failing source is skipped. |
 | `min_version` | string \| null | no | `null` | Reserved for v2 (minimum app version that may use the configs). v1 reads it but does not enforce it. |
 | `subscription_status` | object \| null | no | `null` | The subscription status shown on the Subscription screen. `null` shows "no subscription". See below. |
@@ -54,6 +55,24 @@ The app displays exactly these values and never invents numbers: if a field
 is absent, its row is hidden. (Note: in v1 this is a single global status
 published by the bot side, not a per-user lookup — per-user status needs the
 v2 backend.)
+
+### `announcement`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `enabled` | boolean \| null | True when the announcement is live. |
+| `text` | string \| null | Announcement text (Persian). Blank hides the card. |
+| `image_url` | string \| null | Optional public image URL; null/blank = text only. |
+| `id` | string \| null | Stable id for one announcement version; the bot regenerates it whenever the text or image changes, so an edited announcement is shown again even to users who dismissed the previous one. |
+
+The app shows the card only when `enabled` is true and `text` is
+non-blank, and only until the user dismisses it (the dismissal is stored
+locally by id, or by text when no id is published). The image is loaded
+with Coil; a failed image hides the image slot and the text still shows.
+The admin sets/clears the announcement from the Telegram bot (admin
+panel → 📢 تبلیغات و اطلاع‌رسانی → 📣 اطلاعیه اپ VPN5G) and publishes
+it to this file; the app picks it up on the next refresh (≤ 5 minutes)
+with no app update.
 
 ### `codes` — discount / gift codes
 
@@ -130,6 +149,12 @@ tested. Dead configs (TCP connect fails) are dropped and never stored.
 ```json
 {
   "notice": "سرورهای جدید اضافه شد — لیست را به‌روزرسانی کنید",
+  "announcement": {
+    "enabled": true,
+    "text": "اشتراک ویژه با ۲۰٪ تخفیف — فقط تا آخر هفته",
+    "image_url": null,
+    "id": "ann-1790000000"
+  },
   "config_sources": [
     "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs.txt",
     "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt"
@@ -168,6 +193,7 @@ the bot; the app never ships with prices.)
 ```json
 {
   "notice": null,
+  "announcement": null,
   "config_sources": [],
   "min_version": null,
   "subscription_status": null,
@@ -187,7 +213,12 @@ The app side is done; the bot side must implement the following before the
 commerce works end to end:
 
 1. **Publish app_config.json** to the Hugging Face static Space (next to
-   `live_configs.json` / `sub.txt`) with the fields above.
+   `live_configs.json` / `sub.txt`) with the fields above. The
+   announcement publisher already exists (v1.1.5): the bot admin action
+   merges `announcement` into the published file (see
+   `services/app_config_publisher.py`); it needs an HF write token in
+   `HF_TOKEN`. The codes / plans / gateway / trial fields are still
+   unpublished — the admin actions for them are items 2–6 below.
 2. **Admin commands for codes**: add / edit / remove entries in the `codes`
    array (code, type, discount percent or gift days, max uses,
    remaining uses).

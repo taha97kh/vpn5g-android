@@ -166,10 +166,10 @@ same fixed key as Debug. In-app updater now points at
   unchanged criterion from 1.1.4). GIVE_UP lands in FAILED except from
   CONNECTED → IDLE (30-minute timer / clean stop never shows an error).
   A failed connect/retry shows the precise cause and stays
-  Disconnected; bounded retries (3 verification attempts), no infinite
-  loops; failed servers stay excluded for 6h (verified through the new
-  flows — the TTL store from 1.1.4 is now consulted by the manual
-  resolver as well as the auto picker).
+  Disconnected; bounded retries (8 verification attempts per chain,
+  v1.1.5 refinement), no infinite loops; failed servers stay excluded
+  for 6h (verified through the new flows — the TTL store from 1.1.4 is
+  now consulted by the manual resolver as well as the auto picker).
 - **Manual server picker (§3)**: the "سرورهای رایگان" row is now a real
   two-level dropdown — countries with flag + server count + best ping,
   then that country's free servers with health ("سالم" / "بدون پینگ")
@@ -231,6 +231,47 @@ same fixed key as Debug. In-app updater now points at
   off, disconnect/reconnect, relaunch, CPU/RAM, multi-device) were
   NOT run on this server — they need Aref's phone and live servers;
   see the 1.1.5 delivery report for the full list.
+- **Refinement — watermarks behind the text, effectively invisible
+  (2026-11-23, same 1.1.5)**: `Vpn5gBrandWatermark` now draws the three
+  house names (VPNCRACKNET / VPN5G_IRBOT / AREF_5G) at alpha 0.02 with
+  no rotation, clipped to the button bounds, always as the first child
+  of the button content Box — strictly behind the label, which fully
+  covers them. The look stays clean; the composable is kept as a
+  background layer, only the visibility changed.
+- **Refinement — never disconnect during the connect attempt, switch
+  fast (§2, same 1.1.5)**: the connect chain now tries up to 8 servers
+  before FAILED (was 3; bounded, each attempt has its own timeouts and
+  the 6h failed store keeps dead servers out). The drop-detector
+  debounce is 800 ms (was a fixed 3,000 ms) — intentional restarts are
+  already excluded by `suppressAutoFailover`, so the wait only covers a
+  transient daemon hiccup. RETRYING is now a connecting state (cyan
+  ring, "در حال تلاش مجدد برای اتصال…") instead of reading as a
+  failure; the drop detector still switches through SWITCHING_SERVER,
+  never through Disconnected/IDLE. Unchanged on purpose: the daemon's
+  500 ms restart wait (the guard against the 1.1.4 "core already
+  running" refusal) and the 1,500 ms pre-verify settle (a shorter wait
+  risks false UNKNOWN skips of healthy servers). Once VERIFIED,
+  CONNECTED is shown immediately — no post-verification waiting.
+- **Version label (same 1.1.5)**: the home-screen footer now shows
+  "ورژن 1.1.5" from `BuildConfig.VERSION_NAME` (never hardcoded, so it
+  follows every future bump); the Me-page app-info block keeps its
+  version/build-date lines.
+- **Announcement system via the Telegram bot (same 1.1.5)**: the
+  `app_config.json` contract gains an `announcement` object (`enabled`,
+  `text`, `image_url`, `id`); the home screen shows it as a dismissible
+  card (text + optional Coil image) under the notice, and nothing when
+  there is none. Dismissal is persisted by announcement id (or text) —
+  a republished version is shown again. The image needs a network
+  fetcher, so `coil-network-okhttp` (same version as `coil-compose`) is
+  now a dependency — without it Coil 3 cannot load remote images at
+  all. Bot side: admin panel →
+  📢 تبلیغات و اطلاع‌رسانی → 📣 اطلاعیه اپ VPN5G sets/clears the text
+  and image (a public URL, or a photo uploaded to the HF Space as
+  `announcement.jpg`) and publishes the merged `app_config.json` to the
+  Space (`services/app_config_publisher.py`, HF write token in
+  `HF_TOKEN`). End-to-end NOT verified here (this server's bot is OFF
+  by standing order; the live copy runs on another host) — deployment
+  steps are in the delivery report.
 
 ## Created files
 

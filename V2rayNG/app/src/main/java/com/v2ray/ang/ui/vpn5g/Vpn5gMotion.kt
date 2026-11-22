@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
 
 /** VPN5G IRBOT dark palette — near-black X-VPN-style background, cyan accent. */
@@ -179,7 +180,9 @@ fun Vpn5gStaggeredItem(
 /**
  * Small credit footer ("Made by AREF KH / 2026 - 1405"), shown at the
  * bottom of the home screen content and the Me/Profile screen. This is
- * the ONLY place a personal name appears in the app.
+ * the ONLY place a personal name appears in the app. The version line
+ * (v1.1.5) reads BuildConfig.VERSION_NAME, never a hardcoded string,
+ * so it follows every future version bump automatically.
  */
 @Composable
 fun Vpn5gFooter() {
@@ -197,6 +200,12 @@ fun Vpn5gFooter() {
         )
         Text(
             text = stringResource(R.string.vpn5g_footer_years),
+            color = Vpn5gOnDarkMuted,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.vpn5g_footer_version, BuildConfig.VERSION_NAME),
             color = Vpn5gOnDarkMuted,
             fontSize = 12.sp,
             textAlign = TextAlign.Center,

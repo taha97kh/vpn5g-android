@@ -26,6 +26,7 @@ object Vpn5gRemoteConfig {
         config_sources = emptyList(),
         min_version = null,
         subscription_status = null,
+        announcement = null,
     )
 
     fun cached(): AppConfigRemote {

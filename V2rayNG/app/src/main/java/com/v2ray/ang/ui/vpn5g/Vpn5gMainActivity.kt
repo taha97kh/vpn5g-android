@@ -77,6 +77,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -92,6 +93,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
+import coil3.compose.AsyncImage
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
@@ -101,11 +103,14 @@ import com.v2ray.ang.enums.PermissionType
 import com.v2ray.ang.extension.toast
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
+import com.v2ray.ang.handler.vpn5g.AnnouncementRemote
+import com.v2ray.ang.handler.vpn5g.AppConfigRemote
 import com.v2ray.ang.handler.vpn5g.GithubReleaseAsset
 import com.v2ray.ang.handler.vpn5g.PaymentGatewayRemote
 import com.v2ray.ang.handler.vpn5g.PromoCodeRemote
 import com.v2ray.ang.handler.vpn5g.SubscriptionPlanRemote
 import com.v2ray.ang.handler.vpn5g.SubscriptionStatusRemote
+import com.v2ray.ang.handler.vpn5g.Vpn5gAnnouncement
 import com.v2ray.ang.handler.vpn5g.Vpn5gAppUpdate
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthService
 import com.v2ray.ang.handler.vpn5g.Vpn5gAutoConnect
@@ -114,6 +119,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConnectState
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.DROP_FAILOVER_DEBOUNCE_MS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_UPDATE_LAST_CHECK_MS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_AUTO_FAILOVER_ATTEMPTS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_TUNNEL_ATTEMPTS
@@ -184,6 +190,8 @@ data class Vpn5gHomeUiState(
     val lastError: String? = null,
     val offline: Boolean = false,
     val notice: String? = null,
+    /** Admin-published app announcement (v1.1.5); null = none to show. */
+    val announcement: AnnouncementRemote? = null,
     val countries: List<Vpn5gCountryUi> = emptyList(),
     val selectedGuid: String? = null,
     val currentServerName: String? = null,
@@ -285,6 +293,23 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     private var failoverTargetName: String? = null
     private var autoFailoverJob: Job? = null
 
+    /** Dismiss key of the app announcement the user closed (v1.1.5). */
+    private var dismissedAnnouncementKey: String? = null
+
+    /**
+     * The announcement to show from a fetched remote config, or null
+     * when there is none, it is disabled, its text is blank, or the
+     * user already dismissed this version of it.
+     */
+    private fun visibleAnnouncement(cached: AppConfigRemote): AnnouncementRemote? {
+        val announcement = cached.announcement
+        return if (Vpn5gAnnouncement.shouldShow(announcement, dismissedAnnouncementKey)) {
+            announcement
+        } else {
+            null
+        }
+    }
+
     private val serviceReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val safeIntent = intent ?: return
@@ -323,6 +348,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         )
         MessageHelper.sendMsg2Service(application, AppConfig.MSG_REGISTER_CLIENT, "")
 
+        // Dismissed announcement (v1.1.5): loaded once; a newly published
+        // announcement version (new id) is shown again after a dismiss.
+        dismissedAnnouncementKey = MmkvManager.decodeSettingsString(
+            Vpn5gConstants.KEY_ANNOUNCEMENT_DISMISSED
+        )
+
         // Show the last stored list immediately; the bundled snapshot fills
         // a first launch so the list is never empty on entry; the refresh
         // replaces it with live data.
@@ -348,6 +379,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     countries = countries,
                     subscriptionStatus = cached.subscription_status,
                     notice = cached.notice,
+                    announcement = visibleAnnouncement(cached),
                     promoCodes = cached.codes,
                     plans = cached.plans,
                     paymentGateway = cached.payment_gateway,
@@ -453,6 +485,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         isLoading = false,
                         offline = result.offline,
                         notice = result.notice ?: cached.notice,
+                        announcement = visibleAnnouncement(cached),
                         countries = countries,
                         subscriptionStatus = cached.subscription_status,
                         promoCodes = cached.codes,
@@ -1007,6 +1040,21 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /**
+     * Dismiss the app announcement (v1.1.5): the dismissal survives
+     * restarts (persisted by dismiss key), but a newly published
+     * announcement version (new id) is shown again.
+     */
+    fun dismissAnnouncement() {
+        val current = _uiState.value.announcement ?: return
+        val key = Vpn5gAnnouncement.dismissKey(current)
+        dismissedAnnouncementKey = key
+        viewModelScope.launch(Dispatchers.IO) {
+            MmkvManager.encodeSettings(Vpn5gConstants.KEY_ANNOUNCEMENT_DISMISSED, key)
+        }
+        _uiState.update { it.copy(announcement = null) }
+    }
+
     private fun onRunningChanged(running: Boolean) {
         val app = getApplication<Application>()
         if (running) {
@@ -1082,10 +1130,14 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
             }
-            // Unexpected drop? Schedule an auto-failover check (delayed, so
-            // an intentional restart that comes back up cancels it). The
-            // 30-minute timer ends the session at 30:00, so a stop after
-            // ~29 minutes is treated as the timer, not a drop.
+            // Unexpected drop? Schedule an auto-failover check after a
+            // short debounce (v1.1.5 refinement: was a fixed 3,000 ms).
+            // The debounce only covers a transient daemon hiccup that
+            // recovers on its own; intentional restarts are already
+            // excluded by suppressAutoFailover, so a real drop switches
+            // servers fast. The 30-minute timer ends the session at
+            // 30:00, so a stop after ~29 minutes is treated as the
+            // timer, not a drop.
             val wasSession = sessionActive
             sessionActive = false
             val sessionAgeMs = if (sessionStartedAtMs > 0L) {
@@ -1105,7 +1157,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             if (shouldFailover) {
                 autoFailoverJob?.cancel()
                 autoFailoverJob = viewModelScope.launch {
-                    delay(3_000L)
+                    delay(DROP_FAILOVER_DEBOUNCE_MS)
                     if (!isActive) return@launch
                     if (_uiState.value.isRunning || userStopRequested ||
                         suppressAutoFailover
@@ -1697,6 +1749,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onConsumeAutoFailoverNotice = { viewModel.consumeAutoFailoverNotice() },
                             onUpdateDownload = { viewModel.startUpdateDownload() },
                             onDismissUpdate = { viewModel.dismissUpdate() },
+                            onDismissAnnouncement = { viewModel.dismissAnnouncement() },
                         )
                         Vpn5gDestination.PREMIUM -> Vpn5gSubscriptionScreen(
                             state = uiState,
@@ -2106,6 +2159,7 @@ fun Vpn5gHomeScreen(
     onConsumeAutoFailoverNotice: () -> Unit,
     onUpdateDownload: () -> Unit,
     onDismissUpdate: () -> Unit,
+    onDismissAnnouncement: () -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
     var serverTab by rememberSaveable { mutableStateOf(Vpn5gServerTab.FREE) }
@@ -2179,9 +2233,11 @@ fun Vpn5gHomeScreen(
     }
     val statusColor = when (state.connectState) {
         Vpn5gConnectState.CONNECTED -> colorPing
-        Vpn5gConnectState.RETRYING,
         Vpn5gConnectState.FAILED -> colorPingRed
         Vpn5gConnectState.IDLE -> Vpn5gOnDarkMuted
+        // RETRYING is a connecting state, not a failure: the chain is
+        // switching servers, so it reads cyan like the other
+        // connecting states (v1.1.5 refinement).
         else -> Vpn5gCyan
     }
 
@@ -2436,6 +2492,18 @@ fun Vpn5gHomeScreen(
                             .clip(RoundedCornerShape(12.dp))
                             .background(Vpn5gAccent.copy(alpha = 0.25f))
                             .padding(12.dp),
+                    )
+                }
+            }
+
+            // Admin-published app announcement (v1.1.5): a dismissible
+            // card under the notice; nothing is shown when there is no
+            // live announcement.
+            state.announcement?.let { announcement ->
+                item {
+                    Vpn5gAnnouncementCard(
+                        announcement = announcement,
+                        onDismiss = onDismissAnnouncement,
                     )
                 }
             }
@@ -2949,6 +3017,62 @@ fun Vpn5gHomeScreen(
 }
 
 /**
+ * Admin-published app announcement card (v1.1.5): text plus an optional
+ * image, shown on the home screen under the notice. Dismissible: the
+ * dismiss is owned by the ViewModel (persisted by announcement id or
+ * text) and this composable only calls [onDismiss]. The image is loaded
+ * with Coil; a failed image hides its slot so the card never shows a
+ * blank box — the text always remains.
+ */
+@Composable
+private fun Vpn5gAnnouncementCard(
+    announcement: AnnouncementRemote,
+    onDismiss: () -> Unit,
+) {
+    var showImage by remember { mutableStateOf(!announcement.image_url.isNullOrBlank()) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Vpn5gAccent.copy(alpha = 0.25f))
+            .padding(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = announcement.text.orEmpty(),
+                color = Vpn5gOnDark,
+                fontSize = 14.sp,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onDismiss) {
+                Text(
+                    text = stringResource(R.string.vpn5g_close),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 13.sp,
+                )
+            }
+        }
+        if (showImage) {
+            Spacer(Modifier.height(8.dp))
+            AsyncImage(
+                model = announcement.image_url.orEmpty(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                onError = { showImage = false },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .clip(RoundedCornerShape(8.dp)),
+            )
+        }
+    }
+}
+
+/**
  * The only name a server row may show: the Persian country name, the
  * country key when no Persian name is known, or [unknown] when neither
  * exists. The config remark is never displayed anywhere.
@@ -3031,17 +3155,19 @@ private fun Vpn5gPowerButton(
 ) {
     // Derived from the connect state machine only (v1.1.4 §1, v1.1.5
     // §2): the ring spins while a tunnel is being created or verified
-    // or while the chain is switching servers, shows the session arc
-    // only once the tunnel is verified, and turns red while retrying or
-    // failed.
+    // or while the chain is switching servers or retrying, shows the
+    // session arc only once the tunnel is verified, and turns red only
+    // while failed.
     val isVerifying = connectState == Vpn5gConnectState.CHECKING_INTERNET ||
         connectState == Vpn5gConnectState.FINDING_SERVER ||
         connectState == Vpn5gConnectState.CONNECTING ||
         connectState == Vpn5gConnectState.CREATING_TUNNEL ||
         connectState == Vpn5gConnectState.VERIFYING_TUNNEL ||
-        connectState == Vpn5gConnectState.SWITCHING_SERVER
-    val isFailed = connectState == Vpn5gConnectState.RETRYING ||
-        connectState == Vpn5gConnectState.FAILED
+        connectState == Vpn5gConnectState.SWITCHING_SERVER ||
+        // RETRYING is a connecting state (v1.1.5 refinement): the ring
+        // spins cyan while the chain switches servers, never red.
+        connectState == Vpn5gConnectState.RETRYING
+    val isFailed = connectState == Vpn5gConnectState.FAILED
     val connected = connectState == Vpn5gConnectState.CONNECTED
     val ringColor = when {
         isFailed -> colorPingRed

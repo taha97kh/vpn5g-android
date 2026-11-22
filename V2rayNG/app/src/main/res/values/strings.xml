@@ -603,6 +603,7 @@
     <string name="vpn5g_import_failed">وارد کردن کانفیگ ناموفق بود</string>
     <string name="vpn5g_guide_title">راهنمای استفاده</string>
     <string name="vpn5g_about_version">نسخه: %1$s (کد %2$d)</string>
+    <string name="vpn5g_footer_version">ورژن %1$s</string>
     <string name="vpn5g_about_build_date">تاریخ ساخت: %1$s</string>
     <string name="vpn5g_about_core">بر پایه‌ی نرم‌افزار آزاد (GPL-3.0)</string>
     <string name="vpn5g_subscription_title">وضعیت اشتراک</string>
@@ -636,7 +637,7 @@
     <string name="vpn5g_connect_finding_server">در حال آزمایش سرور…</string>
     <string name="vpn5g_connect_connecting">در حال اتصال…</string>
     <string name="vpn5g_connect_creating_tunnel">در حال ایجاد تونل امن…</string>
-    <string name="vpn5g_connect_retrying">اتصال ناموفق؛ در حال تلاش مجدد…</string>
+    <string name="vpn5g_connect_retrying">در حال تلاش مجدد برای اتصال…</string>
     <string name="vpn5g_no_internet">اینترنت در دسترس نیست؛ اتصال را بررسی کنید</string>
     <string name="vpn5g_loading_servers">در حال دریافت سرورها…</string>
     <string name="vpn5g_free_servers">سرورهای رایگان</string>
