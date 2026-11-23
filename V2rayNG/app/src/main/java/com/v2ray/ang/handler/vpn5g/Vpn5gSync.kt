@@ -446,6 +446,12 @@ object Vpn5gSync {
         val realPingKeys = Vpn5gRealPing.loadRealPingKeys()
         val byCountry = linkedMapOf<String, MutableList<Vpn5gServerUi>>()
         val labels = mutableMapOf<String, String>()
+        // v1.1.14: declared here, before the mapping below uses it —
+        // servers verified on the current operator are marked so the
+        // auto pick can prefer them (own history only).
+        val operatorKey = Vpn5gOperator.currentKey()
+        val operatorVerifiedKeys = operatorKey
+            ?.let { Vpn5gOperator.verifiedKeysFor(it) }.orEmpty()
         guids.forEach { guid ->
             val profile = MmkvManager.decodeServerConfig(guid) ?: return@forEach
             val key = normalizeCountry(profile.country).ifEmpty { "بین‌الملل" }
@@ -484,9 +490,6 @@ object Vpn5gSync {
         // only) so the auto pick can prefer them.
         val tier = Vpn5gSubscriptionStatus.cachedTier()
         val freeGuids = freeGuidsFor(byCountry.values.flatten(), tier)
-        val operatorKey = Vpn5gOperator.currentKey()
-        val operatorVerifiedKeys = operatorKey
-            ?.let { Vpn5gOperator.verifiedKeysFor(it) }.orEmpty()
         val sections = byCountry.map { (key, servers) ->
             val marked = servers
                 .map { it.copy(isFree = it.guid in freeGuids) }

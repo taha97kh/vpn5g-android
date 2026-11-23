@@ -2448,7 +2448,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         // MainActivity) is requested alongside it.
         LaunchedEffect(Unit) {
             checkAndRequestPermission(PermissionType.POST_NOTIFICATIONS) {}
-            checkAndRequestPermission(PermissionType.PHONE_STATE) {
+            checkAndRequestPermission(PermissionType.READ_PHONE_STATE) {
                 viewModel.refreshOperator()
             }
         }
