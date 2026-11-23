@@ -43,6 +43,12 @@
          a downloaded APK. The user still confirms once in the system UI;
          stock Android never allows a fully silent install. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- v1.1.12 ("اتصال پایدار"): the battery-optimization exemption keeps
+         cleaner / battery-saver apps from killing the VPN service. The app
+         asks once, on the first connect, through the system dialog; the
+         user can refuse and connecting still works. This app is
+         distributed through GitHub releases, not Google Play. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application

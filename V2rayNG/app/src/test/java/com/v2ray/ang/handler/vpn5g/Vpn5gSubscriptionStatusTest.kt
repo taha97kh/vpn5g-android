@@ -157,4 +157,57 @@ class Vpn5gSubscriptionStatusTest {
         assertNull(Vpn5gAuthService.parseUserId("""{"access_token":"tok"}"""))
         assertNull(Vpn5gAuthService.parseUserId("""{"user":{}}"""))
     }
+
+    // v1.1.12: the effective subscription merges the bot row with a redeemed gift code.
+
+    @Test
+    fun test_effective_redeemed_survives_no_row() {
+        val redeemed = Vpn5gUserSubscription("active", future, "sub_12")
+        assertEquals(
+            redeemed,
+            Vpn5gSubscriptionStatus.effectiveSubscription(
+                Vpn5gUserSubscription("none", null, null), redeemed, now
+            ),
+        )
+        assertEquals(
+            redeemed,
+            Vpn5gSubscriptionStatus.effectiveSubscription(null, redeemed, now),
+        )
+    }
+
+    @Test
+    fun test_effective_later_expiry_wins() {
+        val row = Vpn5gUserSubscription("active", future, "sub_12")
+        val redeemedSooner = Vpn5gUserSubscription("active", now + 10 * 86_400L, "sub_1")
+        assertEquals(
+            row,
+            Vpn5gSubscriptionStatus.effectiveSubscription(row, redeemedSooner, now),
+        )
+        val redeemedLater = Vpn5gUserSubscription("active", future + 30 * 86_400L, "sub_12")
+        assertEquals(
+            redeemedLater,
+            Vpn5gSubscriptionStatus.effectiveSubscription(row, redeemedLater, now),
+        )
+    }
+
+    @Test
+    fun test_effective_expired_row_falls_back_to_redeemed() {
+        val expiredRow = Vpn5gUserSubscription("active", past, "sub_1")
+        val redeemed = Vpn5gUserSubscription("active", future, "sub_12")
+        assertEquals(
+            redeemed,
+            Vpn5gSubscriptionStatus.effectiveSubscription(expiredRow, redeemed, now),
+        )
+    }
+
+    @Test
+    fun test_effective_neither_active_returns_row() {
+        val expiredRow = Vpn5gUserSubscription("active", past, "sub_1")
+        val expiredRedeemed = Vpn5gUserSubscription("active", past, "sub_12")
+        assertEquals(
+            expiredRow,
+            Vpn5gSubscriptionStatus.effectiveSubscription(expiredRow, expiredRedeemed, now),
+        )
+        assertNull(Vpn5gSubscriptionStatus.effectiveSubscription(null, null, now))
+    }
 }

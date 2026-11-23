@@ -29,6 +29,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -114,9 +115,11 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gAnnouncement
 import com.v2ray.ang.handler.vpn5g.Vpn5gAppUpdate
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthService
 import com.v2ray.ang.handler.vpn5g.Vpn5gAutoConnect
+import com.v2ray.ang.handler.vpn5g.Vpn5gBatteryOptimization
 import com.v2ray.ang.handler.vpn5g.Vpn5gConnectEvent
 import com.v2ray.ang.handler.vpn5g.Vpn5gConnectMode
 import com.v2ray.ang.handler.vpn5g.Vpn5gConnectState
+import com.v2ray.ang.handler.vpn5g.Vpn5gConnectionPersistence
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
@@ -173,7 +176,7 @@ enum class Vpn5gServerTab { FREE, ALL, SPECIAL }
 /** Post-connect tunnel state. The UI must never show a false "connected". */
 enum class Vpn5gTunnelState { IDLE, VERIFYING, VERIFIED, FAILED, UNKNOWN, SWITCHING }
 
-enum class Vpn5gPromoStatus { IDLE, VALID, UNKNOWN_CODE, EXHAUSTED, ALREADY_REDEEMED, INVALID }
+enum class Vpn5gPromoStatus { IDLE, VALID, UNKNOWN_CODE, EXHAUSTED, ALREADY_REDEEMED, INVALID, REDEEMED, EXPIRED, NOT_YOURS, NOT_SIGNED_IN }
 
 /** A manually picked server that turned out unusable (v1.1.5 §3). */
 data class Vpn5gManualFailure(
@@ -286,9 +289,21 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     private var dropFailoverRounds = 0
 
+    /** Persistent-connection reconnect (v1.1.12): bounded re-runs of the connect chain after an unexpected stop. */
+    private var persistentReconnectJob: Job? = null
+    private var persistentReconnectAttempts = 0
+
     /** Fired with the downloaded APK file; the Activity opens the installer. */
     private val _updateInstallEvent = MutableSharedFlow<File>(extraBufferCapacity = 1)
     val updateInstallEvent: SharedFlow<File> = _updateInstallEvent.asSharedFlow()
+
+    /**
+     * Fired once, on the first connect, when the battery-optimization
+     * exemption is not yet granted (v1.1.12); the Activity owns the
+     * system intent.
+     */
+    private val _batteryOptEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val batteryOptEvent: SharedFlow<Unit> = _batteryOptEvent.asSharedFlow()
 
     /** Release asset picked by the update check; the download source. */
     private var pendingUpdateAsset: GithubReleaseAsset? = null
@@ -417,7 +432,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     trialEnabled = cached.trial_enabled ?: false,
                     trialHours = cached.trial_hours ?: 24,
                     signedInEmail = Vpn5gAuthService.currentSession()?.email,
-                    userSubscription = Vpn5gSubscriptionStatus.loadCached(),
+                    userSubscription = Vpn5gSubscriptionStatus.loadEffective(),
                     isSubscriber = Vpn5gSubscriptionStatus.cachedIsSubscriber(),
                     offline = usedFallback,
                 )
@@ -507,6 +522,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         reverifyJob?.cancel()
         watchdogJob?.cancel()
         autoFailoverJob?.cancel()
+        persistentReconnectJob?.cancel()
         runCatching {
             MessageHelper.sendMsg2Service(getApplication(), AppConfig.MSG_UNREGISTER_CLIENT, "")
         }.onFailure {
@@ -1105,6 +1121,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         connectChainJob = null
         autoFailoverJob?.cancel()
         autoFailoverJob = null
+        // v1.1.12: a manual disconnect ends the persistent session —
+        // no reconnect may follow it.
+        Vpn5gConnectionPersistence.setPersistentConnection(false)
+        persistentReconnectJob?.cancel()
+        persistentReconnectJob = null
+        persistentReconnectAttempts = 0
         resetTunnelAttempts()
         _uiState.update {
             it.copy(
@@ -1152,24 +1174,70 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(promoInput = value, promoStatus = Vpn5gPromoStatus.IDLE, promoBotLink = null) }
     }
 
-    /** Validates the entered promo code and records a redemption locally. */
+    /**
+     * Redeems the entered code (v1.1.12): the latest code list is
+     * fetched first, then a GIFT code activates the subscription
+     * immediately — no admin approval, no second confirm screen. The
+     * UI reflects the new subscription at once (state + full server
+     * pool). A DISCOUNT code still goes through the bot (VALID +
+     * deep link). Never throws; a fetch failure falls back to the
+     * last cached list.
+     */
     fun redeemPromo() {
         val input = _uiState.value.promoInput
-        when (val result = Vpn5gPromoCodes.validate(input, _uiState.value.promoCodes)) {
-            is Vpn5gPromoCodes.Validation.Valid -> {
-                val link = Vpn5gPromoCodes.redeem(result.code)
-                _uiState.update {
-                    it.copy(promoStatus = Vpn5gPromoStatus.VALID, promoBotLink = link)
-                }
+        val email = _uiState.value.signedInEmail
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { Vpn5gRemoteConfig.fetch() }.onSuccess { fresh ->
+                _uiState.update { it.copy(promoCodes = fresh.codes) }
             }
-            Vpn5gPromoCodes.Validation.UnknownCode ->
-                _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.UNKNOWN_CODE) }
-            Vpn5gPromoCodes.Validation.Exhausted ->
-                _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.EXHAUSTED) }
-            Vpn5gPromoCodes.Validation.AlreadyRedeemed ->
-                _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.ALREADY_REDEEMED) }
-            Vpn5gPromoCodes.Validation.InvalidEntry ->
-                _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.INVALID) }
+            val nowSeconds = System.currentTimeMillis() / 1000
+            when (val result = Vpn5gPromoCodes.validateForRedeem(
+                input, _uiState.value.promoCodes, nowSeconds, email
+            )) {
+                is Vpn5gPromoCodes.Validation.Valid -> {
+                    val entry = result.code
+                    val activated = Vpn5gPromoCodes.activateGift(
+                        entry, email.orEmpty(), nowSeconds
+                    )
+                    if (activated != null) {
+                        val (subscription, link) = activated
+                        val countries = runCatching {
+                            Vpn5gSync.loadGroupedServers()
+                        }.getOrElse { emptyList() }
+                        _uiState.update {
+                            it.copy(
+                                promoStatus = Vpn5gPromoStatus.REDEEMED,
+                                promoBotLink = link,
+                                userSubscription = subscription,
+                                isSubscriber = true,
+                                countries = countries,
+                            )
+                        }
+                        refreshSelection()
+                    } else {
+                        // Discount code (or a gift without days): the bot
+                        // applies it — the old VALID + deep-link path.
+                        val link = Vpn5gPromoCodes.redeem(entry, email = email)
+                        _uiState.update {
+                            it.copy(promoStatus = Vpn5gPromoStatus.VALID, promoBotLink = link)
+                        }
+                    }
+                }
+                Vpn5gPromoCodes.Validation.UnknownCode ->
+                    _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.UNKNOWN_CODE) }
+                Vpn5gPromoCodes.Validation.Exhausted ->
+                    _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.EXHAUSTED) }
+                Vpn5gPromoCodes.Validation.AlreadyRedeemed ->
+                    _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.ALREADY_REDEEMED) }
+                Vpn5gPromoCodes.Validation.InvalidEntry ->
+                    _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.INVALID) }
+                Vpn5gPromoCodes.Validation.Expired ->
+                    _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.EXPIRED) }
+                Vpn5gPromoCodes.Validation.NotYours ->
+                    _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.NOT_YOURS) }
+                Vpn5gPromoCodes.Validation.NotSignedIn ->
+                    _uiState.update { it.copy(promoStatus = Vpn5gPromoStatus.NOT_SIGNED_IN) }
+            }
         }
     }
 
@@ -1209,6 +1277,16 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             sessionActive = true
             sessionStartedAtMs = System.currentTimeMillis()
             userStopRequested = false
+            // v1.1.12 ("اتصال پایدار"): the session is persistent now —
+            // only a manual disconnect (or the timer above, for free
+            // users) may end it. A fresh reconnect run starts from
+            // attempt zero, and the battery-optimization exemption is
+            // asked for once so cleaner apps cannot kill the service.
+            Vpn5gConnectionPersistence.setPersistentConnection(true)
+            persistentReconnectAttempts = 0
+            persistentReconnectJob?.cancel()
+            persistentReconnectJob = null
+            maybeRequestBatteryExemption()
             suppressAutoFailover = false
             if (autoFailoverPending) {
                 autoFailoverPending = false
@@ -1314,6 +1392,25 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     attemptAutoFailover()
                 }
             }
+            // v1.1.12 ("اتصال پایدار"): the 30-minute timer ending a
+            // free session is an intentional end — the persistent
+            // session ends with it.
+            if (timerProbablyEnded) {
+                Vpn5gConnectionPersistence.setPersistentConnection(false)
+            }
+            // An unexpected stop the drop failover does not cover (e.g.
+            // the service was killed while a restart was in flight)
+            // re-runs the connect chain with backoff, bounded. A
+            // manual disconnect never reaches here.
+            if (!shouldFailover && Vpn5gConnectionPersistence.shouldAutoReconnect(
+                    wasSession = wasSession,
+                    manualStopRequested = userStopRequested,
+                    timerProbablyEnded = timerProbablyEnded,
+                    tunnelFailedStop = tunnelFailedStop,
+                )
+            ) {
+                schedulePersistentReconnect()
+            }
             // An intentional restart (server switch / verification
             // failover) keeps its CREATING_TUNNEL state through the
             // stop/start cycle; every other stop ends the chain.
@@ -1341,6 +1438,50 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         viewModelScope.launch(Dispatchers.IO) { refreshSelection() }
+    }
+
+    /** Asks once, on the first connect, for the battery-optimization exemption (v1.1.12). */
+    private fun maybeRequestBatteryExemption() {
+        val app = getApplication<Application>()
+        if (Vpn5gBatteryOptimization.wasPrompted()) return
+        if (Vpn5gBatteryOptimization.isExempt(app)) return
+        Vpn5gBatteryOptimization.markPrompted()
+        viewModelScope.launch { _batteryOptEvent.emit(Unit) }
+    }
+
+    /**
+     * Bounded reconnect after an unexpected stop (v1.1.12): re-runs
+     * the full connect chain with exponential backoff, at most
+     * [Vpn5gConnectionPersistence.maxAttempts] times, then gives up
+     * with a clear error. Cancelled immediately by a manual
+     * disconnect ([userDisconnect]) or by the service coming back.
+     */
+    private fun schedulePersistentReconnect() {
+        persistentReconnectJob?.cancel()
+        val attempt = persistentReconnectAttempts
+        if (attempt >= Vpn5gConnectionPersistence.maxAttempts()) {
+            persistentReconnectAttempts = 0
+            val reason = getApplication<Application>().getString(
+                R.string.vpn5g_persistent_reconnect_failed
+            )
+            _uiState.update {
+                it.copy(
+                    connectState = Vpn5gAutoConnect.transition(
+                        it.connectState, Vpn5gConnectEvent.GIVE_UP
+                    ),
+                    lastError = reason,
+                )
+            }
+            return
+        }
+        persistentReconnectAttempts = attempt + 1
+        persistentReconnectJob = viewModelScope.launch {
+            delay(Vpn5gConnectionPersistence.nextBackoffMs(attempt))
+            if (!isActive) return@launch
+            if (_uiState.value.isRunning || userStopRequested) return@launch
+            if (!Vpn5gConnectionPersistence.isPersistentConnection()) return@launch
+            beginConnect()
+        }
     }
 
     /**
@@ -1979,6 +2120,18 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             }
         }
 
+        // Battery-optimization exemption (v1.1.12): asked once, on the
+        // first connect; the system dialog explains itself.
+        LaunchedEffect(Unit) {
+            viewModel.batteryOptEvent.collect {
+                runCatching {
+                    startActivity(
+                        Vpn5gBatteryOptimization.exemptionIntent(this@Vpn5gMainActivity)
+                    )
+                }
+            }
+        }
+
         // Launch splash (v1.1.2): full-screen branded image for exactly
         // 3 seconds, then the main screen.
         var showSplash by remember { mutableStateOf(true) }
@@ -2567,6 +2720,11 @@ fun Vpn5gHomeScreen(
                             )
                         }
                         Spacer(Modifier.weight(1f))
+                        // Premium pill (v1.1.12): subscribers only.
+                        if (state.isSubscriber) {
+                            Vpn5gPremiumPill()
+                            Spacer(Modifier.width(8.dp))
+                        }
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(16.dp))
@@ -2640,7 +2798,15 @@ fun Vpn5gHomeScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(Vpn5gOnDark.copy(alpha = 0.08f))
+                                .background(
+                                    if (state.isSubscriber) Vpn5gGold.copy(alpha = 0.12f)
+                                    else Vpn5gOnDark.copy(alpha = 0.08f)
+                                )
+                                .border(
+                                    width = if (state.isSubscriber) 1.dp else 0.dp,
+                                    color = Vpn5gGold.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(16.dp),
+                                )
                                 .padding(16.dp)
                         ) {
                             Text(
@@ -3174,6 +3340,45 @@ fun Vpn5gHomeScreen(
                         Spacer(Modifier.height(8.dp))
                         Text(
                             text = stringResource(R.string.vpn5g_premium_banner_button),
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+
+            // Redeem banner (v1.1.12): a visible "activate with code"
+            // entry on the home screen for free users; subscribers
+            // already have a plan, so it hides for them (the Premium
+            // screen keeps its redeem section for a further code).
+            if (searchQuery.isBlank() && !state.isSubscriber) {
+                item(key = "redeem_banner") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Vpn5gGold.copy(alpha = 0.15f))
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = stringResource(R.string.vpn5g_redeem_title),
+                            ) { onOpenPremium() }
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_redeem_title),
+                            color = Vpn5gGold,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = stringResource(R.string.vpn5g_redeem_banner_body),
+                            color = Vpn5gOnDark,
+                            fontSize = 14.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.vpn5g_redeem_banner_button),
                             color = Color.White,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,

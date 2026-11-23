@@ -64,8 +64,11 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
  *
  * Promo codes: the user enters a code issued by the admin through the
  * Telegram bot; the app validates it against the code list fetched in
- * app_config.json and records the redemption locally. The bot applies the
- * benefit centrally (the app never mints a subscription by itself).
+ * app_config.json and records the redemption locally. v1.1.12: a GIFT
+ * code activates the subscription immediately in the app (plan +
+ * gift_days, no admin approval, no second confirm screen); the bot
+ * deep link stays only as an optional step so the bot can decrement
+ * remaining_uses server-side. Discount codes still go through the bot.
  */
 @Composable
 fun Vpn5gSubscriptionScreen(
@@ -154,6 +157,10 @@ fun Vpn5gSubscriptionScreen(
                 onToggleExpand = { statusExpanded = !statusExpanded },
             ) {
                 if (ownSubscription != null && state.isSubscriber) {
+                    // v1.1.12: premium look — gold pill + the remaining
+                    // days prominent (bold, larger) for subscribers.
+                    Vpn5gPremiumPill()
+                    Spacer(Modifier.height(8.dp))
                     ownPlanName?.let { plan ->
                         Text(
                             text = stringResource(R.string.vpn5g_subscription_plan, plan),
@@ -171,7 +178,8 @@ fun Vpn5gSubscriptionScreen(
                             ),
                         ),
                         color = Vpn5gOnDark,
-                        fontSize = 15.sp,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
                     )
                 } else if (ownSubscription?.status == "active") {
                     Text(
@@ -460,6 +468,98 @@ fun Vpn5gSubscriptionScreen(
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                         )
+                    }
+                    Vpn5gPromoStatus.REDEEMED -> {
+                        // v1.1.12: the gift code activated the subscription
+                        // immediately — plan + remaining days prominent.
+                        // The bot button below is OPTIONAL: it only lets
+                        // the bot decrement remaining_uses server-side.
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.vpn5g_promo_redeemed),
+                            color = Color(0xFF4ADE80),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        val activated = state.userSubscription
+                        if (activated != null && state.isSubscriber) {
+                            Spacer(Modifier.height(8.dp))
+                            ownPlanName?.let { plan ->
+                                Text(
+                                    text = stringResource(R.string.vpn5g_subscription_plan, plan),
+                                    color = Vpn5gOnDark,
+                                    fontSize = 15.sp,
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = stringResource(
+                                    R.string.vpn5g_subscription_days,
+                                    Vpn5gSubscriptionStatus.remainingDays(
+                                        activated,
+                                        System.currentTimeMillis() / 1000,
+                                    ),
+                                ),
+                                color = Vpn5gOnDark,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.vpn5g_promo_bot_note),
+                            color = Vpn5gOnDarkMuted,
+                            fontSize = 13.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = onOpenPromoBot,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Vpn5gAccent,
+                                contentColor = Color.White,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(text = stringResource(R.string.vpn5g_promo_confirm_bot), fontSize = 16.sp)
+                        }
+                    }
+                    Vpn5gPromoStatus.EXPIRED -> {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.vpn5g_promo_expired),
+                            color = Color(0xFFF87171),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Vpn5gPromoStatus.NOT_YOURS -> {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.vpn5g_promo_not_yours),
+                            color = Color(0xFFF87171),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Vpn5gPromoStatus.NOT_SIGNED_IN -> {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.vpn5g_promo_not_signed_in),
+                            color = Color(0xFFF87171),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = onOpenAuth,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Vpn5gAccent,
+                                contentColor = Color.White,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(text = stringResource(R.string.vpn5g_auth_title), fontSize = 16.sp)
+                        }
                     }
                     Vpn5gPromoStatus.IDLE -> Unit
                 }

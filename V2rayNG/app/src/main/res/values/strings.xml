@@ -681,8 +681,8 @@
     <string name="vpn5g_auth_signin_failed">ورود ناموفق بود</string>
     <string name="vpn5g_auth_generic_error">خطایی رخ داد؛ دوباره تلاش کنید</string>
     <string name="vpn5g_auth_signout">خروج از حساب</string>
-    <string name="vpn5g_promo_title">کد تخفیف / هدیه</string>
-    <string name="vpn5g_promo_body">اگر از ربات کد تخفیف یا هدیه گرفته‌اید، اینجا وارد کنید تا فعال شود.</string>
+    <string name="vpn5g_promo_title">فعال‌سازی با کد خرید</string>
+    <string name="vpn5g_promo_body">اگر از ربات کد خرید یا هدیه گرفته‌اید، اینجا وارد کنید؛ اشتراک بلافاصله و بدون تایید اضافه فعال می‌شود.</string>
     <string name="vpn5g_promo_code">کد</string>
     <string name="vpn5g_promo_redeem">فعال کردن کد</string>
     <string name="vpn5g_promo_valid">کد معتبر است؛ برای فعال‌سازی نهایی، در ربات تأیید کنید.</string>
@@ -691,6 +691,18 @@
     <string name="vpn5g_promo_already">این کد قبلاً در این دستگاه استفاده شده است</string>
     <string name="vpn5g_promo_invalid">کد معتبر نیست</string>
     <string name="vpn5g_promo_confirm_bot">تأیید در ربات تلگرام</string>
+
+    <!-- v1.1.12: in-app gift activation, premium look, persistent connection -->
+    <string name="vpn5g_premium_badge">ویژه</string>
+    <string name="vpn5g_redeem_title">فعال‌سازی با کد خرید</string>
+    <string name="vpn5g_redeem_banner_body">کد خرید یا هدیه‌ای که از ربات گرفته‌ای را وارد کن؛ اشتراک بلافاصله فعال می‌شود.</string>
+    <string name="vpn5g_redeem_banner_button">وارد کردن کد</string>
+    <string name="vpn5g_promo_redeemed">اشتراک شما فعال شد</string>
+    <string name="vpn5g_promo_expired">این کد منقضی شده است</string>
+    <string name="vpn5g_promo_not_yours">این کد برای حساب دیگری صادر شده است</string>
+    <string name="vpn5g_promo_not_signed_in">برای فعال کردن کد، اول با ایمیل وارد شوید</string>
+    <string name="vpn5g_promo_bot_note">برای اینکه ظرفیت این کد در ربات هم کم شود، در ربات ثبتش کنید (اختیاری).</string>
+    <string name="vpn5g_persistent_reconnect_failed">اتصال پایدار برقرار نشد؛ دوباره وصل شوید</string>
 
     <!-- v1.1: server-list tabs / search / recommended / banner / auto-failover -->
     <string name="vpn5g_tab_free">رایگان</string>

@@ -128,6 +128,11 @@ data class PaymentGatewayRemote(
  * The bot is the authority: it creates the codes and decrements
  * [remaining_uses] when they are redeemed. The app only validates against
  * the fetched list and records its own redemptions locally.
+ *
+ * v1.1.12: the published entries also carry [user_id] (the Telegram id
+ * the code was issued for), [expires_at] (ISO-8601 expiry) and [plan]
+ * (the plan id a gift grants). All three are nullable so older
+ * published configs without them still parse.
  */
 data class PromoCodeRemote(
     /** Code as the user types it (matched case-insensitively, trimmed). */
@@ -142,6 +147,17 @@ data class PromoCodeRemote(
     val max_uses: Int? = null,
     /** Redemptions left, as last published by the bot. Null = unknown/unlimited. */
     val remaining_uses: Int? = null,
+    /**
+     * Telegram user id the code was issued for (bot-side grant), or null
+     * when the code is not bound to one person. NOTE: the app has no
+     * Telegram identity for the signed-in user, so it cannot prove this
+     * binding itself — see Vpn5gPromoCodes.
+     */
+    val user_id: Long? = null,
+    /** ISO-8601 expiry ("2027-11-18T19:14:59+00:00"), or null when the code never expires. */
+    val expires_at: String? = null,
+    /** Plan id the gift grants ("sub_12", "sub_1"), or null when not a plan gift. */
+    val plan: String? = null,
 )
 
 /** Subscription status as published by the bot side in app_config.json. */

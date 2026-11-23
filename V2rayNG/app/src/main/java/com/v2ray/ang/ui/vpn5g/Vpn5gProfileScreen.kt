@@ -145,6 +145,10 @@ fun Vpn5gProfileScreen(
                 val ownSubscription = state.userSubscription
                 val status = state.subscriptionStatus
                 if (ownSubscription != null && state.isSubscriber) {
+                    // v1.1.12: premium look — gold pill + the remaining
+                    // days prominent (bold, larger) for subscribers.
+                    Vpn5gPremiumPill()
+                    Spacer(Modifier.height(8.dp))
                     val planName = state.plans
                         ?.firstOrNull { it.id == ownSubscription.plan }?.name_fa
                         ?: ownSubscription.plan
@@ -164,7 +168,8 @@ fun Vpn5gProfileScreen(
                             ),
                         ),
                         color = Vpn5gOnDark,
-                        fontSize = 15.sp,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
                     )
                 } else if (ownSubscription?.status == "active") {
                     Text(

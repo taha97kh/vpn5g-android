@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -52,6 +54,36 @@ val Vpn5gAccent = Color(0xFF2563EB)
 val Vpn5gAccentLight = Color(0xFF3B82F6)
 val Vpn5gOnDark = Color(0xFFF1F5F9)
 val Vpn5gOnDarkMuted = Color(0xFF94A3B8)
+/**
+ * Premium gold (v1.1.12): the subscriber treatment — a restrained gold
+ * pill and gold-tinted surfaces on the home and profile screens. Free
+ * users never see it; the base palette above is untouched.
+ */
+val Vpn5gGold = Color(0xFFD4AF37)
+val Vpn5gGoldOnDark = Color(0xFF1A1A1A)
+
+/**
+ * Small gold "premium" pill (v1.1.12): subscribers only. Display-only —
+ * no click action. Used in the home header, the Premium screen's
+ * status section and the Me screen's subscription section.
+ */
+@Composable
+fun Vpn5gPremiumPill() {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Vpn5gGold)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = stringResource(R.string.vpn5g_premium_badge),
+            color = Vpn5gGoldOnDark,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
 
 /**
  * Animated background (near-black with a slowly shifting dark-cyan tint).

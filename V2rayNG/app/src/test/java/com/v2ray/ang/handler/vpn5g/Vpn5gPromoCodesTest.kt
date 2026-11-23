@@ -5,8 +5,9 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * JVM tests for the pure promo-code decision ([Vpn5gPromoCodes.validateEntry]).
- * The full [Vpn5gPromoCodes.validate] also reads the local redemption list
+ * JVM tests for the pure promo-code decision ([Vpn5gPromoCodes.validateEntry]
+ * and [Vpn5gPromoCodes.validateEntryRedeem]).
+ * [Vpn5gPromoCodes.validateForRedeem] also reads the local redemption list
  * from MMKV, so it is not covered here.
  */
 class Vpn5gPromoCodesTest {
@@ -89,6 +90,117 @@ class Vpn5gPromoCodesTest {
                 PromoCodeRemote(code = "BAD", type = "mystery", remaining_uses = 5),
                 false,
             ),
+        )
+    }
+
+    // v1.1.12: in-app redeem validation — expiry, sign-in, ownership, activation math.
+
+    private fun giftWithExpiry(code: String, days: Int, remaining: Int?, expiresAt: String?) =
+        PromoCodeRemote(
+            code = code,
+            type = "gift",
+            gift_days = days,
+            remaining_uses = remaining,
+            expires_at = expiresAt,
+            plan = "sub_12",
+        )
+
+    @Test
+    fun test_redeem_future_expiry_is_valid() {
+        // The live 867110 code: expires 2027-11-18T19:14:59Z.
+        val entry = giftWithExpiry("867110", 360, 1, "2027-11-18T19:14:59+00:00")
+        assertEquals(
+            Vpn5gPromoCodes.Validation.Valid(entry),
+            Vpn5gPromoCodes.validateEntryRedeem(
+                entry, false, false, 1_795_392_000L, "a@gmail.com"
+            ),
+        )
+    }
+
+    @Test
+    fun test_redeem_past_expiry_is_expired() {
+        val entry = giftWithExpiry("OLD", 30, 1, "2026-11-01T00:00:00Z")
+        assertEquals(
+            Vpn5gPromoCodes.Validation.Expired,
+            Vpn5gPromoCodes.validateEntryRedeem(
+                entry, false, false, 1_795_392_000L, "a@gmail.com"
+            ),
+        )
+    }
+
+    @Test
+    fun test_redeem_unparsable_expiry_is_invalid() {
+        val entry = giftWithExpiry("BAD", 30, 1, "not a date")
+        assertEquals(
+            Vpn5gPromoCodes.Validation.InvalidEntry,
+            Vpn5gPromoCodes.validateEntryRedeem(
+                entry, false, false, 1_795_392_000L, "a@gmail.com"
+            ),
+        )
+    }
+
+    @Test
+    fun test_redeem_requires_sign_in() {
+        val entry = giftWithExpiry("867110", 360, 1, "2027-11-18T19:14:59+00:00")
+        assertEquals(
+            Vpn5gPromoCodes.Validation.NotSignedIn,
+            Vpn5gPromoCodes.validateEntryRedeem(
+                entry, false, false, 1_795_392_000L, null
+            ),
+        )
+        assertEquals(
+            Vpn5gPromoCodes.Validation.NotSignedIn,
+            Vpn5gPromoCodes.validateEntryRedeem(
+                entry, false, false, 1_795_392_000L, "  "
+            ),
+        )
+    }
+
+    @Test
+    fun test_redeem_by_other_email_is_not_yours() {
+        val entry = giftWithExpiry("867110", 360, 1, "2027-11-18T19:14:59+00:00")
+        assertEquals(
+            Vpn5gPromoCodes.Validation.NotYours,
+            Vpn5gPromoCodes.validateEntryRedeem(
+                entry, false, true, 1_795_392_000L, "b@gmail.com"
+            ),
+        )
+        // Same email re-entering: already redeemed, not "not yours".
+        assertEquals(
+            Vpn5gPromoCodes.Validation.AlreadyRedeemed,
+            Vpn5gPromoCodes.validateEntryRedeem(
+                entry, true, false, 1_795_392_000L, "a@gmail.com"
+            ),
+        )
+    }
+
+    @Test
+    fun test_activation_expiry_math() {
+        // 360 days from 2026-11-23T00:00:00Z (1_795_392_000).
+        assertEquals(
+            1_795_392_000L + 360L * 86_400L,
+            Vpn5gPromoCodes.activationExpiry(
+                giftWithExpiry("867110", 360, 1, "2027-11-18T19:14:59+00:00"),
+                1_795_392_000L,
+            ),
+        )
+        // 30 days: the 446843 code.
+        assertEquals(
+            1_795_392_000L + 30L * 86_400L,
+            Vpn5gPromoCodes.activationExpiry(
+                PromoCodeRemote(
+                    code = "446843", type = "gift", gift_days = 30,
+                    remaining_uses = 1, plan = "sub_1",
+                ),
+                1_795_392_000L,
+            ),
+        )
+        // Discount codes and gifts without days grant nothing.
+        assertNull(
+            Vpn5gPromoCodes.activationExpiry(discount("SAVE20", 20, 5), 1_795_392_000L)
+        )
+        assertNull(
+            Vpn5gPromoCodes.activationExpiry(gift("BAD", 0, 5), 1_795_392_000L)
         )
     }
 }

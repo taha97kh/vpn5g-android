@@ -117,6 +117,27 @@ object Vpn5gConstants {
      * clears it; sign-out does.
      */
     const val KEY_USER_SUBSCRIPTION_JSON = "vpn5g_user_subscription_json"
+    /**
+     * A subscription granted by a redeemed gift code (v1.1.12), cached as
+     * JSON in the same shape: status "active", the plan id, and the expiry
+     * computed from the code's gift_days at redemption time. It is the
+     * LOCAL truth for a code activation; the row cache above is the
+     * SERVER truth (bot-activated plans). The effective subscription is
+     * the later-expiring of the two — see
+     * [Vpn5gSubscriptionStatus.effectiveSubscription]. Sign-out clears
+     * both; a failed row fetch never clears either.
+     */
+    const val KEY_REDEEMED_SUBSCRIPTION_JSON = "vpn5g_redeemed_subscription_json"
+    /**
+     * True while a VPN session is live (v1.1.12, "اتصال پایدار"): set when
+     * the service starts, cleared only by a manual disconnect or by the
+     * 30-minute timer ending a free session. BootReceiver restarts the
+     * service after boot / an in-app update while this is set, so only
+     * those two events — never another app — can end the connection.
+     */
+    const val KEY_PERSISTENT_CONNECTION = "vpn5g_persistent_connection"
+    /** True once the battery-optimization exemption was asked for (v1.1.12). */
+    const val KEY_BATTERY_OPT_PROMPTED = "vpn5g_battery_opt_prompted"
     /** GUID of the manually picked free server ("" = auto mode, v1.1.5 §3). */
     const val KEY_MANUAL_SERVER_GUID = "vpn5g_manual_server_guid"
     /** GUIDs of servers whose tunnel check failed in this process run. */
@@ -202,6 +223,19 @@ object Vpn5gConstants {
      * tunnel verifies (v1.1.7).
      */
     const val MAX_DROP_FAILOVER_ROUNDS = 3
+
+    /**
+     * Persistent-connection reconnect (v1.1.12): when the service stops
+     * unexpectedly — not a manual disconnect, not the 30-minute timer,
+     * not a tunnel-check stop — the app re-runs the connect chain with
+     * exponential backoff, at most [MAX_PERSISTENT_RECONNECT_ATTEMPTS]
+     * times, then gives up with a clear error instead of looping
+     * forever on a dead network. A manual disconnect cancels the
+     * pending reconnect immediately.
+     */
+    const val MAX_PERSISTENT_RECONNECT_ATTEMPTS = 5
+    const val PERSISTENT_RECONNECT_BASE_BACKOFF_MS = 2_000L
+    const val PERSISTENT_RECONNECT_MAX_BACKOFF_MS = 30_000L
 
     /** Dismiss key of the app announcement the user closed (\"\" = none). */
     const val KEY_ANNOUNCEMENT_DISMISSED = "vpn5g_announcement_dismissed"

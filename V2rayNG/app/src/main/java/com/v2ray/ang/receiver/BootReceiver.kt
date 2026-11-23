@@ -8,6 +8,7 @@ import com.v2ray.ang.AppConfig
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SubscriptionUpdater
+import com.v2ray.ang.handler.vpn5g.Vpn5gConnectionPersistence
 import com.v2ray.ang.util.LogUtil
 
 class BootReceiver : BroadcastReceiver() {
@@ -45,8 +46,19 @@ class BootReceiver : BroadcastReceiver() {
             }
         }
 
-        if (!MmkvManager.decodeStartOnBoot()) {
-            LogUtil.i(AppConfig.TAG, "BootReceiver: Auto-start on boot is disabled")
+        // v1.1.12 ("اتصال پایدار"): a live persistent session also
+        // auto-starts after boot or an in-app update — even when the
+        // start-on-boot setting is off — because only a manual
+        // disconnect (or the 30-minute timer) may end it. The flag is
+        // cleared on manual disconnect, so a deliberately stopped VPN
+        // never comes back by itself.
+        if (!MmkvManager.decodeStartOnBoot() &&
+            !Vpn5gConnectionPersistence.isPersistentConnection()
+        ) {
+            LogUtil.i(
+                AppConfig.TAG,
+                "BootReceiver: Auto-start on boot is disabled and no persistent connection",
+            )
             return
         }
 

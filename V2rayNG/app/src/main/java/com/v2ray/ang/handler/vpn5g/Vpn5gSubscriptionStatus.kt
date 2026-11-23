@@ -2,6 +2,7 @@ package com.v2ray.ang.handler.vpn5g
 
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_REDEEMED_SUBSCRIPTION_JSON
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_USER_SUBSCRIPTION_JSON
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
@@ -202,27 +203,53 @@ object Vpn5gSubscriptionStatus {
         }
 
     /**
+     * The effective subscription (v1.1.12): the later-expiring of the
+     * bot-activated row and a locally redeemed gift code, considering
+     * only currently-active ones. A redeemed code and a bot-activated
+     * subscription combine sensibly — the later expiry wins — and a
+     * redeemed code is never demoted by a row fetch that finds no row
+     * or a "none" row. When neither is active, the row is returned (so
+     * the UI can show its expired state) or the redeemed one when
+     * there is no row at all. Pure, JVM-tested.
+     */
+    fun effectiveSubscription(
+        row: Vpn5gUserSubscription?,
+        redeemed: Vpn5gUserSubscription?,
+        nowEpochSeconds: Long,
+    ): Vpn5gUserSubscription? {
+        val active = listOfNotNull(row, redeemed)
+            .filter { isSubscriber(it, nowEpochSeconds) }
+        val best = active.maxByOrNull { it.expiresAtEpochSeconds ?: 0L }
+        if (best != null) return best
+        return row ?: redeemed
+    }
+
+    /**
      * Refreshes the cached subscription for the current session.
-     * A successful fetch overwrites the cache (Found → the row;
+     * A successful fetch overwrites the ROW cache (Found → the row;
      * NoRow → an explicit "none" so a stale active entry cannot
      * linger); a failed fetch keeps the cache untouched, so a
-     * network error never silently demotes a subscriber. Returns
-     * the subscription to use, or null when there is no session.
-     * Never throws.
+     * network error never silently demotes a subscriber. What is
+     * returned is always the EFFECTIVE subscription (v1.1.12): the
+     * row merged with a locally redeemed gift code — the later
+     * expiry wins, and a redeemed code survives a NoRow/Failed
+     * fetch. Returns the subscription to use, or null when there is
+     * no session. Never throws.
      */
     suspend fun refresh(session: Vpn5gAuthService.Vpn5gAuthSession?): Vpn5gUserSubscription? {
         if (session == null) return null
+        val nowSeconds = System.currentTimeMillis() / 1000
         return when (val result = fetchOwnRow(session)) {
             is FetchResult.Found -> {
                 saveCached(result.subscription)
-                result.subscription
+                effectiveSubscription(result.subscription, loadRedeemed(), nowSeconds)
             }
             FetchResult.NoRow -> {
                 val none = Vpn5gUserSubscription(status = "none")
                 saveCached(none)
-                none
+                effectiveSubscription(none, loadRedeemed(), nowSeconds)
             }
-            FetchResult.Failed -> loadCached()
+            FetchResult.Failed -> effectiveSubscription(loadCached(), loadRedeemed(), nowSeconds)
         }
     }
 
@@ -238,9 +265,26 @@ object Vpn5gSubscriptionStatus {
         }
     }
 
-    /** True when the cached subscription is currently active. */
+    /** The locally redeemed gift-code subscription, or null when none was ever redeemed. */
+    fun loadRedeemed(): Vpn5gUserSubscription? {
+        val json = MmkvManager.decodeSettingsString(KEY_REDEEMED_SUBSCRIPTION_JSON)
+        if (json.isNullOrBlank()) return null
+        return try {
+            JsonUtil.fromJsonSafe(json, Vpn5gUserSubscription::class.java)
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Vpn5gSubscriptionStatus: redeemed cache parse failed", e)
+            null
+        }
+    }
+
+    /** The effective subscription from both caches (row + redeemed gift code). */
+    fun loadEffective(nowEpochSeconds: Long = System.currentTimeMillis() / 1000): Vpn5gUserSubscription? {
+        return effectiveSubscription(loadCached(), loadRedeemed(), nowEpochSeconds)
+    }
+
+    /** True when the effective subscription is currently active. */
     fun cachedIsSubscriber(nowEpochSeconds: Long = System.currentTimeMillis() / 1000): Boolean {
-        return isSubscriber(loadCached(), nowEpochSeconds)
+        return isSubscriber(loadEffective(nowEpochSeconds), nowEpochSeconds)
     }
 
     fun saveCached(subscription: Vpn5gUserSubscription) {
@@ -250,9 +294,19 @@ object Vpn5gSubscriptionStatus {
         )
     }
 
+    /** Saves a gift-code subscription granted by an in-app redemption (v1.1.12). */
+    fun saveRedeemed(subscription: Vpn5gUserSubscription) {
+        MmkvManager.encodeSettings(
+            KEY_REDEEMED_SUBSCRIPTION_JSON,
+            JsonUtil.toJson(subscription),
+        )
+    }
+
     /** Clears the cache (sign-out: the next account must not inherit it). */
     fun clearCached() {
         MmkvManager.encodeSettings(KEY_USER_SUBSCRIPTION_JSON, "")
+        // A redeemed gift code belongs to the signed-out account too.
+        MmkvManager.encodeSettings(KEY_REDEEMED_SUBSCRIPTION_JSON, "")
     }
 
     private fun client(): OkHttpClient = OkHttpClient.Builder()
