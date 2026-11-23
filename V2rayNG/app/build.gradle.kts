@@ -13,8 +13,8 @@ android {
         applicationId = "com.taha97kh.vpn5g"
         minSdk = 24
         targetSdk = 37
-        versionCode = 10
-        versionName = "1.1.8"
+        versionCode = 11
+        versionName = "1.1.9"
 
         // Build date stamped into BuildConfig.BUILD_TIME (VPN 5G About screen).
         buildConfigField("String", "BUILD_TIME", "\"2026-11-23\"")

@@ -3,46 +3,34 @@ package com.v2ray.ang.handler.vpn5g
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/** JVM tests for the Supabase OTP error-key mapping (pure Kotlin). */
+/** JVM tests for the Supabase auth error-key mapping (pure Kotlin). */
 class Vpn5gAuthErrorKeyTest {
 
+    // v1.1.9: public-IP parsing for the registration guard.
+
     @Test
-    fun test_send_rate_limited() {
-        assertEquals("rate_limited", Vpn5gAuthService.sendErrorKey(429))
+    fun test_parse_ip_from_ipify() {
+        assertEquals(
+            "1.2.3.4",
+            Vpn5gAuthService.parseIp("""{"ip":"1.2.3.4"}"""),
+        )
     }
 
     @Test
-    fun test_send_email_not_registered() {
-        assertEquals("email_not_registered", Vpn5gAuthService.sendErrorKey(422))
+    fun test_parse_ip_from_ip_sb_geoip() {
+        assertEquals(
+            "2001:db8::1",
+            Vpn5gAuthService.parseIp(
+                """{"ip":"2001:db8::1","country_code":"IR","city":"Ardabil"}"""
+            ),
+        )
     }
 
     @Test
-    fun test_send_other_status_is_generic() {
-        assertEquals("otp_failed", Vpn5gAuthService.sendErrorKey(400))
-        assertEquals("otp_failed", Vpn5gAuthService.sendErrorKey(500))
-        assertEquals("otp_failed", Vpn5gAuthService.sendErrorKey(0))
-    }
-
-    @Test
-    fun test_verify_wrong_or_expired_code() {
-        for (status in listOf(400, 401, 403, 404, 422)) {
-            assertEquals(
-                "code_wrong_or_expired",
-                Vpn5gAuthService.verifyErrorKey(status),
-                "status $status",
-            )
-        }
-    }
-
-    @Test
-    fun test_verify_rate_limited() {
-        assertEquals("rate_limited", Vpn5gAuthService.verifyErrorKey(429))
-    }
-
-    @Test
-    fun test_verify_other_status_is_generic() {
-        assertEquals("verify_failed", Vpn5gAuthService.verifyErrorKey(500))
-        assertEquals("verify_failed", Vpn5gAuthService.verifyErrorKey(0))
+    fun test_parse_ip_missing_is_null() {
+        assertEquals(null, Vpn5gAuthService.parseIp("""{"country":"IR"}"""))
+        assertEquals(null, Vpn5gAuthService.parseIp(""))
+        assertEquals(null, Vpn5gAuthService.parseIp("""{"ip":""}"""))
     }
 
     // v1.1.8: direct signup (scenario 1).

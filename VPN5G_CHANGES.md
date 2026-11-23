@@ -805,3 +805,87 @@ dependency, no supabase-kt SDK.
   (local Gradle is blocked); CI is the only check. The recovery deep
   link, the four screens, and the signup-no-session fallback need
   Aref's phone to test for real.
+
+## v1.1.9 (2026-11-23, versionCode 11)
+
+Aref ordered: no signup/login CODE inside the app anymore — registration
+only with email + password, and one user per IP and email so nobody can
+dodge the limit with a different email. OTP is removed entirely.
+
+- **OTP removed.** The code screen, the code buttons, `sendLoginOtp` /
+  `verifyOtp`, `Vpn5gOtpPolicy` (+ its test) and all OTP-only strings
+  are deleted. No code is sent, asked for, or verified anywhere in the
+  app. OTP login was removed together with OTP signup: the code screen
+  served both, and codes are exactly the bypass he wants closed.
+  Password recovery via the emailed LINK stays — it is not a signup
+  code, and it is the only way for users who registered with a code
+  earlier to set a password and log in (see below).
+- **Registration is email + password only.** Signup is POST
+  /auth/v1/signup {"email", "password"}; with "Confirm email" OFF the
+  session comes back immediately, no code. If "Confirm email" is ever
+  turned back ON, a signup that returns a user without a session now
+  reports `email_not_confirmed` ("ایمیلت هنوز تایید نشده؛ لینک تایید
+  را از ایمیلت باز کن و بعد با رمز عبورت وارد شو") — the user taps the
+  confirmation LINK in the email, then logs in with the password.
+- **One account per IP + email (server-enforced).** New file
+  `supabase/vpn5g_registrations.sql`: table
+  `public.vpn5g_registrations` (id, email, ip, created_at;
+  UNIQUE(email), UNIQUE(ip)), RLS enabled, NO direct anon access —
+  reachable only through two SECURITY DEFINER functions
+  (`check_registration` returns rows 'email'/'ip' for taken values;
+  `register_account` inserts and returns true, false on a unique
+  violation instead of raising), both `SET search_path = public`,
+  `GRANT EXECUTE ... TO anon`. Signup flow in the app: (1) fetch the
+  device's public IP directly (no proxy — signup happens before any
+  VPN connection), primary https://api.ipify.org?format=json,
+  fallback https://api.ip.sb/geoip (the same endpoint
+  Vpn5gTunnelCheck uses); if neither answers, signup fails CLOSED
+  with a network error and is never attempted. (2) POST
+  /rest/v1/rpc/check_registration {p_email, p_ip} — email taken →
+  the existing "already registered, log in with your password"
+  message; IP taken → new key `ip_already_registered` ("با این
+  اینترنت قبلاً یک حساب ساخته شده است؛ هر اینترنت فقط یک حساب").
+  An unparseable check response also fails CLOSED. (3) Only then
+  signUp. (4) After a successful signup, POST
+  /rest/v1/rpc/register_account records the pair; if that record call
+  fails, the session is still real and returned (logged only) — the
+  table's UNIQUE(ip) is the backstop against two signups racing past
+  the check. The guard applies ONLY to registration, never to password
+  login or recovery. Pure mapping lives in the new
+  `Vpn5gRegistrationGuard` (JVM-tested in
+  `Vpn5gRegistrationGuardTest`); IP parsing is JVM-tested in
+  `Vpn5gAuthErrorKeyTest` (OTP cases removed).
+- **Shared-IP tradeoff, stated honestly.** The rule keys on the
+  public IP, so it cannot tell two people apart on the same
+  internet: a second person on the same family Wi-Fi — or on the
+  same mobile carrier CGNAT address — cannot register while the
+  first account exists. That is the intended effect of the rule
+  Aref ordered, not a bug: one internet connection, one account.
+  (Logging in from a shared IP is unaffected; only registration is
+  gated. A user whose IP changes — new mobile data session, another
+  Wi-Fi — can register from the new IP.)
+- **Earlier OTP users.** Anyone who registered with a code in
+  1.1.7/1.1.8 has an account but no password: they set one via
+  «فراموشی رمز عبور» (recovery link → new-password screen), then
+  log in with email + password. No migration was needed in the app.
+- **Dashboard steps the user must still do (app code cannot do
+  them).** (1) Run `supabase/vpn5g_registrations.sql` once:
+  Supabase dashboard → SQL Editor → New query → paste the whole
+  file → Run. Until it is run, EVERY signup fails closed with a
+  network error (the RPC functions do not exist yet). (2) The
+  redirect URL `vpn5g://auth/callback` (Authentication → URL
+  Configuration → Redirect URLs) is still required for the recovery
+  link. (3) Custom SMTP for VPN5G.IRBOT@gmail.com is STILL not set
+  up (blocked on Aref creating the Gmail app password himself):
+  recovery-link emails go through the built-in service until then.
+- **Error handling.** The service never throws; the rate-limit
+  string no longer mentions codes ("درخواست‌های زیادی فرستاده شده؛
+  یک دقیقه صبر کنید و دوباره تلاش کنید"). Every result still sets
+  a terminal phase (no stuck loading).
+- **Not verified on a device.** `:app:testPlaystoreDebugUnitTest` /
+  `:app:compilePlaystoreDebugKotlin` / `:app:assemblePlaystoreDebug`
+  cannot run in this sandbox (local Gradle is blocked); CI is the
+  only check. The guard flow (IP fetch → check → signup → record),
+  the recovery link, and the three screens need Aref's phone to test
+  for real. The SQL file has not been run against the live project
+  yet — Aref runs it in the dashboard (step 1 above).

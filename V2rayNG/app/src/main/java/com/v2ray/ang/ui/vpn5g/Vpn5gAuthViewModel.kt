@@ -9,7 +9,6 @@ import com.v2ray.ang.R
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthConfig
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthService
 import com.v2ray.ang.handler.vpn5g.Vpn5gEmailPolicy
-import com.v2ray.ang.handler.vpn5g.Vpn5gOtpPolicy
 import com.v2ray.ang.handler.vpn5g.Vpn5gRecoveryLink
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.AppConfig
@@ -20,15 +19,16 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * One auth mode per screen (v1.1.8). LOGIN is the password login
- * (scenario 4), REGISTER the direct signup (scenario 1), OTP the
- * 6-digit code login/signup (scenario 2), RECOVER the forgot-password
- * link flow (scenario 3).
+ * One auth mode per screen (v1.1.9). LOGIN is the password login
+ * (flow 3), REGISTER the direct signup (flow 1), RECOVER the
+ * forgot-password link flow (flow 2). There is no code/OTP mode
+ * anymore: OTP was removed in v1.1.9 on Aref's order, and
+ * registration is email + password only.
  */
-enum class Vpn5gAuthMode { LOGIN, REGISTER, OTP, RECOVER }
+enum class Vpn5gAuthMode { LOGIN, REGISTER, RECOVER }
 
 enum class Vpn5gAuthPhase {
-    IDLE, SENDING_CODE, CODE_SENT, VERIFYING, SIGNING_IN, LINK_SENT,
+    IDLE, SIGNING_IN, LINK_SENT,
     NEW_PASSWORD, UPDATING_PASSWORD, DONE, ERROR
 }
 
@@ -36,50 +36,42 @@ data class Vpn5gAuthUiState(
     val mode: Vpn5gAuthMode = Vpn5gAuthMode.LOGIN,
     val phase: Vpn5gAuthPhase = Vpn5gAuthPhase.IDLE,
     val email: String = "",
-    val code: String = "",
     val password: String = "",
     val passwordConfirm: String = "",
     val emailErrorRes: Int? = null,
-    val codeErrorRes: Int? = null,
     val passwordErrorRes: Int? = null,
     val errorRes: Int? = null,
     val signedInEmail: String? = null,
     /** False until a Supabase project is configured (see Vpn5gAuthConfig). */
     val backendConfigured: Boolean = Vpn5gAuthConfig.isConfigured(),
-    /** Epoch millis of the last accepted code send (resend cooldown). */
-    val lastCodeSentMs: Long = 0L,
-    /** Wrong-code tries in this session (lockout after the limit). */
-    val wrongCodeAttempts: Int = 0,
-    /** Recovery-link tokens (scenario 3); set only by startRecovery. */
+    /** Recovery-link tokens (flow 2); set only by startRecovery. */
     val recoveryLink: Vpn5gRecoveryLink.Parsed? = null,
 )
 
 /**
- * Auth screen ViewModel: owns the four Supabase Auth flows (direct
- * signup, OTP code, recovery link + new password, password login) and
- * calls [Vpn5gAuthService] on IO.
+ * Auth screen ViewModel: owns the three Supabase Auth flows (direct
+ * signup with the one-account-per-IP+email guard, recovery link +
+ * new password, password login) and calls [Vpn5gAuthService] on IO.
  *
- * "Too many requests" root cause (v1.1.8 fix): the old screen could
- * fire an OTP send with no cooldown guard and no in-flight lock, so a
- * double tap — or a mode switch followed by another send within 60
- * seconds — hit Supabase's one-send-per-60-seconds limit. Every send
- * now goes through ONE guarded entry point per mode: a request already
- * in flight is ignored, and a send inside the 60-second cooldown is
- * refused with the rate-limit message instead of being fired. The
- * screen also disables every send button while its request is in
- * flight, so a double tap can never reach the backend. Nothing is
- * auto-retried: a 429 shows how long to wait.
+ * Every send goes through ONE guarded entry point per mode: a request
+ * already in flight is ignored, and the screen disables every send
+ * button while its request is in flight, so a double tap can never
+ * reach the backend. Nothing is auto-retried: a 429 shows the
+ * rate-limit message.
  *
- * SignUp and OTP are never fired for the same attempt: the OTP
- * fallback after a no-session signup is sequential (signup first,
- * then — only if the backend returned a user without a session — one
- * OTP send), never parallel.
+ * Signup (flow 1) runs the server-side guard before creating the
+ * account: the service fetches the device's public IP directly and
+ * asks the server whether the email or the IP is already registered.
+ * An already-registered email offers the password-login screen
+ * instead of a dead end; an already-registered IP is a hard stop
+ * (`ip_already_registered`). The guard never runs for password login
+ * or recovery.
  *
  * When the Supabase project is not configured, every call returns
  * NotConfigured and the screen says so honestly (no fake sends).
- * Validation (Gmail-only email, 6-digit code, password length and
- * confirmation) is real and local. No error path leaves the UI stuck
- * in a loading state: every result sets a terminal phase.
+ * Validation (Gmail-only email, password length and confirmation)
+ * is real and local. No error path leaves the UI stuck in a loading
+ * state: every result sets a terminal phase.
  */
 class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -89,9 +81,7 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
     val uiState: StateFlow<Vpn5gAuthUiState> = _uiState.asStateFlow()
 
     /** Phases in which a request is already running (double-tap guard). */
-    private fun isBusy(phase: Vpn5gAuthPhase): Boolean = phase == Vpn5gAuthPhase.SENDING_CODE ||
-        phase == Vpn5gAuthPhase.VERIFYING ||
-        phase == Vpn5gAuthPhase.SIGNING_IN ||
+    private fun isBusy(phase: Vpn5gAuthPhase): Boolean = phase == Vpn5gAuthPhase.SIGNING_IN ||
         phase == Vpn5gAuthPhase.UPDATING_PASSWORD
 
     fun setMode(mode: Vpn5gAuthMode) {
@@ -99,14 +89,11 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
             it.copy(
                 mode = mode,
                 phase = Vpn5gAuthPhase.IDLE,
-                code = "",
                 password = "",
                 passwordConfirm = "",
                 emailErrorRes = null,
-                codeErrorRes = null,
                 passwordErrorRes = null,
                 errorRes = null,
-                wrongCodeAttempts = 0,
                 recoveryLink = null,
             )
         }
@@ -114,12 +101,6 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setEmail(value: String) {
         _uiState.update { it.copy(email = value, emailErrorRes = null, errorRes = null) }
-    }
-
-    fun setCode(value: String) {
-        _uiState.update {
-            it.copy(code = value.filter { ch -> ch.isDigit() }.take(6), codeErrorRes = null, errorRes = null)
-        }
     }
 
     fun setPassword(value: String) {
@@ -169,12 +150,14 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Scenario 1: direct signup (email + password, no code). With
-     * "Confirm email" OFF the backend returns a session and the user
-     * is signed in immediately. With it ON the backend returns a user
-     * without a session: one OTP send follows (sequential fallback)
-     * and the code screen opens. An already-registered email offers
-     * the password-login screen instead of a dead end.
+     * Flow 1: direct signup (email + password, no code), guarded by
+     * the one-account-per-IP+email rule (the service fetches the
+     * public IP and checks the server before creating the account).
+     * With "Confirm email" OFF the backend returns a session and the
+     * user is signed in immediately. An already-registered email
+     * offers the password-login screen instead of a dead end; an
+     * already-registered IP is a hard stop for this internet
+     * connection.
      */
     fun signUp() {
         val state = _uiState.value
@@ -189,26 +172,6 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
                     _uiState.update {
                         it.copy(phase = Vpn5gAuthPhase.DONE, signedInEmail = result.session.email)
                     }
-                Vpn5gAuthService.AuthResult.NeedsCode -> {
-                    // "Confirm email" is ON: fall back to OTP, once.
-                    when (val otp = Vpn5gAuthService.sendLoginOtp(email)) {
-                        Vpn5gAuthService.AuthResult.CodeSent ->
-                            _uiState.update {
-                                it.copy(
-                                    phase = Vpn5gAuthPhase.CODE_SENT,
-                                    mode = Vpn5gAuthMode.OTP,
-                                    errorRes = R.string.vpn5g_auth_signup_code_needed,
-                                    lastCodeSentMs = System.currentTimeMillis(),
-                                )
-                            }
-                        Vpn5gAuthService.AuthResult.NotConfigured ->
-                            _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_coming_soon) }
-                        is Vpn5gAuthService.AuthResult.Error ->
-                            _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = mapError(otp.message)) }
-                        else ->
-                            _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_generic_error) }
-                    }
-                }
                 Vpn5gAuthService.AuthResult.NotConfigured ->
                     _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_coming_soon) }
                 is Vpn5gAuthService.AuthResult.Error -> {
@@ -234,7 +197,7 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Scenario 4: password login for already-registered users.
+     * Flow 3: password login for already-registered users.
      * A wrong email/password is a friendly message, never a crash.
      */
     fun signInWithPassword() {
@@ -261,117 +224,7 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Scenario 2, step 1: send the OTP code. Single guarded entry
-     * point: a request already in flight is ignored, and a send
-     * inside the 60-second cooldown is refused with the rate-limit
-     * message instead of being fired at the backend.
-     */
-    fun sendCode() {
-        val state = _uiState.value
-        if (isBusy(state.phase)) return
-        if (!validEmail()) return
-        if (!Vpn5gOtpPolicy.canResend(state.lastCodeSentMs, System.currentTimeMillis())) {
-            _uiState.update { it.copy(errorRes = R.string.vpn5g_auth_rate_limited) }
-            return
-        }
-        _uiState.update { it.copy(phase = Vpn5gAuthPhase.SENDING_CODE, errorRes = null) }
-        viewModelScope.launch {
-            when (val result = Vpn5gAuthService.sendLoginOtp(state.email.trim())) {
-                Vpn5gAuthService.AuthResult.CodeSent ->
-                    _uiState.update {
-                        it.copy(
-                            phase = Vpn5gAuthPhase.CODE_SENT,
-                            lastCodeSentMs = System.currentTimeMillis(),
-                        )
-                    }
-                Vpn5gAuthService.AuthResult.NotConfigured ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_coming_soon) }
-                is Vpn5gAuthService.AuthResult.Error ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = mapError(result.message)) }
-                is Vpn5gAuthService.AuthResult.SignedIn ->
-                    _uiState.update {
-                        it.copy(phase = Vpn5gAuthPhase.DONE, signedInEmail = result.session.email)
-                    }
-                else ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_generic_error) }
-            }
-        }
-    }
-
-    /**
-     * Resend the code (v1.1.5 §7): allowed only after the 60-second
-     * cooldown (Supabase rate-limits faster resends). The screen disables
-     * the button while cooling down; this is the second guard.
-     */
-    fun resendCode() {
-        if (!Vpn5gOtpPolicy.canResend(
-                _uiState.value.lastCodeSentMs, System.currentTimeMillis()
-            )
-        ) {
-            return
-        }
-        sendCode()
-    }
-
-    /** Scenario 2, step 2: verify the 6-digit code. */
-    fun verifyCode() {
-        val state = _uiState.value
-        if (isBusy(state.phase)) return
-        if (!state.code.matches(Regex("\\d{6}"))) {
-            _uiState.update { it.copy(codeErrorRes = R.string.vpn5g_auth_invalid_code) }
-            return
-        }
-        _uiState.update { it.copy(phase = Vpn5gAuthPhase.VERIFYING, errorRes = null) }
-        viewModelScope.launch {
-            when (val result = Vpn5gAuthService.verifyOtp(state.email.trim(), state.code)) {
-                is Vpn5gAuthService.AuthResult.SignedIn ->
-                    _uiState.update {
-                        it.copy(
-                            phase = Vpn5gAuthPhase.DONE,
-                            signedInEmail = result.session.email,
-                            wrongCodeAttempts = 0,
-                        )
-                    }
-                Vpn5gAuthService.AuthResult.NotConfigured ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_coming_soon) }
-                is Vpn5gAuthService.AuthResult.Error -> {
-                    // A wrong or expired code counts against the session
-                    // limit (v1.1.5 §7): after the limit the user must
-                    // take a fresh code instead of guessing forever.
-                    val errorRes = mapError(result.message)
-                    _uiState.update {
-                        if (result.message == "code_wrong_or_expired") {
-                            val attempts = it.wrongCodeAttempts + 1
-                            if (Vpn5gOtpPolicy.isLockedOut(attempts)) {
-                                it.copy(
-                                    phase = Vpn5gAuthPhase.ERROR,
-                                    errorRes = R.string.vpn5g_auth_code_locked,
-                                    wrongCodeAttempts = 0,
-                                    code = "",
-                                )
-                            } else {
-                                it.copy(
-                                    phase = Vpn5gAuthPhase.ERROR,
-                                    errorRes = errorRes,
-                                    wrongCodeAttempts = attempts,
-                                )
-                            }
-                        } else {
-                            it.copy(
-                                phase = Vpn5gAuthPhase.ERROR,
-                                errorRes = errorRes,
-                            )
-                        }
-                    }
-                }
-                else ->
-                    _uiState.update { it.copy(phase = Vpn5gAuthPhase.ERROR, errorRes = R.string.vpn5g_auth_generic_error) }
-            }
-        }
-    }
-
-    /**
-     * Scenario 3, step 1: send the recovery LINK (not a code).
+     * Flow 2, step 1: send the recovery LINK (not a code).
      * A request already in flight is ignored.
      */
     fun sendRecoveryLink() {
@@ -394,7 +247,7 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Scenario 3, step 2: the recovery deep link arrived
+     * Flow 2, step 2: the recovery deep link arrived
      * (`vpn5g://auth/callback`, type=recovery). Opens the
      * new-password screen with the link's tokens; the tokens are
      * stored in ViewModel state so they survive rotation.
@@ -413,7 +266,7 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** Scenario 3, step 3: set the new password, then sign in. */
+    /** Flow 2, step 3: set the new password, then sign in. */
     fun updatePassword() {
         val state = _uiState.value
         if (isBusy(state.phase)) return
@@ -449,7 +302,7 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
     fun signOut() {
         Vpn5gAuthService.signOut()
         _uiState.update {
-            it.copy(phase = Vpn5gAuthPhase.IDLE, signedInEmail = null, code = "", recoveryLink = null)
+            it.copy(phase = Vpn5gAuthPhase.IDLE, signedInEmail = null, recoveryLink = null)
         }
     }
 
@@ -462,12 +315,12 @@ class Vpn5gAuthViewModel(application: Application) : AndroidViewModel(applicatio
         return when (message) {
             "network_error" -> R.string.vpn5g_auth_network_error
             "rate_limited" -> R.string.vpn5g_auth_rate_limited
-            "email_not_registered" -> R.string.vpn5g_auth_email_not_registered
             "email_already_registered" -> R.string.vpn5g_auth_email_already_registered
+            "ip_already_registered" -> R.string.vpn5g_auth_ip_already_registered
+            "email_not_confirmed" -> R.string.vpn5g_auth_email_not_confirmed
             "invalid_credentials" -> R.string.vpn5g_auth_invalid_credentials
             "weak_password" -> R.string.vpn5g_auth_weak_password
             "recovery_link_invalid" -> R.string.vpn5g_auth_recovery_link_invalid
-            "code_wrong_or_expired" -> R.string.vpn5g_auth_code_wrong
             else -> R.string.vpn5g_auth_generic_error
         }
     }

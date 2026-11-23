@@ -615,15 +615,11 @@
     <string name="vpn5g_auth_title">ورود با ایمیل</string>
     <string name="vpn5g_auth_email">ایمیل</string>
     <string name="vpn5g_auth_email_hint">example@mail.com</string>
-    <string name="vpn5g_auth_send_code">ارسال کد تایید</string>
-    <string name="vpn5g_auth_code">کد تایید ۶ رقمی</string>
-    <string name="vpn5g_auth_confirm">تأیید</string>
     <string name="vpn5g_auth_forgot">فراموشی رمز عبور</string>
     <string name="vpn5g_auth_coming_soon">به‌زودی — نیاز به سرور دارد (نسخه‌ی بعد)</string>
     <string name="vpn5g_auth_invalid_email">ایمیل معتبر وارد کنید</string>
     <string name="vpn5g_auth_gmail_only">ثبت‌نام فقط با ایمیل Gmail امکان‌پذیر است</string>
     <string name="vpn5g_auth_disposable">ایمیل‌های موقت و یک‌بارمصرف قابل قبول نیستند</string>
-    <string name="vpn5g_auth_invalid_code">کد باید ۶ رقم باشد</string>
     <string name="vpn5g_auth_recover_title">بازیابی رمز عبور</string>
     <string name="vpn5g_auth_recover_body">لینک بازیابی به ایمیلت فرستاده می‌شود؛ روی لینک بزن تا به اپ برگردی و رمز جدیدت را وارد کنی.</string>
     <!-- v1.1.8: four auth flows — password login/signup, OTP code, recovery link -->
@@ -631,19 +627,18 @@
     <string name="vpn5g_auth_password_confirm">تکرار رمز عبور</string>
     <string name="vpn5g_auth_show_password">نمایش</string>
     <string name="vpn5g_auth_hide_password">پنهان</string>
-    <string name="vpn5g_auth_otp_title">ورود با کد تایید</string>
     <string name="vpn5g_auth_login_button">ورود</string>
     <string name="vpn5g_auth_signup_button">ثبت‌نام</string>
     <string name="vpn5g_auth_signing_in">در حال ورود…</string>
     <string name="vpn5g_auth_go_login">قبلاً ثبت‌نام کرده‌اید؟ ورود</string>
-    <string name="vpn5g_auth_go_otp">ورود با کد تایید</string>
     <string name="vpn5g_auth_go_password_login">ورود با رمز عبور</string>
     <string name="vpn5g_auth_password_required">رمز عبور را وارد کنید</string>
     <string name="vpn5g_auth_weak_password">رمز عبور باید حداقل ۶ کاراکتر باشد</string>
     <string name="vpn5g_auth_password_mismatch">رمز عبور و تکرارش یکی نیست</string>
     <string name="vpn5g_auth_email_already_registered">این ایمیل قبلاً ثبت شده؛ با رمز عبورت وارد شو</string>
+    <string name="vpn5g_auth_ip_already_registered">با این اینترنت قبلاً یک حساب ساخته شده است؛ هر اینترنت فقط یک حساب</string>
+    <string name="vpn5g_auth_email_not_confirmed">ایمیلت هنوز تایید نشده؛ لینک تایید را از ایمیلت باز کن و بعد با رمز عبورت وارد شو</string>
     <string name="vpn5g_auth_invalid_credentials">ایمیل یا رمز عبور اشتباه است</string>
-    <string name="vpn5g_auth_signup_code_needed">ثبت‌نام شد؛ چون تایید ایمیل روشن است، کد تایید به ایمیلت فرستاده شد</string>
     <string name="vpn5g_auth_send_link">ارسال لینک بازیابی</string>
     <string name="vpn5g_auth_send_link_again">ارسال دوباره لینک</string>
     <string name="vpn5g_auth_sending_link">در حال ارسال لینک…</string>
@@ -680,10 +675,7 @@
     <string name="vpn5g_auth_go_register">ثبت‌نام نکرده‌اید؟ ثبت‌نام کنید</string>
     <string name="vpn5g_auth_done">انجام شد</string>
     <string name="vpn5g_auth_back_to_profile">بازگشت به پروفایل</string>
-    <string name="vpn5g_auth_sending">در حال ارسال کد…</string>
-    <string name="vpn5g_auth_verifying">در حال بررسی…</string>
     <string name="vpn5g_auth_network_error">خطای شبکه؛ دوباره تلاش کنید</string>
-    <string name="vpn5g_auth_code_wrong">کد اشتباه است یا منقضی شده؛ کد تازه بگیرید</string>
     <string name="vpn5g_auth_signin_failed">ورود ناموفق بود</string>
     <string name="vpn5g_auth_generic_error">خطایی رخ داد؛ دوباره تلاش کنید</string>
     <string name="vpn5g_auth_signout">خروج از حساب</string>
@@ -750,8 +742,7 @@
     <string name="vpn5g_server_subtitle" translatable="false">VPN5G_iRBot</string>
     <string name="vpn5g_no_ping_switch">این سرور پینگ ندارد؛ در حال اتصال به سرور بعدی…</string>
     <string name="vpn5g_start_failed">اتصال برقرار نشد؛ دوباره تلاش کنید</string>
-    <string name="vpn5g_auth_rate_limited">کدهای زیادی درخواست شده؛ یک دقیقه صبر کنید و دوباره تلاش کنید</string>
-    <string name="vpn5g_auth_email_not_registered">این ایمیل ثبت نشده است؛ اول ثبت‌نام کنید</string>
+    <string name="vpn5g_auth_rate_limited">درخواست‌های زیادی فرستاده شده؛ یک دقیقه صبر کنید و دوباره تلاش کنید</string>
     <string name="vpn5g_footer_made_by" translatable="false">Made by AREF KH</string>
     <string name="vpn5g_footer_years" translatable="false">2026 - 1405</string>
     <string name="vpn5g_connect_brand" translatable="false">4ref.ai</string>
@@ -790,11 +781,6 @@
     <string name="vpn5g_link_support" translatable="false">پشتیبانی آنلاین</string>
 
     <!-- v1.1.5: OTP states (§7 — Android side only). -->
-    <string name="vpn5g_auth_code_sent">درخواست کد ثبت شد؛ اگر تا چند دقیقه کد نرسید، پوشهٔ اسپم را بررسی کن یا دوباره درخواست بده.</string>
-    <string name="vpn5g_auth_resend">ارسال مجدد کد</string>
-    <string name="vpn5g_auth_resend_in">ارسال مجدد تا %1$d ثانیهٔ دیگر</string>
-    <string name="vpn5g_auth_code_not_arrived">اگر کد نرسید، پوشهٔ اسپم را بررسی کن یا دوباره درخواست بده.</string>
-    <string name="vpn5g_auth_code_locked">کد را چند بار اشتباه وارد کردی؛ کد تازه بگیر و با دقت وارد کن</string>
 
     <!-- v1.1.5: guide, 20 sections (§5). -->
     <string name="vpn5g_guide_faq_title">سوالات متداول</string>

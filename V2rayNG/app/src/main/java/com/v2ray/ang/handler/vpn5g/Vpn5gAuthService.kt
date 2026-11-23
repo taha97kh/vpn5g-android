@@ -14,23 +14,41 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /**
- * Email auth service layer (Supabase Auth / GoTrue REST), four flows
- * (v1.1.8). Gmail-only is enforced by the UI ([Vpn5gEmailPolicy])
+ * Email auth service layer (Supabase Auth / GoTrue REST), three flows
+ * (v1.1.9). Gmail-only is enforced by the UI ([Vpn5gEmailPolicy])
  * before any call is made.
  *
+ * OTP is GONE (removed v1.1.9 on Aref's order): no code is sent,
+ * asked for, or verified anywhere in the app. Registration is
+ * email + password only. OTP login was removed together with OTP
+ * signup, because the code screen served both and codes are exactly
+ * the bypass he wants closed. Password recovery via the emailed LINK
+ * stays: it is not a signup code, and it is the only way for users
+ * who registered with a code earlier to set a password and log in.
+ *
  * Endpoints (project in [Vpn5gAuthConfig]):
- *  1. Direct signup/login, no code — POST /auth/v1/signup
+ *  1. Direct signup, no code — POST /auth/v1/signup
  *     {"email", "password"}. With "Confirm email" OFF in the Supabase
  *     panel the response carries a session and the user is signed in
- *     immediately. With it ON the response has a user but no session,
- *     and the caller falls back to the OTP code screen (scenario 2).
- *     A signup needs a password: GoTrue has no passwordless signup.
- *  2. OTP login/signup — POST /auth/v1/otp {"email", "create_user":
- *     true} then POST /auth/v1/verify {"email", "token", "type":
- *     "email"}. The 6-digit code flow; signUp and OTP are never fired
- *     for the same attempt (the OTP fallback after a no-session signup
- *     is sequential, not parallel).
- *  3. Forgot password — POST /auth/v1/recover {"email",
+ *     immediately. With it ON the response has a user but no session:
+ *     the caller gets `email_not_confirmed` (the user taps the
+ *     confirmation LINK in the email, then logs in with the
+ *     password). A signup needs a password: GoTrue has no
+ *     passwordless signup.
+ *     Before signup, the one-account-per-IP+email guard runs (see
+ *     [Vpn5gRegistrationGuard] and `supabase/vpn5g_registrations.sql`):
+ *     the device's public IP is fetched directly (no proxy — signup
+ *     happens before any VPN connection), then POST
+ *     /rest/v1/rpc/check_registration asks the server whether the
+ *     email or the IP is already registered. Either taken fails the
+ *     signup with a stable key; any guard failure fails CLOSED
+ *     (no signup is attempted on an unchecked registration). After
+ *     a successful signup, POST /rest/v1/rpc/register_account
+ *     records the (email, ip) pair; if that record call fails, the
+ *     session is still real and returned — the table's UNIQUE(ip)
+ *     is the backstop against a race. The guard applies ONLY to
+ *     registration, never to password login or recovery.
+ *  2. Forgot password — POST /auth/v1/recover {"email",
  *     "redirect_to": "vpn5g://auth/callback"} sends the recovery LINK
  *     (not a code). The link returns to the app as a deep link; its
  *     fragment carries `type=recovery` plus the session tokens (see
@@ -40,23 +58,22 @@ import java.util.concurrent.TimeUnit
  *     allow-listed in the Supabase dashboard (Authentication → URL
  *     Configuration → Redirect URLs); without it GoTrue refuses the
  *     custom redirect.
- *  4. Password login — POST /auth/v1/token?grant_type=password
+ *  3. Password login — POST /auth/v1/token?grant_type=password
  *     {"email", "password"} returns the session directly.
  *
  * The session (access/refresh token + email) is persisted in MMKV under
- * [KEY_AUTH_SESSION_JSON]. The Gmail app password that actually sends
- * the codes lives in Supabase's SMTP settings, never in this app, and
- * custom SMTP is still not set up — until it is, OTP emails may not
- * arrive at all. Nothing here fakes a send.
+ * [KEY_AUTH_SESSION_JSON]. The Gmail app password that sends the
+ * recovery emails lives in Supabase's SMTP settings, never in this
+ * app; custom SMTP is still not set up, so recovery emails may be
+ * rate-limited by the built-in service. Nothing here fakes a send.
  *
  * All calls run on Dispatchers.IO and never throw: every failure is an
  * [AuthResult.Error] with a stable key, mapped by the ViewModel to a
- * Persian string. 429 is the Supabase rate limit (one OTP send per 60
- * seconds per email); the ViewModel guards sends with a cooldown and
- * an in-flight lock so a double tap can never fire two requests.
- * The "coming soon" path ([AuthResult.NotConfigured]) remains for an
- * unconfigured project and is the only case in which no send is
- * attempted.
+ * Persian string. 429 is the Supabase rate limit; the ViewModel guards
+ * sends with an in-flight lock so a double tap can never fire two
+ * requests. The "coming soon" path ([AuthResult.NotConfigured])
+ * remains for an unconfigured project and is the only case in which
+ * no send is attempted.
  */
 object Vpn5gAuthService {
 
@@ -64,17 +81,7 @@ object Vpn5gAuthService {
         /** A signed-in session is available (also persisted). */
         data class SignedIn(val session: Vpn5gAuthSession) : AuthResult
 
-        /** A code was sent; the UI must now ask for the 6-digit code. */
-        data object CodeSent : AuthResult
-
-        /**
-         * Signup succeeded but the backend returned no session
-         * ("Confirm email" is ON in the panel): the UI falls back to
-         * the OTP code screen instead of signing the user in.
-         */
-        data object NeedsCode : AuthResult
-
-        /** A recovery link was accepted for sending (scenario 3). */
+        /** A recovery link was accepted for sending (flow 2). */
         data object RecoveryLinkSent : AuthResult
 
         /** No Supabase project is configured yet (see Vpn5gAuthConfig). */
@@ -92,11 +99,14 @@ object Vpn5gAuthService {
         val expiresAtEpochSeconds: Long? = null,
     )
 
-    /** Deep-link redirect for the recovery flow (scenario 3). */
+    /** Deep-link redirect for the recovery flow (flow 2). */
     const val RECOVERY_REDIRECT_URL = "vpn5g://auth/callback"
 
     private val JSON = "application/json; charset=utf-8".toMediaType()
     private const val TIMEOUT_MS = 15_000L
+
+    /** Primary public-IP endpoint (direct fetch, no proxy). */
+    private const val PUBLIC_IP_URL = "https://api.ipify.org?format=json"
 
     private fun client(): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -123,17 +133,31 @@ object Vpn5gAuthService {
     }
 
     /**
-     * Scenario 1: direct signup (supabase.auth.signUp). Requires a
-     * password — GoTrue has no passwordless signup. With "Confirm
-     * email" OFF the response carries a session and the user is signed
-     * in immediately; with it ON the response has a user but no
-     * session ([AuthResult.NeedsCode]) and the UI falls back to OTP.
-     * An already-registered email is not a dead end: the caller offers
-     * the password-login screen instead.
+     * Flow 1: direct signup (supabase.auth.signUp), guarded by the
+     * one-account-per-IP+email rule. Requires a password — GoTrue has
+     * no passwordless signup. With "Confirm email" OFF the response
+     * carries a session and the user is signed in immediately; with
+     * it ON the response has a user but no session and the caller gets
+     * `email_not_confirmed`. An already-registered email is not a dead
+     * end: the caller offers the password-login screen instead. An
+     * already-registered IP is a hard stop for this internet
+     * connection (`ip_already_registered`).
      */
     suspend fun signUp(email: String, password: String): AuthResult =
         withContext(Dispatchers.IO) {
             if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
+            // Guard first: the public IP, then the server-side check.
+            // Any failure here fails CLOSED — no signup is attempted
+            // on an unchecked registration.
+            val ip = fetchPublicIp()
+                ?: return@withContext AuthResult.Error("network_error")
+            val checkBody = checkRegistration(email, ip)
+                ?: return@withContext AuthResult.Error("network_error")
+            val outcome = Vpn5gRegistrationGuard.outcome(checkBody)
+                ?: return@withContext AuthResult.Error("network_error")
+            Vpn5gRegistrationGuard.errorKey(outcome)?.let { key ->
+                return@withContext AuthResult.Error(key)
+            }
             post(
                 path = "/auth/v1/signup",
                 body = """{"email":"${jsonEscape(email)}","password":"${jsonEscape(password)}"}""",
@@ -141,8 +165,18 @@ object Vpn5gAuthService {
                 if (code in 200..299) {
                     parseSession(body, email)?.let { session ->
                         saveSession(session)
+                        // Best effort: the session is real even if the
+                        // record call fails — the table's UNIQUE(ip)
+                        // is the backstop against a race. The failure
+                        // is logged, never shown as a signup error.
+                        if (!recordRegistration(email, ip)) {
+                            LogUtil.e(
+                                AppConfig.TAG,
+                                "Vpn5gAuthService: register_account failed for $email",
+                            )
+                        }
                         AuthResult.SignedIn(session)
-                    } ?: AuthResult.NeedsCode
+                    } ?: AuthResult.Error("email_not_confirmed")
                 } else {
                     AuthResult.Error(signupErrorKey(code, body))
                 }
@@ -150,10 +184,10 @@ object Vpn5gAuthService {
         }
 
     /**
-     * Scenario 4: password login (supabase.auth.signInWithPassword).
+     * Flow 3: password login (supabase.auth.signInWithPassword).
      * POST /auth/v1/token?grant_type=password. Returns the session
      * directly; a wrong email/password is a friendly error, never a
-     * crash.
+     * crash. The registration guard does NOT apply here.
      */
     suspend fun signInWithPassword(email: String, password: String): AuthResult =
         withContext(Dispatchers.IO) {
@@ -173,28 +207,15 @@ object Vpn5gAuthService {
             }
         }
 
-    /** OTP step 1: email a 6-digit code; creates the account on first use. */
-    suspend fun sendLoginOtp(email: String): AuthResult =
-        withContext(Dispatchers.IO) {
-            if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
-            post(
-                path = "/auth/v1/otp",
-                body = """{"email":"${jsonEscape(email)}","create_user":true}""",
-            ) { code, _ ->
-                if (code in 200..299) AuthResult.CodeSent
-                else AuthResult.Error(sendErrorKey(code))
-            }
-        }
-
     /**
-     * Scenario 3, step 1: send the recovery LINK
+     * Flow 2, step 1: send the recovery LINK
      * (supabase.auth.resetPasswordForEmail). GoTrue emails a link to
      * [RECOVERY_REDIRECT_URL]; the link returns to the app as a deep
      * link carrying `type=recovery` and the session tokens (see
-     * [Vpn5gRecoveryLink]). This is deliberately NOT an OTP code:
-     * the user asked for the link flow. GoTrue answers 200 even for
-     * an unregistered email (no account enumeration), so any 2xx
-     * means "accepted for sending".
+     * [Vpn5gRecoveryLink]). This is deliberately NOT a code. GoTrue
+     * answers 200 even for an unregistered email (no account
+     * enumeration), so any 2xx means "accepted for sending". The
+     * registration guard does NOT apply here.
      */
     suspend fun sendRecoveryLink(email: String): AuthResult =
         withContext(Dispatchers.IO) {
@@ -209,26 +230,7 @@ object Vpn5gAuthService {
         }
 
     /**
-     * OTP step 2: verify the 6-digit code (type "email" for every mode).
-     * On success a session is persisted and returned.
-     */
-    suspend fun verifyOtp(email: String, code: String): AuthResult =
-        withContext(Dispatchers.IO) {
-            if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
-            post(
-                path = "/auth/v1/verify",
-                body = """{"email":"${jsonEscape(email)}","token":"${jsonEscape(code)}","type":"email"}""",
-            ) { status, body ->
-                if (status !in 200..299) return@post AuthResult.Error(verifyErrorKey(status))
-                parseSession(body, email)?.let { session ->
-                    saveSession(session)
-                    AuthResult.SignedIn(session)
-                } ?: AuthResult.Error("verify_no_session")
-            }
-        }
-
-    /**
-     * Scenario 3, step 2: set the new password
+     * Flow 2, step 2: set the new password
      * (supabase.auth.updateUser). PUT /auth/v1/user with the
      * access token from the recovery link as the Bearer token. The
      * link's tokens ARE the session: on success they are persisted
@@ -259,6 +261,71 @@ object Vpn5gAuthService {
                 }
             }
         }
+
+    /**
+     * The device's public IP, fetched directly (no proxy — signup
+     * happens before any VPN connection, so the direct fetch is the
+     * real IP). Primary is ipify, fallback is the app's IP API
+     * ([AppConfig.IP_API_URL], api.ip.sb/geoip — the same endpoint
+     * [Vpn5gTunnelCheck] uses). Null when neither source answers;
+     * the caller fails CLOSED on null. Never throws.
+     */
+    suspend fun fetchPublicIp(): String? = withContext(Dispatchers.IO) {
+        fetchIpFrom(PUBLIC_IP_URL) ?: fetchIpFrom(AppConfig.IP_API_URL)
+    }
+
+    private suspend fun fetchIpFrom(url: String): String? {
+        val body = getRaw(url) ?: return null
+        return parseIp(body)?.takeIf { it.isNotBlank() }
+    }
+
+    /** Pulls the `ip` value out of an ipify / ip.sb JSON body. Pure. */
+    internal fun parseIp(body: String): String? {
+        return Regex("\"ip\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+    }
+
+    /**
+     * Asks the server whether the email or the IP is already
+     * registered (PostgREST RPC `check_registration`). Returns the
+     * response body on 2xx, null on any failure (transport or
+     * non-2xx — including a missing function when the SQL file has
+     * not been run yet). Never throws.
+     */
+    private suspend fun checkRegistration(email: String, ip: String): String? {
+        val result = postRaw(
+            path = "/rest/v1/rpc/check_registration",
+            body = """{"p_email":"${jsonEscape(email)}","p_ip":"${jsonEscape(ip)}"}""",
+        ) ?: return null
+        if (result.first !in 200..299) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gAuthService: check_registration HTTP ${result.first}",
+            )
+            return null
+        }
+        return result.second
+    }
+
+    /**
+     * Records the (email, ip) pair after a successful signup
+     * (PostgREST RPC `register_account`). True when the server
+     * stored the row; false on any failure — the caller still treats
+     * the session as signed in. Never throws.
+     */
+    private suspend fun recordRegistration(email: String, ip: String): Boolean {
+        val result = postRaw(
+            path = "/rest/v1/rpc/register_account",
+            body = """{"p_email":"${jsonEscape(email)}","p_ip":"${jsonEscape(ip)}"}""",
+        ) ?: return false
+        if (result.first !in 200..299) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gAuthService: register_account HTTP ${result.first}",
+            )
+            return false
+        }
+        return result.second.trim() == "true"
+    }
 
     /**
      * Maps a signup HTTP status + body to a stable error key. Pure,
@@ -311,40 +378,18 @@ object Vpn5gAuthService {
      * True when a GoTrue response body carries a session
      * (an `access_token`). Pure, JVM-tested. A signup response with a
      * user but no session means "Confirm email" is ON, and the caller
-     * falls back to OTP instead of signing in.
+     * reports `email_not_confirmed` instead of signing in.
      */
     internal fun hasSession(body: String): Boolean {
         val access = Regex("\"access_token\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
         return !access.isNullOrBlank()
     }
 
-    /**
-     * Maps an OTP-send HTTP status to a stable error key. Pure, JVM-tested.
-     * 429 is Supabase's one-code-per-60-seconds limit; 422 means the email
-     * is not registered (recovery with create_user=false).
-     */
-    internal fun sendErrorKey(status: Int): String = when (status) {
-        429 -> "rate_limited"
-        422 -> "email_not_registered"
-        else -> "otp_failed"
-    }
-
-    /**
-     * Maps an OTP-verify HTTP status to a stable error key. Pure,
-     * JVM-tested. GoTrue answers a wrong or expired code with 400
-     * ("Token has expired or is invalid"); 429 is the rate limit.
-     */
-    internal fun verifyErrorKey(status: Int): String = when (status) {
-        429 -> "rate_limited"
-        400, 401, 403, 404, 422 -> "code_wrong_or_expired"
-        else -> "verify_failed"
-    }
-
-    private suspend fun post(
+    /** Raw POST returning (status, body), or null on transport failure. */
+    private suspend fun postRaw(
         path: String,
         body: String,
-        handle: (Int, String) -> AuthResult,
-    ): AuthResult {
+    ): Pair<Int, String>? {
         return try {
             val request = Request.Builder()
                 .url(Vpn5gAuthConfig.SUPABASE_URL.trimEnd('/') + path)
@@ -353,19 +398,43 @@ object Vpn5gAuthService {
                 .post(body.toRequestBody(JSON))
                 .build()
             client().newCall(request).execute().use { response ->
-                handle(response.code, response.body?.string().orEmpty())
+                response.code to (response.body?.string().orEmpty())
             }
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Vpn5gAuthService: POST $path failed", e)
-            AuthResult.Error("network_error")
+            null
         }
+    }
+
+    /** Raw GET returning the body on 2xx, null otherwise. Never throws. */
+    private suspend fun getRaw(url: String): String? {
+        return try {
+            val request = Request.Builder().url(url).get().build()
+            client().newCall(request).execute().use { response ->
+                if (response.code !in 200..299) null
+                else response.body?.string()
+            }
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Vpn5gAuthService: GET $url failed", e)
+            null
+        }
+    }
+
+    private suspend fun post(
+        path: String,
+        body: String,
+        handle: suspend (Int, String) -> AuthResult,
+    ): AuthResult {
+        val result = postRaw(path, body)
+            ?: return AuthResult.Error("network_error")
+        return handle(result.first, result.second)
     }
 
     private suspend fun put(
         path: String,
         bearerToken: String,
         body: String,
-        handle: (Int, String) -> AuthResult,
+        handle: suspend (Int, String) -> AuthResult,
     ): AuthResult {
         return try {
             val request = Request.Builder()
