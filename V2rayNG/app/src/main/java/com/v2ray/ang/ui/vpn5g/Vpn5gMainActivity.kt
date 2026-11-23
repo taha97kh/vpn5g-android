@@ -129,6 +129,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
 import com.v2ray.ang.handler.vpn5g.Vpn5gManualServer
 import com.v2ray.ang.handler.vpn5g.Vpn5gNetworkProfile
 import com.v2ray.ang.handler.vpn5g.Vpn5gPromoCodes
+import com.v2ray.ang.handler.vpn5g.Vpn5gRecoveryLink
 import com.v2ray.ang.handler.vpn5g.Vpn5gRemoteConfig
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerValidator
@@ -1680,6 +1681,15 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
     /** APK waiting for the "install unknown apps" grant (Android 8+). */
     private var pendingInstallFile: File? = null
 
+    /**
+     * Parsed password-recovery deep link (v1.1.8), waiting to be
+     * consumed by the auth screen. Set by [handleDeepLink] when the
+     * user returns from the emailed recovery link
+     * (`vpn5g://auth/callback`, type=recovery); cleared once the
+     * auth screen has opened the new-password form for it.
+     */
+    private val recoveryLinkFlow = MutableStateFlow<Vpn5gRecoveryLink.Parsed?>(null)
+
     private val requestVpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
             if (it.resultCode == RESULT_OK) {
@@ -1750,6 +1760,15 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         val uiState by viewModel.uiState.collectAsStateWithLifecycle()
         var destination by remember { mutableStateOf(Vpn5gDestination.HOME) }
         var lockedCountry by remember { mutableStateOf<String?>(null) }
+
+        // Password-recovery deep link (v1.1.8): when the user returns
+        // from the emailed link, open the auth screen; the screen
+        // consumes the token exactly once and opens the new-password
+        // form for it.
+        val recoveryLink by recoveryLinkFlow.collectAsStateWithLifecycle()
+        LaunchedEffect(recoveryLink) {
+            if (recoveryLink != null) destination = Vpn5gDestination.AUTH
+        }
 
         // Tunnel failover: the ViewModel asks for the next server; the
         // Activity restarts the daemon cleanly onto it (v1.1.5 §2 root
@@ -1859,6 +1878,8 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                         )
                         Vpn5gDestination.AUTH -> Vpn5gAuthScreen(
                             onBack = { destination = Vpn5gDestination.ME },
+                            recoveryToken = recoveryLink,
+                            onRecoveryTokenConsumed = { recoveryLinkFlow.value = null },
                         )
                     }
                 }
@@ -2079,6 +2100,20 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         if (intent?.action != Intent.ACTION_VIEW) return
         val uri = intent.data ?: return
         val scheme = uri.scheme.orEmpty()
+        // Password recovery (v1.1.8): the emailed link returns as
+        // vpn5g://auth/callback with type=recovery and the session
+        // tokens in the fragment. A vpn5g:// link that is not a
+        // valid recovery link is rejected here (never passed to the
+        // config importer, which would only toast "import failed").
+        if (scheme.equals("vpn5g", ignoreCase = true)) {
+            val link = Vpn5gRecoveryLink.parse(uri.toString())
+            if (link != null) {
+                recoveryLinkFlow.value = link
+            } else {
+                toast(R.string.vpn5g_auth_recovery_link_invalid)
+            }
+            return
+        }
         if (scheme in CONFIG_SCHEMES) {
             lifecycleScope.launch(Dispatchers.IO) {
                 val ok = Vpn5gSync.importUri(uri.toString())

@@ -1,26 +1,36 @@
 package com.v2ray.ang.handler.vpn5g
 
 /**
- * Supabase Auth configuration for VPN5G IRBOT (v1.1.1).
+ * Supabase Auth configuration for VPN5G IRBOT (v1.1.8).
  *
  * Project "vpn5g" exists (Frankfurt eu-central-1, free plan, ref
- * jsqvjpmqfmgfgzcycngs). Email auth is enabled with "Allow new users to
- * sign up" and "Confirm email" on; all other providers are disabled.
- * [Vpn5gAuthService] calls the real GoTrue REST endpoints (auth/v1/otp to
- * send the 6-digit code, auth/v1/verify to check it) with the anon key in
- * the apikey header. The anon key is Supabase's public client key by
- * design (safe to ship in the app); the service-role key and the database
- * password must NEVER be put here.
+ * jsqvjpmqfmgfgzcycngs). Email auth is enabled with "Allow new users
+ * to sign up"; "Confirm email" is OFF (turned off by Aref
+ * 2026-11-23), so a direct signup returns a session immediately.
+ * All other providers are disabled. [Vpn5gAuthService] calls the
+ * real GoTrue REST endpoints with the anon key in the apikey header:
+ * POST /auth/v1/signup (direct signup, scenario 1), POST
+ * /auth/v1/token?grant_type=password (password login, scenario 4),
+ * POST /auth/v1/otp + POST /auth/v1/verify (6-digit code, scenario
+ * 2), POST /auth/v1/recover + PUT /auth/v1/user (recovery link,
+ * scenario 3). The anon key is Supabase's public client key by
+ * design (safe to ship in the app); the service-role key and the
+ * database password must NEVER be put here.
  *
- * Two dashboard items are still needed for codes to actually arrive
+ * Dashboard items still needed for the flows to actually work
  * (app-side code cannot do them):
- *  1. Authentication → Email Templates → "Magic Link": the template must
- *     contain the {{ .Token }} variable — the default template sends a
- *     link, not a 6-digit code, and the app's code field cannot use a link.
- *  2. Custom SMTP with sender VPN5G.IRBOT@gmail.com (a Gmail app password
- *     for that mailbox goes into Supabase's SMTP settings, never into this
- *     app): the built-in email service is rate-limited and only delivers
- *     reliably to project members.
+ *  1. Custom SMTP with sender VPN5G.IRBOT@gmail.com (a Gmail app
+ *     password for that mailbox goes into Supabase's SMTP settings,
+ *     never into this app): without it the OTP code emails may not
+ *     arrive at all, and the built-in email service is rate-limited.
+ *  2. Authentication → URL Configuration → Redirect URLs must
+ *     contain `vpn5g://auth/callback` — otherwise GoTrue refuses
+ *     the custom redirect and the recovery link opens the browser
+ *     instead of returning to the app.
+ *  3. If "Confirm email" is ever turned back ON, the Magic Link
+ *     email template must contain the {{ .Token }} variable — the
+ *     default template sends a link, not a 6-digit code, and the
+ *     app's code field cannot use a link.
  */
 object Vpn5gAuthConfig {
     /** Supabase project URL for "vpn5g". */

@@ -91,6 +91,21 @@
                 <data android:scheme="ss" />
             </intent-filter>
 
+            <!-- Password-recovery deep link (v1.1.8): Supabase redirects
+                 the emailed recovery link here as vpn5g://auth/callback
+                 with type=recovery and the session tokens in the
+                 fragment. The redirect URL must be allow-listed in the
+                 Supabase dashboard (Authentication → URL Configuration
+                 → Redirect URLs). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:scheme="vpn5g" android:host="auth" />
+            </intent-filter>
+
             <!-- Downloaded config files: .txt / .json (like Ultra Tunnel) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

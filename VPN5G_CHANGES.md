@@ -732,3 +732,76 @@ stored or shown — `Vpn5gSync` filters before `saveServerProfiles`.
   injected into `V2rayNG/app/build.gradle.kts` was reverted — the CI
   workflow injects it itself at build time, and a duplicate would
   fail the build.
+
+## v1.1.8 (2026-11-23, versionCode 10)
+
+Aref turned "Confirm email" OFF in the Supabase panel and asked for
+the full auth rewrite: four scenarios, no contradictions, no more
+"Too many requests". Raw GoTrue REST (OkHttp) is kept — no new
+dependency, no supabase-kt SDK.
+
+- **Scenario 1 — direct signup/login, no code.** POST
+  /auth/v1/signup {"email", "password"} (supabase.auth.signUp). With
+  "Confirm email" OFF the response carries a session and the user is
+  signed in immediately, no code screen. With it ON (later) the
+  response has a user but no session: the app falls back to the OTP
+  code screen (one sequential OTP send, never parallel with signup).
+  An already-registered email is not a dead end: the screen switches
+  to password login with a message instead of an error. Interpretation
+  recorded: signUp REQUIRES a password — GoTrue has no passwordless
+  signup — so the signup screen asks for a password + confirmation.
+- **Scenario 2 — OTP login/signup.** Unchanged endpoints (POST
+  /auth/v1/otp create_user=true, POST /auth/v1/verify type=email),
+  same 6-digit code screen, same 60-second resend cooldown with a
+  visible countdown and the 5-wrong-code lockout (Vpn5gOtpPolicy).
+- **Scenario 3 — forgot password, link flow.** POST /auth/v1/recover
+  {"email", "redirect_to": "vpn5g://auth/callback"}
+  (supabase.auth.resetPasswordForEmail) sends the recovery LINK — not
+  a code, and the app never falls back to OTP here. The link returns
+  to the app through a new intent-filter on Vpn5gMainActivity
+  (scheme `vpn5g`, host `auth`; the activity is already singleTask
+  and already routes intents through handleDeepLink/onNewIntent), its
+  fragment is parsed by the new pure Vpn5gRecoveryLink (type=recovery
+  + access/refresh tokens), and the app opens a new-password screen;
+  PUT /auth/v1/user {"password": ...} (Authorization: Bearer
+  <access_token from the link>, supabase.auth.updateUser) sets the
+  new password and signs the user in with the link's tokens.
+- **Scenario 4 — password login.** POST
+  /auth/v1/token?grant_type=password (supabase.auth.signInWithPassword)
+  returns the session directly. A wrong email/password is a friendly
+  Persian message, never a crash.
+- **"Too many requests" root cause, fixed.** The old screen could
+  fire an OTP send with no cooldown guard and no in-flight lock: a
+  double tap — or a mode switch followed by another send within 60
+  seconds — hit Supabase's one-send-per-60-seconds limit. Every send
+  now goes through ONE guarded entry point per mode: a request
+  already in flight is ignored, a send inside the 60-second cooldown
+  is refused with the rate-limit message instead of being fired, and
+  every send button is disabled while its request is in flight. No
+  error path leaves the UI stuck loading, and nothing is auto-retried:
+  a 429 shows how long to wait.
+- **Error handling.** The service never throws; every failure is an
+  AuthResult.Error with a stable key, mapped to a Persian string from
+  res/values/strings.xml: 429 → "rate_limited", wrong credentials →
+  "invalid_credentials", already registered → "email_already_registered",
+  short password → "weak_password", bad/expired recovery link →
+  "recovery_link_invalid", wrong/expired code →
+  "code_wrong_or_expired" (unchanged), network failure →
+  "network_error". New keys are JVM-tested in Vpn5gAuthErrorKeyTest;
+  the recovery-link parser is JVM-tested in Vpn5gRecoveryLinkTest;
+  Vpn5gOtpPolicyTest is unchanged and still green (CI).
+- **Dashboard steps the user must still do (app code cannot do
+  them).** (1) Authentication → URL Configuration → Redirect URLs:
+  add `vpn5g://auth/callback` — without it GoTrue refuses the
+  custom redirect and the recovery link opens the browser instead of
+  returning to the app. (2) Custom SMTP for VPN5G.IRBOT@gmail.com is
+  STILL not set up (blocked on Aref creating the Gmail app password
+  himself): until it is, OTP code emails may not arrive at all — the
+  code still supports OTP, it never fakes a send. (3) If "Confirm
+  email" is ever turned back ON, the Magic Link template must contain
+  `{{ .Token }}` for the code flow.
+- **Not verified on a device.** `:app:testPlaystoreDebugUnitTest` /
+  `:app:compilePlaystoreDebugKotlin` cannot run in this sandbox
+  (local Gradle is blocked); CI is the only check. The recovery deep
+  link, the four screens, and the signup-no-session fallback need
+  Aref's phone to test for real.

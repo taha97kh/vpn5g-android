@@ -31,29 +31,49 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.v2ray.ang.R
 import com.v2ray.ang.handler.vpn5g.Vpn5gOtpPolicy
+import com.v2ray.ang.handler.vpn5g.Vpn5gRecoveryLink
 import kotlinx.coroutines.delay
 
 /**
- * Registration / login and recovery screens, wired to
- * [Vpn5gAuthViewModel] / [com.v2ray.ang.handler.vpn5g.Vpn5gAuthService]
- * (Supabase Auth OTP, passwordless): the user enters a Gmail address, a
- * real 6-digit code is emailed, and entering the code signs them in.
- * Registration creates the account on first use; recovery signs an
- * existing account back in. When the Supabase project is not configured
- * the screen says so honestly instead of pretending to send codes.
+ * Registration / login screens, wired to [Vpn5gAuthViewModel] /
+ * [com.v2ray.ang.handler.vpn5g.Vpn5gAuthService] (Supabase Auth,
+ * GoTrue REST) — four flows (v1.1.8):
+ *
+ *  - LOGIN: email + password → signed in directly.
+ *  - REGISTER: email + password (+ confirmation) → signed in
+ *    immediately while "Confirm email" is OFF; with it ON the user
+ *    falls back to the OTP code screen.
+ *  - OTP: email → real 6-digit code → code entry → signed in.
+ *  - RECOVER: email → recovery LINK → tap the link, return to the
+ *    app, enter a new password → signed in.
+ *
+ * Registration accepts Gmail only. When the Supabase project is not
+ * configured the screen says so honestly instead of pretending to
+ * send codes or links.
  *
  * Motion: the same language as the home screen — animated gradient
  * background (from the activity), pulsing logo, and staggered springy entry.
  * Purely presentational; nothing here gates sync/connect.
+ *
+ * @param recoveryToken a parsed recovery deep link
+ * (`vpn5g://auth/callback`, type=recovery), delivered by
+ * Vpn5gMainActivity when the user returns from the emailed link.
+ * It is consumed exactly once via [onRecoveryTokenConsumed].
  */
 @Composable
-fun Vpn5gAuthScreen(onBack: () -> Unit) {
+fun Vpn5gAuthScreen(
+    onBack: () -> Unit,
+    recoveryToken: Vpn5gRecoveryLink.Parsed? = null,
+    onRecoveryTokenConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val authViewModel: Vpn5gAuthViewModel = viewModel(
         factory = Vpn5gAuthViewModel.Factory(context.applicationContext as Application),
@@ -62,6 +82,14 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
 
     var entered by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { entered = true }
+
+    // Recovery deep link: open the new-password screen exactly once.
+    LaunchedEffect(recoveryToken) {
+        if (recoveryToken != null) {
+            authViewModel.startRecovery(recoveryToken)
+            onRecoveryTokenConsumed()
+        }
+    }
 
     // Resend countdown (v1.1.5 §7): transient presentation state only.
     // The ViewModel owns the last-send timestamp; the screen only counts
@@ -78,6 +106,9 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
         }
     }
 
+    // Password visibility is transient presentation state only.
+    var passwordVisible by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -93,10 +124,14 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
         Vpn5gStaggeredItem(index = 1, visible = entered) {
             Text(
                 text = stringResource(
-                    when (state.mode) {
-                        Vpn5gAuthMode.LOGIN -> R.string.vpn5g_auth_title
-                        Vpn5gAuthMode.REGISTER -> R.string.vpn5g_auth_register_title
-                        Vpn5gAuthMode.RECOVER -> R.string.vpn5g_auth_recover_title
+                    when {
+                        state.phase == Vpn5gAuthPhase.NEW_PASSWORD ||
+                            state.phase == Vpn5gAuthPhase.UPDATING_PASSWORD ->
+                            R.string.vpn5g_auth_new_password_title
+                        state.mode == Vpn5gAuthMode.LOGIN -> R.string.vpn5g_auth_title
+                        state.mode == Vpn5gAuthMode.REGISTER -> R.string.vpn5g_auth_register_title
+                        state.mode == Vpn5gAuthMode.OTP -> R.string.vpn5g_auth_otp_title
+                        else -> R.string.vpn5g_auth_recover_title
                     }
                 ),
                 color = Vpn5gOnDark,
@@ -147,9 +182,18 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
         }
 
         val busy = state.phase == Vpn5gAuthPhase.SENDING_CODE ||
-            state.phase == Vpn5gAuthPhase.VERIFYING
+            state.phase == Vpn5gAuthPhase.VERIFYING ||
+            state.phase == Vpn5gAuthPhase.SIGNING_IN ||
+            state.phase == Vpn5gAuthPhase.UPDATING_PASSWORD
+        val isNewPassword = state.phase == Vpn5gAuthPhase.NEW_PASSWORD ||
+            state.phase == Vpn5gAuthPhase.UPDATING_PASSWORD
+        val needsPassword = state.mode == Vpn5gAuthMode.LOGIN ||
+            state.mode == Vpn5gAuthMode.REGISTER || isNewPassword
+        val needsPasswordConfirm = state.mode == Vpn5gAuthMode.REGISTER || isNewPassword
 
-        // Email field (all modes, Gmail only).
+        // Email field (all modes, Gmail only). Shown on the
+        // new-password screen too: the recovery link may arrive
+        // without an email typed, and the session needs the address.
         Vpn5gStaggeredItem(index = 3, visible = entered) {
             OutlinedTextField(
                 value = state.email,
@@ -166,39 +210,116 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
             )
         }
 
-        // Primary action: send the code, then confirm it.
-        Vpn5gStaggeredItem(index = 5, visible = entered) {
+        // Password field (password login, signup, new password).
+        if (needsPassword) {
+            Vpn5gStaggeredItem(index = 4, visible = entered) {
+                OutlinedTextField(
+                    value = state.password,
+                    onValueChange = { authViewModel.setPassword(it) },
+                    label = { Text(stringResource(R.string.vpn5g_auth_password)) },
+                    singleLine = true,
+                    enabled = !busy,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    visualTransformation = if (passwordVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    trailingIcon = {
+                        TextButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Text(
+                                text = stringResource(
+                                    if (passwordVisible) {
+                                        R.string.vpn5g_auth_hide_password
+                                    } else {
+                                        R.string.vpn5g_auth_show_password
+                                    }
+                                ),
+                                color = Vpn5gAccentLight,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    },
+                    isError = state.passwordErrorRes != null,
+                    supportingText = state.passwordErrorRes?.let { { Text(stringResource(it)) } },
+                    colors = vpn5gTextFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        // Password confirmation (signup, new password).
+        if (needsPasswordConfirm) {
+            Vpn5gStaggeredItem(index = 5, visible = entered) {
+                OutlinedTextField(
+                    value = state.passwordConfirm,
+                    onValueChange = { authViewModel.setPasswordConfirm(it) },
+                    label = { Text(stringResource(R.string.vpn5g_auth_password_confirm)) },
+                    singleLine = true,
+                    enabled = !busy,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    visualTransformation = if (passwordVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    isError = state.passwordErrorRes != null,
+                    colors = vpn5gTextFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        // Primary action: one guarded entry point per mode. The button
+        // is disabled while its request is in flight, so a double tap
+        // can never fire two requests (v1.1.8 "Too many requests" fix).
+        val primaryLabelRes = when {
+            isNewPassword && state.phase == Vpn5gAuthPhase.UPDATING_PASSWORD ->
+                R.string.vpn5g_auth_updating_password
+            isNewPassword -> R.string.vpn5g_auth_new_password_button
+            state.mode == Vpn5gAuthMode.LOGIN && state.phase == Vpn5gAuthPhase.SIGNING_IN ->
+                R.string.vpn5g_auth_signing_in
+            state.mode == Vpn5gAuthMode.LOGIN -> R.string.vpn5g_auth_login_button
+            state.mode == Vpn5gAuthMode.REGISTER && state.phase == Vpn5gAuthPhase.SIGNING_IN ->
+                R.string.vpn5g_auth_signing_in
+            state.mode == Vpn5gAuthMode.REGISTER -> R.string.vpn5g_auth_signup_button
+            state.mode == Vpn5gAuthMode.RECOVER && state.phase == Vpn5gAuthPhase.SIGNING_IN ->
+                R.string.vpn5g_auth_sending_link
+            state.mode == Vpn5gAuthMode.RECOVER -> R.string.vpn5g_auth_send_link
+            state.phase == Vpn5gAuthPhase.CODE_SENT -> R.string.vpn5g_auth_confirm
+            state.phase == Vpn5gAuthPhase.SENDING_CODE -> R.string.vpn5g_auth_sending
+            state.phase == Vpn5gAuthPhase.VERIFYING -> R.string.vpn5g_auth_verifying
+            else -> R.string.vpn5g_auth_send_code
+        }
+        val primaryEnabled = !busy && state.phase != Vpn5gAuthPhase.LINK_SENT
+        Vpn5gStaggeredItem(index = 6, visible = entered) {
             Button(
                 onClick = {
                     when {
+                        isNewPassword -> authViewModel.updatePassword()
+                        state.mode == Vpn5gAuthMode.LOGIN -> authViewModel.signInWithPassword()
+                        state.mode == Vpn5gAuthMode.REGISTER -> authViewModel.signUp()
+                        state.mode == Vpn5gAuthMode.RECOVER -> authViewModel.sendRecoveryLink()
                         state.phase == Vpn5gAuthPhase.CODE_SENT -> authViewModel.verifyCode()
                         else -> authViewModel.sendCode()
                     }
                 },
-                enabled = !busy,
+                enabled = primaryEnabled,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Vpn5gAccent,
                     contentColor = Color.White,
                 ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(
-                    text = stringResource(
-                        when {
-                            state.phase == Vpn5gAuthPhase.CODE_SENT -> R.string.vpn5g_auth_confirm
-                            state.phase == Vpn5gAuthPhase.SENDING_CODE -> R.string.vpn5g_auth_sending
-                            state.phase == Vpn5gAuthPhase.VERIFYING -> R.string.vpn5g_auth_verifying
-                            else -> R.string.vpn5g_auth_send_code
-                        }
-                    ),
-                    fontSize = 16.sp,
-                )
+                Text(text = stringResource(primaryLabelRes), fontSize = 16.sp)
             }
         }
 
-        // Code field, shown after a code was sent.
-        if (state.phase == Vpn5gAuthPhase.CODE_SENT || state.phase == Vpn5gAuthPhase.VERIFYING) {
-            Vpn5gStaggeredItem(index = 6, visible = entered) {
+        // Code field, shown after a code was sent (OTP mode).
+        if (state.mode == Vpn5gAuthMode.OTP &&
+            (state.phase == Vpn5gAuthPhase.CODE_SENT || state.phase == Vpn5gAuthPhase.VERIFYING)
+        ) {
+            Vpn5gStaggeredItem(index = 7, visible = entered) {
                 OutlinedTextField(
                     value = state.code,
                     onValueChange = { authViewModel.setCode(it) },
@@ -219,8 +340,10 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
         // delivery depends on the email service, so it says where to
         // look when the code does not arrive instead of promising
         // instant delivery. Resend is limited to once per 60 seconds.
-        if (state.phase == Vpn5gAuthPhase.CODE_SENT || state.phase == Vpn5gAuthPhase.VERIFYING) {
-            Vpn5gStaggeredItem(index = 7, visible = entered) {
+        if (state.mode == Vpn5gAuthMode.OTP &&
+            (state.phase == Vpn5gAuthPhase.CODE_SENT || state.phase == Vpn5gAuthPhase.VERIFYING)
+        ) {
+            Vpn5gStaggeredItem(index = 8, visible = entered) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = stringResource(R.string.vpn5g_auth_code_sent),
@@ -248,8 +371,34 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
             }
         }
 
+        // Recovery link sent: the user must tap the link in the email;
+        // the link returns to the app and opens the new-password
+        // screen. A resend link is offered (guarded by the ViewModel).
+        if (state.mode == Vpn5gAuthMode.RECOVER && state.phase == Vpn5gAuthPhase.LINK_SENT) {
+            Vpn5gStaggeredItem(index = 9, visible = entered) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_auth_recovery_link_sent),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
+                    )
+                    TextButton(
+                        onClick = { authViewModel.sendRecoveryLink() },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_auth_send_link_again),
+                            color = Vpn5gAccentLight,
+                            fontSize = 14.sp,
+                        )
+                    }
+                }
+            }
+        }
+
         if (state.mode == Vpn5gAuthMode.RECOVER && state.phase == Vpn5gAuthPhase.IDLE) {
-            Vpn5gStaggeredItem(index = 8, visible = entered) {
+            Vpn5gStaggeredItem(index = 10, visible = entered) {
                 Text(
                     text = stringResource(R.string.vpn5g_auth_recover_body),
                     color = Vpn5gOnDarkMuted,
@@ -259,7 +408,7 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
         }
 
         state.errorRes?.let { errorRes ->
-            Vpn5gStaggeredItem(index = 9, visible = entered) {
+            Vpn5gStaggeredItem(index = 11, visible = entered) {
                 Text(
                     text = stringResource(errorRes),
                     color = Color(0xFFF87171),
@@ -270,27 +419,58 @@ fun Vpn5gAuthScreen(onBack: () -> Unit) {
         }
 
         // Mode switch links.
-        Vpn5gStaggeredItem(index = 10, visible = entered) {
+        Vpn5gStaggeredItem(index = 12, visible = entered) {
             Column(modifier = Modifier.fillMaxWidth()) {
-                if (state.mode == Vpn5gAuthMode.LOGIN) {
-                    TextButton(
-                        onClick = { authViewModel.setMode(Vpn5gAuthMode.REGISTER) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(text = stringResource(R.string.vpn5g_auth_go_register), color = Vpn5gAccentLight, fontSize = 14.sp)
+                when (state.mode) {
+                    Vpn5gAuthMode.LOGIN -> {
+                        TextButton(
+                            onClick = { authViewModel.setMode(Vpn5gAuthMode.REGISTER) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(text = stringResource(R.string.vpn5g_auth_go_register), color = Vpn5gAccentLight, fontSize = 14.sp)
+                        }
+                        TextButton(
+                            onClick = { authViewModel.setMode(Vpn5gAuthMode.OTP) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(text = stringResource(R.string.vpn5g_auth_go_otp), color = Vpn5gAccentLight, fontSize = 14.sp)
+                        }
+                        TextButton(
+                            onClick = { authViewModel.setMode(Vpn5gAuthMode.RECOVER) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(text = stringResource(R.string.vpn5g_auth_forgot), color = Vpn5gAccentLight, fontSize = 14.sp)
+                        }
                     }
-                    TextButton(
-                        onClick = { authViewModel.setMode(Vpn5gAuthMode.RECOVER) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(text = stringResource(R.string.vpn5g_auth_forgot), color = Vpn5gAccentLight, fontSize = 14.sp)
+                    Vpn5gAuthMode.REGISTER -> {
+                        TextButton(
+                            onClick = { authViewModel.setMode(Vpn5gAuthMode.LOGIN) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(text = stringResource(R.string.vpn5g_auth_go_login), color = Vpn5gAccentLight, fontSize = 14.sp)
+                        }
+                        TextButton(
+                            onClick = { authViewModel.setMode(Vpn5gAuthMode.OTP) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(text = stringResource(R.string.vpn5g_auth_go_otp), color = Vpn5gAccentLight, fontSize = 14.sp)
+                        }
                     }
-                } else {
-                    TextButton(
-                        onClick = { authViewModel.setMode(Vpn5gAuthMode.LOGIN) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(text = stringResource(R.string.vpn5g_auth_title), color = Vpn5gAccentLight, fontSize = 14.sp)
+                    Vpn5gAuthMode.OTP -> {
+                        TextButton(
+                            onClick = { authViewModel.setMode(Vpn5gAuthMode.LOGIN) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(text = stringResource(R.string.vpn5g_auth_go_password_login), color = Vpn5gAccentLight, fontSize = 14.sp)
+                        }
+                    }
+                    Vpn5gAuthMode.RECOVER -> {
+                        TextButton(
+                            onClick = { authViewModel.setMode(Vpn5gAuthMode.LOGIN) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(text = stringResource(R.string.vpn5g_auth_go_password_login), color = Vpn5gAccentLight, fontSize = 14.sp)
+                        }
                     }
                 }
                 TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {

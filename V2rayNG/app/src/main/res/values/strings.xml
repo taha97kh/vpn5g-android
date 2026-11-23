@@ -625,7 +625,33 @@
     <string name="vpn5g_auth_disposable">ایمیل‌های موقت و یک‌بارمصرف قابل قبول نیستند</string>
     <string name="vpn5g_auth_invalid_code">کد باید ۶ رقم باشد</string>
     <string name="vpn5g_auth_recover_title">بازیابی رمز عبور</string>
-    <string name="vpn5g_auth_recover_body">کد ورود به ایمیلت ارسال می‌شود؛ با همان کد وارد حسابت می‌شوی.</string>
+    <string name="vpn5g_auth_recover_body">لینک بازیابی به ایمیلت فرستاده می‌شود؛ روی لینک بزن تا به اپ برگردی و رمز جدیدت را وارد کنی.</string>
+    <!-- v1.1.8: four auth flows — password login/signup, OTP code, recovery link -->
+    <string name="vpn5g_auth_password">رمز عبور</string>
+    <string name="vpn5g_auth_password_confirm">تکرار رمز عبور</string>
+    <string name="vpn5g_auth_show_password">نمایش</string>
+    <string name="vpn5g_auth_hide_password">پنهان</string>
+    <string name="vpn5g_auth_otp_title">ورود با کد تایید</string>
+    <string name="vpn5g_auth_login_button">ورود</string>
+    <string name="vpn5g_auth_signup_button">ثبت‌نام</string>
+    <string name="vpn5g_auth_signing_in">در حال ورود…</string>
+    <string name="vpn5g_auth_go_login">قبلاً ثبت‌نام کرده‌اید؟ ورود</string>
+    <string name="vpn5g_auth_go_otp">ورود با کد تایید</string>
+    <string name="vpn5g_auth_go_password_login">ورود با رمز عبور</string>
+    <string name="vpn5g_auth_password_required">رمز عبور را وارد کنید</string>
+    <string name="vpn5g_auth_weak_password">رمز عبور باید حداقل ۶ کاراکتر باشد</string>
+    <string name="vpn5g_auth_password_mismatch">رمز عبور و تکرارش یکی نیست</string>
+    <string name="vpn5g_auth_email_already_registered">این ایمیل قبلاً ثبت شده؛ با رمز عبورت وارد شو</string>
+    <string name="vpn5g_auth_invalid_credentials">ایمیل یا رمز عبور اشتباه است</string>
+    <string name="vpn5g_auth_signup_code_needed">ثبت‌نام شد؛ چون تایید ایمیل روشن است، کد تایید به ایمیلت فرستاده شد</string>
+    <string name="vpn5g_auth_send_link">ارسال لینک بازیابی</string>
+    <string name="vpn5g_auth_send_link_again">ارسال دوباره لینک</string>
+    <string name="vpn5g_auth_sending_link">در حال ارسال لینک…</string>
+    <string name="vpn5g_auth_recovery_link_sent">لینک بازیابی به ایمیلت فرستاده شد؛ روی لینک بزن تا به اپ برگردی و رمز جدیدت را وارد کنی. اگر نرسید، پوشهٔ اسپم را بررسی کن.</string>
+    <string name="vpn5g_auth_recovery_link_invalid">لینک بازیابی معتبر نیست یا منقضی شده؛ دوباره درخواست بده</string>
+    <string name="vpn5g_auth_new_password_title">رمز عبور جدید</string>
+    <string name="vpn5g_auth_new_password_button">ثبت رمز جدید</string>
+    <string name="vpn5g_auth_updating_password">در حال ثبت رمز جدید…</string>
 
     <!-- v1.1: X-VPN-style home, tunnel verification, routing, profile, promo codes -->
     <string name="vpn5g_nav_premium">حق بیمه</string>
