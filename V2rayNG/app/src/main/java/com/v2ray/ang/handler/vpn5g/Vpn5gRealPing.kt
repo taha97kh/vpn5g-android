@@ -3,9 +3,9 @@ package com.v2ray.ang.handler.vpn5g
 import android.content.Context
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.dto.RealPingEvent
+import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.service.RealPingWorkerService
 import com.v2ray.ang.util.LogUtil
-import com.v2ray.ang.util.MmkvManager
 import java.util.Collections
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
