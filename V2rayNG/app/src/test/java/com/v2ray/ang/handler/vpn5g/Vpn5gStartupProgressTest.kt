@@ -44,8 +44,10 @@ class Vpn5gStartupProgressTest {
 
     @Test
     fun test_within_is_clamped() {
+        // Negative within clamps to the stage START (FETCH_CONFIG starts
+        // at 0.10, not 0), over-range within clamps to the stage END.
         assertEquals(
-            0f,
+            0.10f,
             Vpn5gStartupProgress.fraction(Vpn5gStartupProgress.Stage.FETCH_CONFIG, -1f)
         )
         assertEquals(
