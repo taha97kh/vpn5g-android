@@ -176,10 +176,10 @@ fun Vpn5gProfileScreen(
             }
         }
 
-        // About links (v1.1.5 §6): exactly three buttons, exactly these
-        // names, in this order — no extra text, address or description
-        // under them. The version lines below are app info, not link
-        // descriptions.
+        // About links (v1.1.5 §6, labels renamed 2026-11-23 by Aref's
+        // order): exactly three buttons, exactly these names, in this
+        // order — no extra text, address or description under them.
+        // The version lines below are app info, not link descriptions.
         Vpn5gStaggeredItem(index = 4, visible = entered) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Spacer(Modifier.height(8.dp))

@@ -15,6 +15,7 @@ Requires internet. The fallback snapshot is a point-in-time copy: refresh
 it whenever the live list changes materially. Regenerating the GeoIP table
 is only needed when allocations change (monthly is plenty).
 """
+import base64
 import json
 import os
 import tarfile
@@ -28,6 +29,20 @@ IPDENY_URL = "https://www.ipdeny.com/ipblocks/data/countries/all-zones.tar.gz"
 LIVE_JSON = "https://taha97kh-vpn5g-app.static.hf.space/live_configs.json"
 GITHUB_SOURCE_1 = "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs.txt"
 GITHUB_SOURCE_2 = "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt"
+# v1.1.6: censored-network bundle, best-scored bundle, 30-min refresh,
+# and best-by-test (base64-wrapped — sample_lines decodes it).
+GITHUB_SOURCE_3 = "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/iran.txt"
+GITHUB_SOURCE_4 = "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt"
+GITHUB_SOURCE_5 = "https://raw.githubusercontent.com/Alirewa/V2ray-Configs/main/config.txt"
+GITHUB_SOURCE_6 = "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/super-sub.txt"
+GITHUB_SOURCES = (
+    (GITHUB_SOURCE_1, "gh1.txt"),
+    (GITHUB_SOURCE_2, "gh2.txt"),
+    (GITHUB_SOURCE_3, "gh3.txt"),
+    (GITHUB_SOURCE_4, "gh4.txt"),
+    (GITHUB_SOURCE_5, "gh5.txt"),
+    (GITHUB_SOURCE_6, "gh6.txt"),
+)
 CONFIG_SCHEMES = ("vmess://", "vless://", "trojan://", "ss://")
 PING_CAP = 300
 
@@ -83,12 +98,20 @@ def gen_geoip():
 
 
 def sample_lines(path, cap):
-    lines = []
     with open(path, encoding="utf-8", errors="ignore") as fh:
-        for line in fh:
-            t = line.strip()
-            if t and t.startswith(CONFIG_SCHEMES):
-                lines.append(t)
+        text = fh.read()
+    lines = [t for t in (line.strip() for line in text.splitlines())
+             if t and t.startswith(CONFIG_SCHEMES)]
+    if not lines:
+        # Base64-wrapped subscription (MatinGhanbari super-sub): decode
+        # and retry, mirroring Vpn5gSync.decodeSubscriptionBody.
+        try:
+            compact = "".join(text.split())
+            decoded = base64.b64decode(compact).decode("utf-8", "ignore")
+            lines = [t for t in (line.strip() for line in decoded.splitlines())
+                     if t and t.startswith(CONFIG_SCHEMES)]
+        except Exception:
+            lines = []
     if len(lines) <= cap:
         return lines
     return [lines[(i * len(lines) // cap)] for i in range(cap)]
@@ -104,7 +127,7 @@ def gen_fallback():
             uri = (e.get("uri") or "").strip()
             if uri:
                 entries[uri] = (e.get("country") or "").strip() or "بین‌الملل"
-    for url, name in ((GITHUB_SOURCE_1, "gh1.txt"), (GITHUB_SOURCE_2, "gh2.txt")):
+    for url, name in GITHUB_SOURCES:
         path = os.path.join(WORK, name)
         fetch(url, path)
         for uri in sample_lines(path, PING_CAP):

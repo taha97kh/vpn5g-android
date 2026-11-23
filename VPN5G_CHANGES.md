@@ -297,6 +297,66 @@ same fixed key as Debug. In-app updater now points at
   by standing order; the live copy runs on another host) — deployment
   steps are in the delivery report.
 
+## v1.1.6 (2026-11-23, versionCode 8)
+
+Aref tested the fixed 1.1.5 on his phone: it still never connects and
+no server tunnels — "تمام کانفیگ‌ها فیک هستند و هیچ‌کدام وصل نمی‌شوند".
+Auto mode fails too, so this is not one dead server; the pool itself
+has to grow with real, live sources.
+
+- **Four new real GitHub config sources** — every URL below was fetched
+  from this server on 2026-11-23, parsed, and sample-checked (TCP
+  connect to host:port). All four join the default source list and are
+  sampled like the other GitHub files (300-line spread per refresh);
+  the hard rule stands: a config with no ping is never stored or shown.
+  - `morpheusadam/v2ray-config` — `subs/bundles/iran.txt` (censored-network
+    bundle, REALITY / XTLS-Vision first): 2,817 of 3,000 lines parse,
+    15/15 sampled TCP connects.
+  - `morpheusadam/v2ray-config` — `subs/bundles/best.txt` (only sources
+    scoring 85+, every proxy proved with a real TLS tunnel; generated
+    2026-11-22): 1,998 of 2,000 lines parse, 15/15 sampled TCP connects.
+  - `Alirewa/V2ray-Configs` — `config.txt` (2,000 configs, refreshed
+    every 30 minutes): 1,986 of 2,000 lines parse, 15/15 sampled TCP
+    connects.
+  - `MatinGhanbari/v2ray-configs` — `subscriptions/v2ray/super-sub.txt`
+    (best configs by test results, 200 entries, base64-wrapped): 200 of
+    200 lines parse after decoding, 15/15 sampled TCP connects.
+  - Kept: his own HF `live_configs.json` + `sub.txt` (41 entries, 12/12
+    sampled TCP connects from here) and both existing GitHub sources —
+    Radikal `verified/configs.txt` (1,318 lines, all parse, 15/15 TCP;
+    header says tested 2026-11-23 02:13 UTC by a real proxied request)
+    and barry-far `All_Configs_Sub.txt` (9,033 of 9,120 lines parse,
+    15/15 TCP).
+  - Not added: `mahdibland/V2RayAggregator` `sub/sub_merge.txt`
+    (4,428 of 4,515 lines parse, 15/15 TCP) — a big unverified pool
+    duplicating barry-far's role, and its repo was last updated
+    2026-09-24; `Epodonios/v2ray-configs` `All_Configs_Sub.txt` — 404,
+    the file is gone.
+  - Honest limit: TCP reachability from this server is not proof a
+    server tunnels from Iran — the phone's own ping + tunnel check is
+    still the judge, and only a real connect test on his phone settles
+    whether the bigger pool fixes the failure.
+- **Base64 subscription bodies now decode** (`Vpn5gSync.decodeSubscriptionBody`,
+  pure, unit-tested): a body with no config-URI line is tried as base64
+  and used only if it decodes to URI lines. This unblocks the new
+  MatinGhanbari source — and fixes a real bug: our own HF `sub.txt`
+  is base64-wrapped, so before this change it contributed **zero**
+  configs (parseUriLines found no scheme line in the blob). The HF
+  `live_configs.json` path is untouched (JSON, parsed as before).
+- **Me page buttons renamed (Aref's order, 2026-11-23)** — same three
+  destinations, new exact labels in this order: «کانال کانفیگ رایگان»
+  (channel @VPNCRACKNET), «ربات هوشمند» (bot @VPN5G_IRBot),
+  «پشتیبانی آنلاین» (support @Aref_5G). The strings changed in
+  `values/strings.xml`; the Guide screen's support section reuses the
+  same three strings, so its labels match.
+- **Tests**: new `Vpn5gConfigSourcesTest` (default list contents + HTTPS-only,
+  capped-source classification, base64 decode incl. line-broken blobs,
+  garbage/non-URI passthrough). They run in CI
+  (`testPlaystoreDebugUnitTest` in `build-release.yml`). Device/server
+  tests (real connect, failover, manual pick, DNS, IPv4/IPv6, TCP, UDP,
+  QUIC/HTTP3, handover, screen off) were NOT run on this server — they
+  need Aref's phone and live servers.
+
 ## Created files
 
 ### New code — `V2rayNG/app/src/main/java/com/v2ray/ang/handler/vpn5g/`
@@ -422,17 +482,25 @@ same fixed key as Debug. In-app updater now points at
 
 ## Config sources + ping-test cap
 
-Default sources (in order): HF `live_configs.json`, HF `sub.txt`, GitHub
-primary `0xRadikal/Free-v2ray-Configs` (`verified/configs.txt`, ~1,438
-lines, verified nodes), GitHub fallback `barry-far/V2ray-Config`
-(`All_Configs_Sub.txt`, ~8,882 lines, unverified pool). Extra sources may
-come from `app_config.json` (`config_sources`, deduped).
+Default sources (in order): HF `live_configs.json`, HF `sub.txt`,
+GitHub `0xRadikal/Free-v2ray-Configs` (`verified/configs.txt`, ~1,318
+lines, verified nodes), GitHub `barry-far/V2ray-Config`
+(`All_Configs_Sub.txt`, ~9,120 lines, unverified pool), and since
+v1.1.6: GitHub `morpheusadam/v2ray-config` (`subs/bundles/iran.txt`,
+censored-network bundle, ~3,000 lines), the same repo's
+`subs/bundles/best.txt` (2,000 lines, sources scoring 85+),
+GitHub `Alirewa/V2ray-Configs` (`config.txt`, 2,000 lines, refreshed
+every 30 min), and GitHub `MatinGhanbari/v2ray-configs`
+(`subscriptions/v2ray/super-sub.txt`, 200 best-by-test configs,
+base64-wrapped — decoded by `Vpn5gSync.decodeSubscriptionBody`).
+Extra sources may come from `app_config.json` (`config_sources`,
+deduped).
 
-**Cap:** the two GitHub files are large (344 KB / 2.1 MB), so each
-contributes at most **300 lines per refresh**, taken as an evenly-spaced
-spread across the whole file — not just the top — so one refresh samples
-the entire source. The HF `live_configs.json` list (41 entries) is always
-fully ping-tested. All fetching/parsing runs on Dispatchers.IO.
+**Cap:** the GitHub files are large, so each contributes at most
+**300 lines per refresh**, taken as an evenly-spaced spread across the
+whole file — not just the top — so one refresh samples the entire
+source. The HF `live_configs.json` list (41 entries) is always fully
+ping-tested. All fetching/parsing runs on Dispatchers.IO.
 
 **Hard rule enforced:** a config whose TCP ping fails (< 0) is never
 stored or shown — `Vpn5gSync` filters before `saveServerProfiles`.

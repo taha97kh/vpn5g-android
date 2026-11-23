@@ -87,16 +87,20 @@ object Vpn5gSync {
                 if (url == LIVE_JSON) {
                     // Small curated list: always fully ping-tested.
                     candidates += parseLiveJson(body)
-                } else if (url == Vpn5gConstants.GITHUB_SOURCE_1 ||
-                    url == Vpn5gConstants.GITHUB_SOURCE_2
-                ) {
-                    // Large GitHub files: ping-test only a spread of 300 lines.
-                    candidates += parseUriLines(
-                        body,
-                        Vpn5gConstants.GITHUB_SOURCE_PING_CAP,
-                    )
                 } else {
-                    candidates += parseUriLines(body, Int.MAX_VALUE)
+                    // Some sources publish one base64 blob instead of
+                    // plain URI lines (MatinGhanbari super-sub, and our
+                    // own HF sub.txt) — decode first, else use as-is.
+                    val text = decodeSubscriptionBody(body)
+                    if (Vpn5gConstants.isCappedSource(url)) {
+                        // Large GitHub files: ping-test only a spread of 300 lines.
+                        candidates += parseUriLines(
+                            text,
+                            Vpn5gConstants.GITHUB_SOURCE_PING_CAP,
+                        )
+                    } else {
+                        candidates += parseUriLines(text, Int.MAX_VALUE)
+                    }
                 }
             }
 
@@ -198,6 +202,34 @@ object Vpn5gSync {
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Vpn5gSync: refresh failed", e)
             Vpn5gSyncResult(offline = true)
+        }
+    }
+
+    /**
+     * Decodes a subscription body that is published as one base64 blob
+     * instead of plain config-URI lines (v1.1.6: MatinGhanbari super-sub,
+     * and our own HF sub.txt — which contributed zero configs before this,
+     * because parseUriLines found no scheme line in the blob). A body that
+     * already carries a config-URI line is returned unchanged; a body that
+     * is not valid base64, or decodes to text without any config-URI line,
+     * is also returned unchanged. Pure — java.util.Base64 (desugared, so
+     * it works on minSdk 24) and covered by JVM unit tests.
+     */
+    internal fun decodeSubscriptionBody(body: String): String {
+        if (CONFIG_SCHEMES.any { scheme -> body.contains("$scheme://") }) return body
+        val compact = body.filterNot { it.isWhitespace() }
+        if (compact.isEmpty() || compact.length % 4 != 0) return body
+        if (!compact.all { it.isLetterOrDigit() || it == '+' || it == '/' || it == '=' }) {
+            return body
+        }
+        return try {
+            val decoded = String(
+                java.util.Base64.getDecoder().decode(compact),
+                Charsets.UTF_8,
+            )
+            if (CONFIG_SCHEMES.any { scheme -> decoded.contains("$scheme://") }) decoded else body
+        } catch (_: IllegalArgumentException) {
+            body
         }
     }
 

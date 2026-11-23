@@ -760,9 +760,9 @@
     <string name="vpn5g_auto_info_body">در حالت خودکار، برنامه سریع‌ترین سرور رایگان را که پینگ دارد انتخاب می‌کند؛ اگر سروری تونل نکند یا اتصال قطع شود، خودکار به سرور بعدی می‌رود. با زدن ردیف «خودکار» دوباره به همین حالت برمی‌گردید.</string>
     <string name="vpn5g_expand_details">نمایش جزئیات</string>
     <string name="vpn5g_collapse_details">پنهان کردن جزئیات</string>
-    <string name="vpn5g_link_channel" translatable="false">VPNCRACKNET</string>
-    <string name="vpn5g_link_bot" translatable="false">VPN5G_IRBOT</string>
-    <string name="vpn5g_link_support" translatable="false">Aref_5G</string>
+    <string name="vpn5g_link_channel" translatable="false">کانال کانفیگ رایگان</string>
+    <string name="vpn5g_link_bot" translatable="false">ربات هوشمند</string>
+    <string name="vpn5g_link_support" translatable="false">پشتیبانی آنلاین</string>
 
     <!-- v1.1.5: OTP states (§7 — Android side only). -->
     <string name="vpn5g_auth_code_sent">درخواست کد ثبت شد؛ اگر تا چند دقیقه کد نرسید، پوشهٔ اسپم را بررسی کن یا دوباره درخواست بده.</string>

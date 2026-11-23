@@ -21,13 +21,68 @@ object Vpn5gConstants {
     const val GITHUB_SOURCE_2 =
         "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt"
 
+    /**
+     * GitHub source (v1.1.6): bundle for censored networks — REALITY /
+     * XTLS-Vision first. Plain text, ~2,800 configs. Verified live
+     * 2026-11-23: 2,817 of 3,000 lines parse, 15/15 sampled TCP connects.
+     */
+    const val GITHUB_SOURCE_3 =
+        "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/iran.txt"
+
+    /**
+     * GitHub source (v1.1.6): best-scored bundle — only from sources
+     * scoring 85+, every proxy proved with a real TLS tunnel. Plain
+     * text, 2,000 configs, generated 2026-11-22. Verified live
+     * 2026-11-23: 1,998 of 2,000 lines parse, 15/15 sampled TCP connects.
+     */
+    const val GITHUB_SOURCE_4 =
+        "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt"
+
+    /**
+     * GitHub source (v1.1.6): 2,000 configs, refreshed every 30 minutes.
+     * Plain text. Verified live 2026-11-23: 1,986 of 2,000 lines parse,
+     * 15/15 sampled TCP connects.
+     */
+    const val GITHUB_SOURCE_5 =
+        "https://raw.githubusercontent.com/Alirewa/V2ray-Configs/main/config.txt"
+
+    /**
+     * GitHub source (v1.1.6): best configs by test results, 200 entries.
+     * Base64-wrapped — decoded by [Vpn5gSync.decodeSubscriptionBody].
+     * Verified live 2026-11-23: 200 of 200 lines parse after decoding,
+     * 15/15 sampled TCP connects.
+     */
+    const val GITHUB_SOURCE_6 =
+        "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/super-sub.txt"
+
     /** Default config sources, in order. Extra sources may come from app_config.json. */
     val DEFAULT_CONFIG_SOURCES = listOf(
         LIVE_JSON,
         SUB_TXT,
         GITHUB_SOURCE_1,
         GITHUB_SOURCE_2,
+        GITHUB_SOURCE_3,
+        GITHUB_SOURCE_4,
+        GITHUB_SOURCE_5,
+        GITHUB_SOURCE_6,
     )
+
+    /**
+     * Large GitHub files: only a spread of [GITHUB_SOURCE_PING_CAP]
+     * lines is ping-tested per refresh (see Vpn5gSync.refresh).
+     * The HF lists are small and always fully ping-tested.
+     */
+    val CAPPED_SOURCES = setOf(
+        GITHUB_SOURCE_1,
+        GITHUB_SOURCE_2,
+        GITHUB_SOURCE_3,
+        GITHUB_SOURCE_4,
+        GITHUB_SOURCE_5,
+        GITHUB_SOURCE_6,
+    )
+
+    /** True when [url] is a large file whose lines are sampled, not fully ping-tested. Pure. */
+    fun isCappedSource(url: String): Boolean = url in CAPPED_SOURCES
 
     /**
      * Ping-test cap per GitHub source per refresh. The GitHub files are large

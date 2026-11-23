@@ -130,19 +130,23 @@ the same as in the app). The app cannot mint a subscription by itself.
 
 ## Built-in default config sources
 
-When `config_sources` is absent, the app fetches these four sources:
+When `config_sources` is absent, the app fetches these eight sources:
 
 | Source | URL | Notes |
 |---|---|---|
 | HF live list | `https://taha97kh-vpn5g-app.static.hf.space/live_configs.json` | 41 curated entries; always fully ping-tested. |
-| HF subscription | `https://taha97kh-vpn5g-app.static.hf.space/sub.txt` | Plain-text URI lines. |
-| GitHub (primary) | `https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs.txt` | Verified nodes, ~1,438 lines; auto-updates every 15 min. |
-| GitHub (fallback) | `https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt` | Large unverified pool, ~8,882 lines. |
+| HF subscription | `https://taha97kh-vpn5g-app.static.hf.space/sub.txt` | Base64-wrapped URI lines (decoded by the app since v1.1.6). |
+| GitHub (primary) | `https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs.txt` | Verified nodes, ~1,318 lines; auto-updates every 15 min. |
+| GitHub (fallback) | `https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt` | Large unverified pool, ~9,120 lines. |
+| GitHub (censored) | `https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/iran.txt` | Censored-network bundle (REALITY / XTLS-Vision first), ~3,000 lines. Added v1.1.6. |
+| GitHub (best) | `https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt` | Only sources scoring 85+, every proxy proved with a real TLS tunnel; 2,000 lines. Added v1.1.6. |
+| GitHub (30-min) | `https://raw.githubusercontent.com/Alirewa/V2ray-Configs/main/config.txt` | 2,000 configs, refreshed every 30 min. Added v1.1.6. |
+| GitHub (best-tested) | `https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/super-sub.txt` | Best configs by test results, 200 entries, base64-wrapped. Added v1.1.6. |
 
-Ping-test cap: the two GitHub files are large (344 KB / 2.1 MB), so each
-contributes at most **300 lines per refresh**, taken as an evenly-spaced
-spread across the file (not just the top). The HF live list is always fully
-tested. Dead configs (TCP connect fails) are dropped and never stored.
+Ping-test cap: the GitHub files are large, so each contributes at most
+**300 lines per refresh**, taken as an evenly-spaced spread across the
+file (not just the top). The HF live list is always fully tested. Dead
+configs (TCP connect fails) are dropped and never stored.
 
 ## Full example
 
