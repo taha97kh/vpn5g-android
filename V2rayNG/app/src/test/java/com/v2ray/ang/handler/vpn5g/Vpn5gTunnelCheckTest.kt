@@ -1,6 +1,9 @@
 package com.v2ray.ang.handler.vpn5g
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
 /** JVM tests for the pure verdict of [Vpn5gTunnelCheck.evaluateExitIp]:
@@ -38,5 +41,51 @@ class Vpn5gTunnelCheckTest {
 
         val blankIp = Vpn5gTunnelCheck.evaluateExitIp("   ", "5.6.7.8")
         assertEquals(Vpn5gTunnelCheck.Verdict.FAILED, blankIp.verdict)
+    }
+
+    /** v1.1.13 probe fallback: the primary result wins and the fallback never runs. */
+    @Test
+    fun test_probeIp_primary_wins_and_fallback_never_runs() = runBlocking {
+        var fallbackRan = false
+        val ip = Vpn5gTunnelCheck.probeIp(
+            primary = { "1.2.3.4" },
+            fallback = { fallbackRan = true; "9.9.9.9" },
+        )
+        assertEquals("1.2.3.4", ip)
+        assertFalse(fallbackRan)
+    }
+
+    /** v1.1.13: a null primary is saved by the fallback — the probe still verifies. */
+    @Test
+    fun test_probeIp_fallback_saves_probe_when_primary_yields_nothing() = runBlocking {
+        val ip = Vpn5gTunnelCheck.probeIp(
+            primary = { null },
+            fallback = { "9.9.9.9" },
+        )
+        assertEquals("9.9.9.9", ip)
+        val result = Vpn5gTunnelCheck.evaluateExitIp(ip, "5.6.7.8")
+        assertEquals(Vpn5gTunnelCheck.Verdict.VERIFIED, result.verdict)
+    }
+
+    /** v1.1.13: a blank primary counts as nothing, so the fallback still runs. */
+    @Test
+    fun test_probeIp_blank_primary_falls_back() = runBlocking {
+        val ip = Vpn5gTunnelCheck.probeIp(
+            primary = { "   " },
+            fallback = { "9.9.9.9" },
+        )
+        assertEquals("9.9.9.9", ip)
+    }
+
+    /** v1.1.13: both fetches yielding nothing is still a failed probe. */
+    @Test
+    fun test_probeIp_both_null_fails() = runBlocking {
+        val ip = Vpn5gTunnelCheck.probeIp(
+            primary = { null },
+            fallback = { null },
+        )
+        assertNull(ip)
+        val result = Vpn5gTunnelCheck.evaluateExitIp(ip, "5.6.7.8")
+        assertEquals(Vpn5gTunnelCheck.Verdict.FAILED, result.verdict)
     }
 }

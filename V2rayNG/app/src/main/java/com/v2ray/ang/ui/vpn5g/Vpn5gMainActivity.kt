@@ -1536,6 +1536,17 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             if (dropFailoverRounds > MAX_DROP_FAILOVER_ROUNDS) {
                 dropFailoverRounds = 0
                 autoFailoverPending = false
+                // v1.1.13: a persistent session is rescued by the
+                // bounded persistent reconnect instead of ending
+                // FAILED here — the persistent flag is still set, so
+                // the session must not die on an empty pool.
+                if (Vpn5gConnectionPersistence.failoverGiveUpAction(
+                        Vpn5gConnectionPersistence.isPersistentConnection()
+                    ) == Vpn5gConnectionPersistence.FailoverGiveUpAction.PERSISTENT_RECONNECT
+                ) {
+                    schedulePersistentReconnect()
+                    return
+                }
                 val reason = app.getString(R.string.vpn5g_failover_no_server)
                 _uiState.update {
                     it.copy(
@@ -1903,7 +1914,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     /**
      * One light watchdog probe (v1.1.11): a single exit-IP fetch
-     * through the tunnel. Two consecutive FAILED probes drop the
+     * through the tunnel. Three consecutive FAILED probes drop the
      * tunnel — the drop detector then fails over to another server.
      * A single failure is a blip and is forgiven; UNKNOWN (the check
      * cannot run) is not a failure. Never runs while a verification
@@ -1934,7 +1945,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         watchdogFailures = 0
                         LogUtil.i(
                             AppConfig.TAG,
-                            "Vpn5gHomeViewModel: watchdog probe failed twice; dropping",
+                            "Vpn5gHomeViewModel: watchdog probe failed " +
+                                "$WATCHDOG_MAX_CONSECUTIVE_FAILURES times in a row; dropping",
                         )
                         _uiState.update {
                             it.copy(

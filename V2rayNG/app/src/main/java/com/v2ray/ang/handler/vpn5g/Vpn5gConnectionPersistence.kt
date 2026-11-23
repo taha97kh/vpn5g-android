@@ -64,6 +64,18 @@ object Vpn5gConnectionPersistence {
         return minOf(PERSISTENT_RECONNECT_MAX_BACKOFF_MS, backoff)
     }
 
+    /**
+     * What happens when the drop failover gives up (v1.1.13): a
+     * persistent session hands the rescue to the bounded persistent
+     * reconnect instead of ending FAILED; a non-persistent session
+     * ends FAILED with a clear error. Pure, JVM-tested.
+     */
+    enum class FailoverGiveUpAction { PERSISTENT_RECONNECT, FAIL }
+
+    fun failoverGiveUpAction(isPersistentConnection: Boolean): FailoverGiveUpAction =
+        if (isPersistentConnection) FailoverGiveUpAction.PERSISTENT_RECONNECT
+        else FailoverGiveUpAction.FAIL
+
     /** How many reconnect attempts run before giving up with a clear error. */
     fun maxAttempts(): Int = MAX_PERSISTENT_RECONNECT_ATTEMPTS
 

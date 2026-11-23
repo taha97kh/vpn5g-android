@@ -57,6 +57,17 @@ object CoreServiceManager {
     @Volatile
     private var isReloading = false
 
+    /**
+     * Restart wait (v1.1.13): after stopping the core for a restart,
+     * wait at most this long for it to actually stop, polling every
+     * [RESTART_STOP_POLL_MS], instead of a fixed 500 ms. Starting the
+     * new core while the old one is still stopping is refused with
+     * "Core already running" and wedges the daemon flag until a
+     * force-stop clears it.
+     */
+    private const val RESTART_STOP_WAIT_MS = 3_000L
+    private const val RESTART_STOP_POLL_MS = 100L
+
     /** Tun descriptor the core was started with, null in the proxy only and root run modes. */
     private var currentVpnInterface: ParcelFileDescriptor? = null
 
@@ -509,7 +520,24 @@ object CoreServiceManager {
                     CoroutineScope(Dispatchers.Default).launch {
                         try {
                             serviceControl.stopService()
-                            delay(500L)
+                            // v1.1.13: wait for the core to ACTUALLY stop
+                            // instead of a fixed 500 ms — starting the new
+                            // core while the old one is still stopping is
+                            // refused with "Core already running" and
+                            // wedges the daemon flag until a force-stop
+                            // clears it. The wait is bounded: if the core
+                            // still has not stopped at the deadline, the
+                            // start proceeds exactly as before.
+                            val stopDeadline =
+                                System.currentTimeMillis() + RESTART_STOP_WAIT_MS
+                            while (shouldKeepWaitingForCoreStop(
+                                    isRunning(),
+                                    System.currentTimeMillis(),
+                                    stopDeadline,
+                                )
+                            ) {
+                                delay(RESTART_STOP_POLL_MS)
+                            }
                             LauncherManager.startService(serviceControl.getService())
                         } finally {
                             pendingResult.finish()
@@ -537,3 +565,18 @@ object CoreServiceManager {
         }
     }
 }
+
+/**
+ * Pure restart-wait decision (v1.1.13): keep polling while the core is
+ * still running AND the stop deadline has not passed. A stopped core
+ * ends the wait at once; an expired deadline ends it even if the core
+ * is still stopping (the start then proceeds as before). Pure, so JVM
+ * tests drive it without the daemon. Kept top-level — not a member of
+ * [CoreServiceManager] — so tests can call it without initializing
+ * the core controller.
+ */
+internal fun shouldKeepWaitingForCoreStop(
+    isRunning: Boolean,
+    nowMs: Long,
+    deadlineMs: Long,
+): Boolean = isRunning && nowMs < deadlineMs

@@ -72,4 +72,20 @@ class Vpn5gConnectionPersistenceTest {
     fun test_max_attempts() {
         assertEquals(5, Vpn5gConnectionPersistence.maxAttempts())
     }
+
+    @Test
+    fun test_failover_give_up_persistent_session_reconnects() {
+        assertEquals(
+            Vpn5gConnectionPersistence.FailoverGiveUpAction.PERSISTENT_RECONNECT,
+            Vpn5gConnectionPersistence.failoverGiveUpAction(true),
+        )
+    }
+
+    @Test
+    fun test_failover_give_up_non_persistent_session_fails() {
+        assertEquals(
+            Vpn5gConnectionPersistence.FailoverGiveUpAction.FAIL,
+            Vpn5gConnectionPersistence.failoverGiveUpAction(false),
+        )
+    }
 }

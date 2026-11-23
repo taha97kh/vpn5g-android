@@ -212,7 +212,7 @@ object Vpn5gConstants {
      * alongside this as the deeper check.
      */
     const val WATCHDOG_PROBE_INTERVAL_TICKS = 20
-    const val WATCHDOG_MAX_CONSECUTIVE_FAILURES = 2
+    const val WATCHDOG_MAX_CONSECUTIVE_FAILURES = 3
 
     /**
      * Drop failover bound (v1.1.11): how many no-candidate refresh

@@ -61,11 +61,11 @@ object Vpn5gTunnelCheck {
 
     private const val DIRECT_TIMEOUT_MS = 8_000
     /** Overall budget for one verify() call, covering all fetch rounds. */
-    private const val TUNNEL_TIMEOUT_MS = 15_000
+    private const val TUNNEL_TIMEOUT_MS = 25_000
     /** Per-fetch timeout through the local HTTP proxy. */
     private const val TUNNEL_FETCH_TIMEOUT_MS = 7_000
     /** Per-probe timeout for the light watchdog probe (v1.1.11). */
-    private const val WATCHDOG_PROBE_TIMEOUT_MS = 5_000
+    private const val WATCHDOG_PROBE_TIMEOUT_MS = 7_000
     /** How many fetch rounds verify() tries before giving up on a server. */
     private const val MAX_VERIFY_ROUNDS = 3
     /** Pause between fetch rounds. */
@@ -157,15 +157,32 @@ object Vpn5gTunnelCheck {
     }
 
     /**
-     * Light in-session watchdog probe (v1.1.11): ONE exit-IP fetch
-     * through the tunnel, no rounds, no fallback, bounded by
-     * [timeoutMs]. The ViewModel runs this every 20 s while
-     * connected; two consecutive FAILED results drop the tunnel so
-     * the drop detector can fail over. A single failed probe never
-     * kills a session on its own — a transient blip is not a drop.
-     * UNKNOWN when the local HTTP inbound is unavailable (the check
-     * cannot run); the caller treats that as "no signal", not a
-     * failure. Never throws.
+     * Which exit IP one probe reports from its primary and fallback
+     * fetch results (v1.1.13): the primary result wins; the fallback
+     * fetch runs only when the primary yields nothing, and only its
+     * result can still save the probe. Pure apart from the fetch
+     * lambdas it is given, so JVM tests drive it with fixed values.
+     * A blank result counts as nothing — a fetch returning an empty
+     * body must not mask a working fallback.
+     */
+    suspend fun probeIp(
+        primary: suspend () -> String?,
+        fallback: suspend () -> String?,
+    ): String? = primary()?.takeIf { it.isNotBlank() }
+        ?: fallback()?.takeIf { it.isNotBlank() }
+
+    /**
+     * Light in-session watchdog probe (v1.1.11): ONE exit-IP probe
+     * through the tunnel — the primary IP API first, then the ipify
+     * fallback when the primary yields nothing (v1.1.13; the same
+     * fallback [verify] already had) — bounded by [timeoutMs]. The
+     * ViewModel runs this every 20 s while connected; three
+     * consecutive FAILED results drop the tunnel so the drop
+     * detector can fail over. A single failed probe never kills a
+     * session on its own — a transient blip is not a drop. UNKNOWN
+     * when the local HTTP inbound is unavailable (the check cannot
+     * run); the caller treats that as "no signal", not a failure.
+     * Never throws.
      */
     suspend fun probeOnce(
         baselineIp: String?,
@@ -178,7 +195,10 @@ object Vpn5gTunnelCheck {
             )
         }
         val tunnelIp = withTimeoutOrNull(timeoutMs.toLong()) {
-            fetchExitIp(AppConfig.IP_API_URL, timeoutMs)
+            probeIp(
+                { fetchExitIp(AppConfig.IP_API_URL, timeoutMs) },
+                { fetchExitIp(FALLBACK_IP_URL, timeoutMs) },
+            )
         }
         evaluateExitIp(tunnelIp, baselineIp)
     }
