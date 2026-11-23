@@ -2374,7 +2374,7 @@ fun Vpn5gHomeScreen(
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text(
-                                text = stringResource(R.string.app_name),
+                                text = stringResource(R.string.vpn5g_home_brand),
                                 color = Vpn5gOnDark,
                                 fontSize = 24.sp,
                                 fontWeight = FontWeight.Bold,

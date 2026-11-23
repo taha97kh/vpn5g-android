@@ -911,6 +911,11 @@ from the signup path.
   with Confirm email OFF, and redirect `vpn5g://auth/callback`
   listed. The IP check now goes through the project's own Edge
   Function; no ipify/api.ip.sb anywhere in the signup path.
+- **Home header brand.** The home screen header now reads "TAHA
+  VPN 5G" (new non-translatable string `vpn5g_home_brand`; the
+  launcher label, notifications and backup names still use
+  `app_name` = "VPN 5G"). Footer "Made by AREF KH" and the
+  connect-circle "4ref.ai" are unchanged.
 - **IP lookup is Supabase-only now.** New Edge Function
   `supabase/functions/get-client-ip` (Deno, `Deno.serve`): reads the
   caller's public IP from `x-forwarded-for` (first entry),
