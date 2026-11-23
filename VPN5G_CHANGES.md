@@ -357,6 +357,137 @@ has to grow with real, live sources.
   QUIC/HTTP3, handover, screen off) were NOT run on this server — they
   need Aref's phone and live servers.
 
+## v1.1.7 (2026-11-23, versionCode 9)
+
+Aref tested 1.1.6 on his phone: still nothing connects — «هیچ‌کدام وصل
+نشدند». The screenshot shows the app stuck on «در حال اتصال...» with a
+RED dialog: the current node uses an UNENCRYPTED connection and
+connecting to such nodes is NOT possible with Xray core 26.2.6 and
+above; it says it moves to the next server. The free-servers row also
+shows a manual France pick with a ~1 ms ping — Aref says the pings are
+FAKE («پینگ‌ها فیک بوده») or the tunnel is not formed properly.
+
+- **The red dialog, diagnosed (proven from code, not guessed).** The
+  dialog is upstream v2rayNG's `toast_allow_insecure_deprecated`
+  (`values-fa/strings.xml`, exact Persian text matches the screenshot).
+  It fires in `LauncherManager.startContextService` when a config has
+  `insecure == true` and no pinned CA (`pinnedCA256` empty): it shows
+  the toast, copies it to the clipboard — and the service start
+  CONTINUES (no return/throw). Then the core refuses the config: the
+  bundled Xray core is v26.11.9, and `allowInsecure` was REMOVED in
+  26.2.6 (a config setting it fails to load with `The feature
+  "allowInsecure" has been removed`; use `pcs`/`vcn` instead). From
+  26.7.11 the core also refuses VLESS without TLS/REALITY/post-quantum
+  encryption to a public address. So the service never reports running
+  and the 1.1.6 chain dies silently: the verify loop only runs after the
+  service starts, and a stop with no active session returns the state
+  to IDLE with no error — the toast's "moves to the next server" does
+  NOT happen (there is no failover from a service-start failure). The
+  user sees the red dialog, then nothing.
+- **Encrypted-only filter — the main fix.** `Vpn5gServerValidator`
+  now rejects any config that is not provably encrypted, at sync time
+  (never stored, never shown), at import time (deep links), and at
+  connect time (an unencrypted pick is skipped before the core ever
+  sees it, so the red dialog can never appear):
+  - `insecure=1` without a pinned CA (`pcs`) → rejected (the exact
+    red-dialog node; a pinned CA is the core's replacement and is
+    accepted);
+  - VLESS needs TLS, REALITY, or a non-"none" post-quantum
+    `encryption` value; VMess needs a real AEAD cipher — only scy
+    "none" without TLS/REALITY is rejected (with TLS the transport
+    encrypts even when scy is "none"; scy "auto" is AES-128-GCM and is
+    accepted);
+  - Trojan needs TLS or REALITY and an empty `flow` (Trojan + `flow`
+    is a hard core error);
+  - Shadowsocks needs an AEAD cipher (`aes-128/256-gcm`,
+    `chacha20-poly1305` / `chacha20-ietf-poly1305`,
+    `xchacha20-poly1305`, `2022-blake3-*`); stream ciphers
+    (`aes-*-cfb`, `rc4-md5`), "none" and plain are rejected;
+  - SOCKS / HTTP / plain nodes were already rejected as unsupported.
+  - Per-source survival after filtering (re-checked 2026-11-23 from
+    this server, Python replication of the validator over the same
+    samples the app takes — the HF lists in full, a 300-line spread of
+    each GitHub file; the HF live list and `sub.txt` are the same 41
+    entries, counted twice below):
+    - HF `live_configs.json` / `sub.txt`: 24 of 41 survive (59%) each;
+    - Radikal: 256 of 300 (85%); barry-far: 253 of 300 (84%);
+    - morpheusadam iran: 219 of 300 (73%); morpheusadam best: 153 of
+      300 (51%); Alirewa: 164 of 300 (55%); MatinGhanbari: 148 of 200
+      (74%);
+    - total: 1,241 of 1,782 sampled (70%) survive; the new filter
+      drops 158 of the 1,399 the old validator kept (11%) — mostly
+      unencrypted VLESS/Trojan (100), `insecure=1` (20) and weak SS
+      ciphers (38); no Trojan `flow` was seen. The weakest sources
+      (morpheusadam best 51%, Alirewa 55%) still yield 150+ usable
+      entries each, so no source is empty and no replacement source
+      was needed. The bundled fallback snapshot is NOT regenerated:
+      `loadBundledFallback` runs the same validator at import, so the
+      filter applies to it automatically.
+- **Auto must not end until connected (Aref's order: «تا زمانی که وصل
+  نشده کانفینگ اتومات تمام نشود»).** The fixed 8-attempt cap is REMOVED
+  from the auto chain (both `MAX_TUNNEL_ATTEMPTS` and the 2-attempt
+  post-connect drop-failover cap are gone). The chain now keeps trying
+  the next pinged free server until one VERIFIES as a real tunnel or
+  the user disconnects. It is bounded sanely, not by a count: one pass
+  over the whole pinged free list, then a list re-refresh and continue
+  (the 6h failed store keeps dead servers out, so a refresh can only
+  add untried servers); when a refresh yields no untried candidate the
+  chain waits 60 s in RETRYING and refreshes again — never a FAILED
+  state while the user has not disconnected, and the UI stays in a
+  connecting state the whole time (new string
+  `vpn5g_refreshing_servers`: «لیست سرورها تمام شد؛ در حال
+  به‌روزرسانی لیست و تلاش دوباره…»). Per-attempt timeouts, the 6h
+  failed-server exclusion and the 30-minute session timer still apply.
+  The two "gave up" strings (`vpn5g_tunnel_failed_all`,
+  `vpn5g_autofailover_gave_up`) are removed — no code path uses them
+  any more. Boundary, stated plainly: a daemon restart failure (the
+  service itself fails to come back after a switch) still ends the
+  chain with a precise error — that is a service failure, not a server
+  failure, and the user re-taps connect.
+- **Real ping (the 1 ms France ping was fake).** The TCP-connect ping
+  only proves a TCP handshake completed; on a filtered network a
+  middlebox answers the handshake in-transit while the real protocol
+  handshake never reaches the server — so a dead server can show
+  1 ms and the free tier (fastest by TCP time) filled with servers
+  that can never tunnel. Now, after every refresh, the 24 fastest
+  TCP-pinged candidates are put through a REAL through-the-proxy test
+  (`Vpn5gRealPing`, reusing upstream's own `RealPingWorkerService`
+  with `onlyTcp = false`: a throwaway core per server, a real request
+  to the delay-test URL through it). Only servers that pass it get a
+  shown ping, the free tier, or an auto pick; the stored ping of a
+  verified server becomes the REAL delay (not the TCP time), and a
+  server that fails the real test has its ping withdrawn (-1). A
+  TCP-only ping is never displayed as a number anywhere (home rows,
+  Auto row, country best-ping, manual subtitle, current-server ping
+  all show "—" until a real ping exists). Evidence is keyed by server
+  identity (scheme://host:port:identity), not GUID, so a proven server
+  keeps its real ping across refreshes and the probe only re-tests new
+  candidates. The probe is skipped while the VPN is running (no
+  throwaway core next to the live one) and is bounded by a 45 s budget;
+  it is a measurement only and never decides the core lifecycle.
+  Honest limit: a real through-the-proxy delay proves the proxy
+  handshake works — it does not prove the tunnel carries traffic from
+  Iran; only the tunnel verification (exit IP + DNS) and a real connect
+  on his phone prove that.
+- **Xray core version: no upgrade.** The bundled core is already the
+  newest: `AndroidLibXrayLite` is tagged v26.11.9 and the Xray-core
+  latest release is also v26.11.9. No dependency bump was made — the
+  fix is the filter, not a core upgrade (and a speculative core upgrade
+  would risk the build, which only CI can check).
+- **Tests**: validator tests updated for the new rules (plain VLESS,
+  VMess scy none, Trojan no-TLS / with flow, insecure=1 with and
+  without a pinned CA, weak vs AEAD SS ciphers, VLESS post-quantum
+  encryption) plus new `Vpn5gRealPingTest` (probe-batch selection:
+  fastest unproven win, already-proven not re-tested, empty cases)
+  and updated `Vpn5gAutoConnectTest` / `Vpn5gTopFreeTest` (a 1 ms
+  TCP-only ping never wins the pick or a free slot). They run in CI
+  (`testPlaystoreDebugUnitTest` in `build-release.yml`). Device/server
+  tests (real connect, failover, manual pick, real-ping probe on a live
+  network, DNS, IPv4/IPv6, TCP, UDP, QUIC/HTTP3, handover, screen off)
+  were NOT run on this server — they need Aref's phone and live servers.
+  The §7 email tests are still blocked on the Gmail app password (see
+  v1.1.5).
+
 ## Created files
 
 ### New code — `V2rayNG/app/src/main/java/com/v2ray/ang/handler/vpn5g/`

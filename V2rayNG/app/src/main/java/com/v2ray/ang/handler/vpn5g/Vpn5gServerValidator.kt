@@ -22,6 +22,23 @@ import java.util.UUID
  * - gRPC requires a service name;
  * - a WebSocket / XHTTP path defaults to "/" when missing.
  *
+ * Encrypted-only filter (v1.1.7): the bundled Xray core (v26.11.9)
+ * refuses unencrypted nodes — a config with `allowInsecure` fails to load
+ * (`The feature "allowInsecure" has been removed`, core >= 26.2.6) and
+ * VLESS without TLS/REALITY/post-quantum encryption is rejected outright
+ * (core >= 26.7.11). Upstream v2rayNG shows the red "unencrypted node"
+ * toast for `insecure == true` with no pinned CA (see
+ * LauncherManager.startContextService) and the service then fails to
+ * start. So a config that is not provably encrypted never reaches the
+ * core: it is dropped at sync/import and skipped at connect time.
+ * - `insecure=1` without a pinned CA (`pcs`) is rejected;
+ * - VLESS needs TLS, REALITY, or a non-"none" post-quantum `encryption`;
+ * - VMess needs a real AEAD cipher (scy "auto"/"aes-128-gcm"/...) — only
+ *   scy "none" without TLS/REALITY is rejected (with TLS the transport
+ *   encrypts even when scy is "none");
+ * - Trojan needs TLS or REALITY and an empty `flow`;
+ * - Shadowsocks needs an AEAD cipher.
+ *
  * Everything here is pure Kotlin (no Android APIs, no I/O) so it is covered
  * by JVM unit tests in Vpn5gServerValidatorTest.
  */
@@ -38,6 +55,26 @@ object Vpn5gServerValidator {
         MISSING_SNI,
         MISSING_REALITY_KEY,
         MISSING_GRPC_SERVICE,
+        /**
+         * v1.1.7: TLS with certificate verification skipped and no pinned CA
+         * (`insecure=1` without `pcs`). This is exactly the node the red
+         * "unencrypted" dialog warns about: the core refuses to load such
+         * a config (`allowInsecure` removed in Xray-core 26.2.6).
+         */
+        INSECURE_TLS,
+        /**
+         * v1.1.7: no transport encryption — VLESS without TLS/REALITY or a
+         * post-quantum `encryption` value, VMess with scy "none" and no
+         * TLS/REALITY, or Trojan without TLS/REALITY.
+         */
+        UNENCRYPTED,
+        /**
+         * v1.1.7: Shadowsocks cipher is not AEAD (none / plain / stream
+         * cipher such as aes-*-cfb or rc4-md5).
+         */
+        WEAK_SS_CIPHER,
+        /** v1.1.7: Trojan with a non-empty `flow` (a hard core error). */
+        TROJAN_FLOW,
     }
 
     data class Validation(val reason: Reason) {
@@ -81,8 +118,75 @@ object Vpn5gServerValidator {
         if (profile.network == "grpc" && profile.serviceName.isNullOrBlank()) {
             return Validation(Reason.MISSING_GRPC_SERVICE)
         }
+        // v1.1.7 encrypted-only filter (see the class KDoc): a config that
+        // is not provably encrypted never reaches the core, so the red
+        // "unencrypted node" dialog can never appear. These checks run
+        // after the structural ones so existing reasons are unchanged.
+        if (profile.insecure == true && profile.pinnedCA256.isNullOrBlank()) {
+            return Validation(Reason.INSECURE_TLS)
+        }
+        val hasTlsTransport = profile.security == AppConfig.TLS ||
+            profile.security == AppConfig.REALITY
+        when (profile.configType) {
+            EConfigType.VLESS -> {
+                // VLESS encrypts via TLS, REALITY, or a post-quantum
+                // `encryption` value (stored in profile.method); "none"
+                // with no TLS/REALITY is plaintext and the core rejects it.
+                val encryption = profile.method.orEmpty()
+                val hasPqEncryption = encryption.isNotBlank() &&
+                    !encryption.equals("none", ignoreCase = true)
+                if (!hasTlsTransport && !hasPqEncryption) {
+                    return Validation(Reason.UNENCRYPTED)
+                }
+            }
+            EConfigType.VMESS -> {
+                // VMess AEAD (scy "auto"/"aes-128-gcm"/"chacha20-...") is
+                // encryption by itself; only scy "none" without a TLS or
+                // REALITY transport is plaintext.
+                val scyNone = profile.method.orEmpty().equals("none", ignoreCase = true)
+                if (scyNone && !hasTlsTransport) {
+                    return Validation(Reason.UNENCRYPTED)
+                }
+            }
+            EConfigType.TROJAN -> {
+                // Trojan with a `flow` is a hard core error; a Trojan
+                // without TLS/REALITY has no encryption at all.
+                if (!profile.flow.isNullOrBlank()) {
+                    return Validation(Reason.TROJAN_FLOW)
+                }
+                if (!hasTlsTransport) {
+                    return Validation(Reason.UNENCRYPTED)
+                }
+            }
+            EConfigType.SHADOWSOCKS -> {
+                // Only AEAD ciphers are real encryption; stream ciphers
+                // (aes-*-cfb, rc4-md5) and "none"/plain are rejected.
+                if (!isAeadCipher(profile.method)) {
+                    return Validation(Reason.WEAK_SS_CIPHER)
+                }
+            }
+            else -> {
+                // Other types were already rejected as UNSUPPORTED_SCHEME.
+            }
+        }
         return Validation(Reason.OK)
     }
+
+    /** Shadowsocks ciphers that are real AEAD encryption (v1.1.7). */
+    private val AEAD_CIPHERS = setOf(
+        "aes-128-gcm",
+        "aes-256-gcm",
+        "chacha20-poly1305",
+        "chacha20-ietf-poly1305",
+        "xchacha20-poly1305",
+        "2022-blake3-aes-128-gcm",
+        "2022-blake3-aes-256-gcm",
+        "2022-blake3-chacha20-poly1305",
+    )
+
+    /** True when [method] is a Shadowsocks AEAD cipher (case-insensitive). */
+    fun isAeadCipher(method: String?): Boolean =
+        method?.trim()?.lowercase() in AEAD_CIPHERS
 
     /**
      * Fill in defaults that are safe to infer. Only the WebSocket / XHTTP

@@ -127,17 +127,42 @@ object Vpn5gConstants {
     /** Bundled fallback assets (assets/vpn5g/). */
     const val ASSET_FALLBACK_SERVERS = "vpn5g/fallback_servers.json"
 
-    /** Max servers tried in one auto-failover chain after a tunnel check fails.
-     * v1.1.5 refinement: a connect attempt must never give up after one
-     * failure — it keeps switching to the next best server until a real
-     * tunnel is verified, or the candidates run out. The bound is 8
-     * servers per chain (each attempt has its own timeouts and the 6h
-     * failed store keeps dead servers out), so the chain always ends:
-     * no infinite loop, worst case ~8 attempts before FAILED. */
-    const val MAX_TUNNEL_ATTEMPTS = 8
+    /**
+     * v1.1.7: the auto chain has NO fixed attempt cap any more (the
+     * 1.1.5 bound of 8 attempts is removed at Aref's order: "تا زمانی که
+     * وصل نشده کانفینگ اتومات تمام نشود" — auto must not end until a
+     * tunnel is verified). The chain keeps trying the next pinged free
+     * server until one VERIFIES as a real tunnel or the user disconnects.
+     * It is bounded sanely, not by a count: one pass over the whole
+     * pinged free list, then a list re-refresh and continue; when a
+     * refresh yields no untried candidate the chain waits with backoff
+     * (see [EMPTY_POOL_BACKOFF_MS]) and refreshes again — never a hard
+     * stop while untried pinged servers remain, never a FAILED state
+     * while the user has not disconnected. Per-attempt timeouts, the 6h
+     * failed-server exclusion and the 30-minute session timer still apply.
+     */
+    /** Delay between re-refreshes while the pool has no untried candidate. */
+    const val EMPTY_POOL_BACKOFF_MS = 60_000L
 
-    /** Max reconnect attempts after an unexpected drop, per session. */
-    const val MAX_AUTO_FAILOVER_ATTEMPTS = 2
+    /**
+     * Real-ping probe (v1.1.7): how many of the fastest TCP-pinged
+     * candidates are put through a real through-the-proxy delay test per
+     * refresh. Slightly more than [FREE_SERVER_COUNT] so the free tier
+     * always has a full 20 real-pinged servers when the pool allows.
+     */
+    const val REAL_PING_CANDIDATES = 24
+
+    /** Overall budget for one real-ping probe batch (v1.1.7). */
+    const val REAL_PING_BUDGET_MS = 45_000L
+
+    /**
+     * MMKV SETTING key holding the dedupe keys (scheme://host:port:identity)
+     * of servers that passed a real through-the-proxy ping test (v1.1.7).
+     * Stored as a comma-separated list. Keyed by server identity, not by
+     * GUID, so the evidence survives a refresh (GUIDs are re-issued every
+     * refresh while the identity stays the same).
+     */
+    const val KEY_REAL_PING_KEYS_CSV = "vpn5g_real_ping_keys"
 
     /**
      * Debounce after an unexpected drop before the drop detector fails

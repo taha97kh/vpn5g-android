@@ -63,7 +63,16 @@ object Vpn5gSync {
         return guid
     }
 
-    suspend fun refresh(): Vpn5gSyncResult = withContext(Dispatchers.IO) {
+    /**
+     * Refreshes the live server list from all sources (v1.1.6: 8 sources).
+     * [skipRealProbe] is true while the VPN is running: a throwaway core
+     * is never spawned next to the live one, and the real-ping evidence
+     * is keyed by server identity so proven servers keep their real ping.
+     */
+    suspend fun refresh(
+        context: Context,
+        skipRealProbe: Boolean = false,
+    ): Vpn5gSyncResult = withContext(Dispatchers.IO) {
         try {
             val remoteConfig = Vpn5gRemoteConfig.fetch()
 
@@ -190,11 +199,70 @@ object Vpn5gSync {
                 }
             }
 
+            // v1.1.7 real ping: a TCP connect only proves a handshake
+            // completed — on a filtered network a middlebox answers it
+            // in-transit while the protocol handshake never completes, so
+            // a dead server can show 1 ms. The fastest TCP-pinged
+            // candidates are therefore put through a real through-the-proxy
+            // test; only servers that pass it get a shown ping, the free
+            // tier, or an auto pick. Candidates already proven in an
+            // earlier refresh are not re-tested (evidence is keyed by
+            // server identity, which survives a refresh).
+            var realPingCount = 0
+            if (profiles.isNotEmpty()) {
+                if (!skipRealProbe) {
+                    val allCandidates = live.mapIndexed { index, (profile, _, _) ->
+                        val guid = profiles.keys.elementAt(index)
+                        Vpn5gRealPing.RealPingCandidate(
+                            guid,
+                            Vpn5gServerValidator.dedupeKey(profile),
+                        )
+                    }
+                    val tcpDelays = live.mapIndexed { index, (_, delay, _) ->
+                        profiles.keys.elementAt(index) to delay
+                    }.toMap()
+                    val probeCandidates = Vpn5gRealPing.selectCandidates(
+                        allCandidates,
+                        tcpDelays,
+                        Vpn5gRealPing.loadRealPingKeys(),
+                    )
+                    if (probeCandidates.isNotEmpty()) {
+                        val probe = Vpn5gRealPing.probeCandidates(context, probeCandidates)
+                        if (probe.verifiedKeys.isNotEmpty()) {
+                            Vpn5gRealPing.addRealPingKeys(probe.verifiedKeys)
+                        }
+                        // The stored ping of a verified server becomes the
+                        // REAL through-the-proxy delay (not the TCP connect
+                        // time): the number the app shows is the number
+                        // that was actually measured through the proxy.
+                        probe.realDelays.forEach { (guid, delay) ->
+                            MmkvManager.encodeServerTestDelayMillis(guid, delay)
+                        }
+                        // A server that fails the real test is dead for our
+                        // purposes even though TCP answered: withdraw its
+                        // ping so it is never free or auto-picked this round.
+                        probe.failedGuids.forEach { guid ->
+                            MmkvManager.encodeServerTestDelayMillis(guid, -1L)
+                        }
+                        LogUtil.i(
+                            AppConfig.TAG,
+                            "Vpn5gSync: real ping " +
+                                "${probe.verifiedKeys.size}/${probe.tested} verified",
+                        )
+                    }
+                }
+                val realKeys = Vpn5gRealPing.loadRealPingKeys()
+                realPingCount = live.count { (profile, _, _) ->
+                    Vpn5gServerValidator.dedupeKey(profile) in realKeys
+                }
+            }
+
             Vpn5gSyncResult(
                 fetched = candidates.size,
                 live = live.size,
                 dropped = dropped,
                 invalid = invalid,
+                realPingCount = realPingCount,
                 perCountry = perCountry,
                 offline = false,
                 notice = remoteConfig.notice,
@@ -273,18 +341,19 @@ object Vpn5gSync {
     }
 
     /**
-     * Free tier (v1.1.2): the [FREE_SERVER_COUNT] fastest-pinging configs
+     * Free tier (v1.1.2, v1.1.7): the [FREE_SERVER_COUNT] fastest-pinging configs
      * are free; every other config is premium-locked. Pure function (no
      * Android APIs) so it is covered by JVM unit tests. Only servers with
-     * a measured ping (pingMillis > 0) can be free — a config with no ping
-     * result is never free and never tried first.
+     * a REAL through-the-proxy ping (hasRealPing and pingMillis > 0) can
+     * be free — a TCP-only ping is never a free server and never tried
+     * first, because a middlebox can fake a 1 ms TCP handshake.
      */
     fun selectFreeGuids(
         servers: List<Vpn5gServerUi>,
         count: Int = FREE_SERVER_COUNT,
     ): Set<String> {
         return servers
-            .filter { it.pingMillis > 0 }
+            .filter { it.hasRealPing && it.pingMillis > 0 }
             .sortedBy { it.pingMillis }
             .take(count)
             .map { it.guid }
@@ -297,9 +366,9 @@ object Vpn5gSync {
      * row carries the flag + Persian country name parsed from its remark
      * (free, no I/O); servers whose remark has no country are enriched later
      * by [enrichCountries] (DNS + bundled GeoIP table) so the first paint is
-     * never blocked on DNS. The free tier is the 20 fastest-pinging servers
-     * ([selectFreeGuids]); a section is "free" when it holds at least one
-     * free server.
+     * never blocked on DNS. The free tier is the 20 fastest REAL-pinging
+     * servers ([selectFreeGuids], v1.1.7); a section is "free" when it holds
+     * at least one free server.
      */
     fun loadGroupedServers(): List<Vpn5gCountryUi> {
         val subId = MmkvManager.decodeSubscriptions()
@@ -307,6 +376,7 @@ object Vpn5gSync {
             ?: return emptyList()
         val guids = MmkvManager.decodeServerList(subId)
         val selected = MmkvManager.getSelectServer()
+        val realPingKeys = Vpn5gRealPing.loadRealPingKeys()
         val byCountry = linkedMapOf<String, MutableList<Vpn5gServerUi>>()
         val labels = mutableMapOf<String, String>()
         guids.forEach { guid ->
@@ -323,6 +393,9 @@ object Vpn5gSync {
                     country = key,
                     pingMillis = ping,
                     isSelected = guid == selected,
+                    // v1.1.7: real ping is keyed by server identity, so it
+                    // survives the GUID re-issue of every refresh.
+                    hasRealPing = Vpn5gServerValidator.dedupeKey(profile) in realPingKeys,
                     flag = remarkCountry?.flag ?: "🌐",
                     countryNameFa = remarkCountry?.nameFa ?: "",
                     countryCode = remarkCountry?.code ?: "",
@@ -471,10 +544,20 @@ object Vpn5gSync {
     }
 
     /** Imports a single config URI (deep link) into the VPN 5G group. */
+    /**
+     * Imports one deep-linked config URI into the VPN 5G group. v1.1.7:
+     * the config is validated with the encrypted-only filter before it
+     * is stored — an unencrypted deep link is refused, so the red
+     * "unencrypted node" dialog can never appear from an imported link.
+     */
     fun importUri(uri: String): Boolean {
         return try {
             val subId = ensureSubscriptionId()
             val profile = AngConfigManager.parseConfig(uri.trim(), subId, null) ?: return false
+            if (!Vpn5gServerValidator.validate(profile).isValid) {
+                LogUtil.i(AppConfig.TAG, "Vpn5gSync: importUri rejected unencrypted/invalid config")
+                return false
+            }
             if (profile.country.isBlank()) profile.country = "بین‌الملل"
             val guid = Utils.getUuid()
             MmkvManager.saveServerProfiles(

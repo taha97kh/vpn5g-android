@@ -7,13 +7,15 @@ import org.junit.jupiter.api.Test
 /** JVM tests for the free tier: the 20 fastest-pinging configs (pure Kotlin). */
 class Vpn5gTopFreeTest {
 
-    private fun server(guid: String, pingMillis: Long): Vpn5gServerUi {
+    private fun server(guid: String, pingMillis: Long, realPing: Boolean = true): Vpn5gServerUi {
         return Vpn5gServerUi(
             guid = guid,
             name = guid,
             country = "c",
             pingMillis = pingMillis,
             isSelected = false,
+            // v1.1.7: only a real through-the-proxy ping counts.
+            hasRealPing = realPing,
         )
     }
 
@@ -44,6 +46,17 @@ class Vpn5gTopFreeTest {
         )
         val free = Vpn5gSync.selectFreeGuids(servers)
         assertEquals(setOf("fast", "slow"), free)
+    }
+
+    @Test
+    fun test_tcp_only_never_free() {
+        // v1.1.7: a 1 ms TCP-only ping must never buy a free slot — only
+        // servers with a real through-the-proxy ping can be free.
+        val servers = listOf(
+            server("fake-fast", 1L, realPing = false),
+            server("real-slow", 900L, realPing = true),
+        )
+        assertEquals(setOf("real-slow"), Vpn5gSync.selectFreeGuids(servers))
     }
 
     @Test

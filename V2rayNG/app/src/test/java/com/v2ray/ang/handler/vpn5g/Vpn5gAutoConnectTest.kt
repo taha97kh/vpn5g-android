@@ -10,14 +10,17 @@ import org.junit.jupiter.api.Test
  * picker and the failed-server TTL store (all pure Kotlin). */
 class Vpn5gAutoConnectTest {
 
-    private fun server(guid: String, ping: Long, free: Boolean = true) = Vpn5gServerUi(
-        guid = guid,
-        name = guid,
-        country = "بین‌الملل",
-        pingMillis = ping,
-        isSelected = false,
-        isFree = free,
-    )
+    private fun server(guid: String, ping: Long, free: Boolean = true, realPing: Boolean = true) =
+        Vpn5gServerUi(
+            guid = guid,
+            name = guid,
+            country = "بین‌الملل",
+            pingMillis = ping,
+            isSelected = false,
+            isFree = free,
+            // v1.1.7: the picker only trusts a real through-the-proxy ping.
+            hasRealPing = realPing,
+        )
 
     private fun section(servers: List<Vpn5gServerUi>) = Vpn5gCountryUi(
         label = "بین‌الملل",
@@ -277,6 +280,31 @@ class Vpn5gAutoConnectTest {
         val sections = listOf(section(listOf(server("a", 0L), server("b", -1L))))
         assertNull(Vpn5gAutoConnect.pickBestServer(sections))
         assertNull(Vpn5gAutoConnect.pickBestServer(emptyList()))
+    }
+
+    @Test
+    fun test_pick_best_server_ignores_tcp_only() {
+        // v1.1.7: a 1 ms TCP-only ping (a middlebox answering the handshake
+        // in-transit) must never win the auto pick — the slower server
+        // with a real through-the-proxy ping wins instead.
+        val sections = listOf(
+            section(
+                listOf(
+                    server("fake-fast", 1L, realPing = false),
+                    server("real-slow", 900L, realPing = true),
+                )
+            ),
+        )
+        assertEquals("real-slow", Vpn5gAutoConnect.pickBestServer(sections)?.guid)
+    }
+
+    @Test
+    fun test_pick_best_server_empty_when_nothing_real_pinged() {
+        // v1.1.7: TCP-only servers are not pickable at all.
+        val sections = listOf(
+            section(listOf(server("a", 10L, realPing = false), server("b", 20L, realPing = false))),
+        )
+        assertNull(Vpn5gAutoConnect.pickBestServer(sections))
     }
 
     // -- Failed-server TTL store (pure functions) ------------------------------

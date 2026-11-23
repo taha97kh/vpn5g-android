@@ -158,6 +158,8 @@ data class Vpn5gSyncResult(
     val dropped: Int = 0,
     /** Configs dropped by server validation (v1.1.4 §5). */
     val invalid: Int = 0,
+    /** Servers with a real through-the-proxy ping after this refresh (v1.1.7). */
+    val realPingCount: Int = 0,
     val perCountry: Map<String, Int> = emptyMap(),
     val offline: Boolean = false,
     val notice: String? = null,
@@ -186,6 +188,11 @@ data class Vpn5gServerUi(
     val countryCode: String = "",
     /** Server host (for GeoIP lookup only; not displayed). */
     val host: String = "",
+    /** True when this server passed a real through-the-proxy ping test
+     * (v1.1.7): the delay was measured by sending a real request through
+     * the proxy, not by a raw TCP connect. Only real-pinged servers can
+     * be free or auto-picked; a TCP-only ping is never shown as a number. */
+    val hasRealPing: Boolean = false,
     /** Config protocol scheme ("vless", "vmess", "trojan", "ss"), or "" when unknown. */
     val protocol: String = "",
 )

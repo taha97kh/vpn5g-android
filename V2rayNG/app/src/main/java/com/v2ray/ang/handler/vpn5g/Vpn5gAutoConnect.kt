@@ -184,9 +184,13 @@ object Vpn5gAutoConnect {
         sections: List<Vpn5gCountryUi>,
         excluding: Set<String> = emptySet(),
     ): Vpn5gServerUi? {
+        // v1.1.7: only a server with a REAL through-the-proxy ping is
+        // pickable — a TCP-only ping can be faked in-transit by a
+        // middlebox (a dead server showing 1 ms), so it must never win
+        // the auto pick.
         return sections
             .flatMap { it.servers }
-            .filter { it.isFree && it.pingMillis > 0 && it.guid !in excluding }
+            .filter { it.isFree && it.hasRealPing && it.pingMillis > 0 && it.guid !in excluding }
             .minByOrNull { it.pingMillis }
     }
 }

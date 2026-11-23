@@ -18,11 +18,15 @@ class Vpn5gServerValidatorTest {
         server: String? = "1.2.3.4",
         port: String? = "443",
         password: String? = uuid,
+        method: String? = null,
+        flow: String? = null,
         network: String? = "tcp",
         path: String? = null,
         serviceName: String? = null,
         security: String? = null,
         sni: String? = null,
+        insecure: Boolean? = null,
+        pinnedCA256: String? = null,
         publicKey: String? = null,
         shortId: String? = null,
     ) = ProfileItem(
@@ -30,11 +34,15 @@ class Vpn5gServerValidatorTest {
         server = server,
         serverPort = port,
         password = password,
+        method = method,
+        flow = flow,
         network = network,
         path = path,
         serviceName = serviceName,
         security = security,
         sni = sni,
+        insecure = insecure,
+        pinnedCA256 = pinnedCA256,
         publicKey = publicKey,
         shortId = shortId,
     )
@@ -43,9 +51,11 @@ class Vpn5gServerValidatorTest {
 
     @Test
     fun test_valid_vless_tcp() {
+        // v1.1.7: a plain VLESS/TCP with no TLS is UNENCRYPTED, not valid —
+        // the valid TCP case is VLESS + TLS.
         assertEquals(
             Vpn5gServerValidator.Reason.OK,
-            reason(profile()),
+            reason(profile(security = "tls", sni = "example.com")),
         )
     }
 
@@ -80,7 +90,13 @@ class Vpn5gServerValidatorTest {
         )
         assertEquals(
             Vpn5gServerValidator.Reason.OK,
-            reason(profile(type = EConfigType.SHADOWSOCKS, password = "secret")),
+            reason(
+                profile(
+                    type = EConfigType.SHADOWSOCKS,
+                    password = "secret",
+                    method = "aes-256-gcm",
+                )
+            ),
         )
     }
 
@@ -103,7 +119,14 @@ class Vpn5gServerValidatorTest {
     fun test_valid_grpc_with_service_name() {
         assertEquals(
             Vpn5gServerValidator.Reason.OK,
-            reason(profile(network = "grpc", serviceName = "gun-service")),
+            reason(
+                profile(
+                    network = "grpc",
+                    serviceName = "gun-service",
+                    security = "tls",
+                    sni = "example.com",
+                )
+            ),
         )
     }
 
@@ -150,30 +173,31 @@ class Vpn5gServerValidatorTest {
 
     @Test
     fun test_ipv6_literals() {
-        // Well-formed literals pass.
+        // Well-formed literals pass (v1.1.7: with TLS, since a plain
+        // VLESS with no transport encryption is now UNENCRYPTED).
         assertEquals(
             Vpn5gServerValidator.Reason.OK,
-            reason(profile(server = "2001:db8::1")),
+            reason(profile(server = "2001:db8::1", security = "tls", sni = "example.com")),
         )
         assertEquals(
             Vpn5gServerValidator.Reason.OK,
-            reason(profile(server = "::1")),
+            reason(profile(server = "::1", security = "tls", sni = "example.com")),
         )
         assertEquals(
             Vpn5gServerValidator.Reason.OK,
-            reason(profile(server = "::")),
+            reason(profile(server = "::", security = "tls", sni = "example.com")),
         )
         assertEquals(
             Vpn5gServerValidator.Reason.OK,
-            reason(profile(server = "fe80::1%eth0")),
+            reason(profile(server = "fe80::1%eth0", security = "tls", sni = "example.com")),
         )
         assertEquals(
             Vpn5gServerValidator.Reason.OK,
-            reason(profile(server = "::ffff:192.0.2.1")),
+            reason(profile(server = "::ffff:192.0.2.1", security = "tls", sni = "example.com")),
         )
         assertEquals(
             Vpn5gServerValidator.Reason.OK,
-            reason(profile(server = "[2001:db8::1]")),
+            reason(profile(server = "[2001:db8::1]", security = "tls", sni = "example.com")),
         )
         // Malformed literals fail.
         assertEquals(
@@ -307,5 +331,193 @@ class Vpn5gServerValidatorTest {
         assertTrue(Vpn5gServerValidator.isUuid(uuid.uppercase()))
         assertFalse(Vpn5gServerValidator.isUuid("not-a-uuid"))
         assertFalse(Vpn5gServerValidator.isUuid(""))
+    }
+
+    // -- v1.1.7 encrypted-only filter ----------------------------------------
+
+    @Test
+    fun test_unencrypted_vless_no_tls() {
+        // Plain VLESS with no TLS/REALITY and encryption "none" is the
+        // node the red dialog warns about.
+        assertEquals(
+            Vpn5gServerValidator.Reason.UNENCRYPTED,
+            reason(profile(method = "none")),
+        )
+        assertEquals(
+            Vpn5gServerValidator.Reason.UNENCRYPTED,
+            reason(profile()),
+        )
+    }
+
+    @Test
+    fun test_vless_pq_encryption_accepted() {
+        // A post-quantum `encryption` value encrypts without TLS
+        // (the core's bypass for the VLESS-no-TLS prohibition).
+        assertEquals(
+            Vpn5gServerValidator.Reason.OK,
+            reason(profile(method = "mlkem768x25519")),
+        )
+    }
+
+    @Test
+    fun test_unencrypted_vmess_scy_none() {
+        // VMess scy "none" with no TLS/REALITY is plaintext.
+        assertEquals(
+            Vpn5gServerValidator.Reason.UNENCRYPTED,
+            reason(profile(type = EConfigType.VMESS, method = "none")),
+        )
+        // With TLS the transport encrypts even when scy is "none".
+        assertEquals(
+            Vpn5gServerValidator.Reason.OK,
+            reason(
+                profile(
+                    type = EConfigType.VMESS,
+                    method = "none",
+                    security = "tls",
+                    sni = "example.com",
+                )
+            ),
+        )
+        // VMess AEAD (scy "auto") without TLS is encrypted by itself.
+        assertEquals(
+            Vpn5gServerValidator.Reason.OK,
+            reason(profile(type = EConfigType.VMESS, method = "auto")),
+        )
+    }
+
+    @Test
+    fun test_unencrypted_trojan_no_tls() {
+        assertEquals(
+            Vpn5gServerValidator.Reason.UNENCRYPTED,
+            reason(
+                profile(
+                    type = EConfigType.TROJAN,
+                    password = "secret",
+                    security = "none",
+                )
+            ),
+        )
+        assertEquals(
+            Vpn5gServerValidator.Reason.OK,
+            reason(
+                profile(
+                    type = EConfigType.TROJAN,
+                    password = "secret",
+                    security = "reality",
+                    publicKey = "abc123",
+                    shortId = "a1b2",
+                )
+            ),
+        )
+    }
+
+    @Test
+    fun test_trojan_flow_rejected() {
+        assertEquals(
+            Vpn5gServerValidator.Reason.TROJAN_FLOW,
+            reason(
+                profile(
+                    type = EConfigType.TROJAN,
+                    password = "secret",
+                    security = "tls",
+                    sni = "example.com",
+                    flow = "xtls-rprx-vision",
+                )
+            ),
+        )
+    }
+
+    @Test
+    fun test_insecure_tls_rejected() {
+        // insecure=1 with no pinned CA is exactly the red-dialog node.
+        assertEquals(
+            Vpn5gServerValidator.Reason.INSECURE_TLS,
+            reason(
+                profile(
+                    security = "tls",
+                    sni = "example.com",
+                    insecure = true,
+                )
+            ),
+        )
+        // A pinned CA (`pcs`) is the core's replacement: accepted.
+        assertEquals(
+            Vpn5gServerValidator.Reason.OK,
+            reason(
+                profile(
+                    security = "tls",
+                    sni = "example.com",
+                    insecure = true,
+                    pinnedCA256 = "abc123",
+                )
+            ),
+        )
+    }
+
+    @Test
+    fun test_weak_ss_ciphers() {
+        assertEquals(
+            Vpn5gServerValidator.Reason.WEAK_SS_CIPHER,
+            reason(profile(type = EConfigType.SHADOWSOCKS, password = "secret")),
+        )
+        assertEquals(
+            Vpn5gServerValidator.Reason.WEAK_SS_CIPHER,
+            reason(
+                profile(
+                    type = EConfigType.SHADOWSOCKS,
+                    password = "secret",
+                    method = "aes-256-cfb",
+                )
+            ),
+        )
+        assertEquals(
+            Vpn5gServerValidator.Reason.WEAK_SS_CIPHER,
+            reason(
+                profile(
+                    type = EConfigType.SHADOWSOCKS,
+                    password = "secret",
+                    method = "rc4-md5",
+                )
+            ),
+        )
+        assertEquals(
+            Vpn5gServerValidator.Reason.WEAK_SS_CIPHER,
+            reason(
+                profile(
+                    type = EConfigType.SHADOWSOCKS,
+                    password = "secret",
+                    method = "none",
+                )
+            ),
+        )
+    }
+
+    @Test
+    fun test_aead_ss_ciphers_accepted() {
+        listOf(
+            "aes-128-gcm",
+            "aes-256-gcm",
+            "chacha20-poly1305",
+            "chacha20-ietf-poly1305",
+            "xchacha20-poly1305",
+            "2022-blake3-aes-128-gcm",
+            "2022-blake3-aes-256-gcm",
+            "2022-blake3-chacha20-poly1305",
+        ).forEach { cipher ->
+            assertEquals(
+                Vpn5gServerValidator.Reason.OK,
+                reason(
+                    profile(
+                        type = EConfigType.SHADOWSOCKS,
+                        password = "secret",
+                        method = cipher,
+                    )
+                ),
+                "cipher $cipher",
+            )
+        }
+        assertTrue(Vpn5gServerValidator.isAeadCipher("AES-256-GCM"))
+        assertFalse(Vpn5gServerValidator.isAeadCipher("aes-256-cfb"))
+        assertFalse(Vpn5gServerValidator.isAeadCipher(null))
     }
 }

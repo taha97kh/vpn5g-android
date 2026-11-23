@@ -121,9 +121,8 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.DROP_FAILOVER_DEBOUNCE_MS
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.EMPTY_POOL_BACKOFF_MS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_UPDATE_LAST_CHECK_MS
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_AUTO_FAILOVER_ATTEMPTS
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_TUNNEL_ATTEMPTS
 import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gFailedServers
 import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
@@ -200,6 +199,9 @@ data class Vpn5gHomeUiState(
     val currentServerName: String? = null,
     val currentServerFlag: String = "",
     val currentPingMillis: Long = 0L,
+    /** True when [currentPingMillis] is a real through-the-proxy delay
+     * (v1.1.7); false = TCP-only, shown as "—" instead of a number. */
+    val currentHasRealPing: Boolean = false,
     val remainingMillis: Long? = null,
     val subscriptionStatus: SubscriptionStatusRemote? = null,
     val errorMessage: String? = null,
@@ -479,7 +481,14 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isRefreshing = true) }
             try {
-                val result = Vpn5gSync.refresh()
+                // v1.1.7: the real-ping probe is skipped while the VPN is
+                // running (no throwaway core next to the live one); the
+                // real-ping evidence is keyed by server identity, so proven
+                // servers keep their real ping across the refresh.
+                val result = Vpn5gSync.refresh(
+                    getApplication<Application>(),
+                    skipRealProbe = _uiState.value.isRunning,
+                )
                 val cached = Vpn5gRemoteConfig.cached()
                 val countries = Vpn5gSync.loadGroupedServers()
                 _uiState.update {
@@ -719,7 +728,33 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     guid = Vpn5gAutoConnect.pickBestServer(
                         _uiState.value.countries, triedGuids + failed.keys
                     )?.guid
-                    if (guid != null) break
+                    if (guid != null) {
+                        // v1.1.7 connect-time gate: an auto pick is
+                        // re-validated before the core ever sees it, so an
+                        // unencrypted config (e.g. from a list synced
+                        // before the encrypted-only filter) can never
+                        // trigger the red dialog — it is skipped and the
+                        // next server is tried instead.
+                        val profile = MmkvManager.decodeServerConfig(guid)
+                        if (profile == null ||
+                            !Vpn5gServerValidator.validate(profile).isValid
+                        ) {
+                            triedGuids += guid
+                            Vpn5gFailedServers.save(
+                                Vpn5gFailedServers.mark(
+                                    failed, guid, System.currentTimeMillis()
+                                )
+                            )
+                            LogUtil.i(
+                                AppConfig.TAG,
+                                "Vpn5gHomeViewModel: auto pick failed " +
+                                    "validation, skipping",
+                            )
+                            guid = null
+                        } else {
+                            break
+                        }
+                    }
                 }
                 delay(500L)
             }
@@ -757,7 +792,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // A manual pick is re-validated structurally before it is
             // tried, exactly like the auto pipeline validates every config
             // at sync time — a corrupt stored profile never reaches the
-            // tunnel, and the user gets the precise reason instead.
+            // tunnel, and the user gets the precise reason instead. The
+            // auto pick is re-validated the same way inside the pick loop
+            // above (a stale list synced before the 1.1.7 encrypted-only
+            // filter must not reach the core either).
             if (_uiState.value.connectMode == Vpn5gConnectMode.MANUAL) {
                 val profile = MmkvManager.decodeServerConfig(guid)
                 if (profile == null ||
@@ -822,16 +860,17 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     /**
      * The server to actually connect to when the user taps [guid]: the
-     * tapped server itself when it has a measured ping; otherwise the next
-     * best free server in a different country, switched to immediately
-     * (with a brief notice). A config with no ping result is never tried
-     * first. Returns [guid] unchanged when no better server exists.
+     * tapped server itself when it has a real through-the-proxy ping;
+     * otherwise the next best free server in a different country, switched
+     * to immediately (with a brief notice). A config with a TCP-only ping
+     * or no ping result is never tried first. Returns [guid] unchanged
+     * when no better server exists.
      */
     fun resolveConnectGuid(guid: String): String {
         val app = getApplication<Application>()
         val server = _uiState.value.countries.flatMap { it.servers }
             .firstOrNull { it.guid == guid } ?: return guid
-        if (server.pingMillis > 0) return guid
+        if (server.hasRealPing && server.pingMillis > 0) return guid
         val next = nextBestServer(
             excluding = setOf(guid),
             differentCountryThan = server.country,
@@ -1155,8 +1194,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 .firstOrNull { it.guid == selectedGuid }?.country
             val shouldFailover = !suppressAutoFailover && !userStopRequested &&
                 !tunnelFailedStop && !timerProbablyEnded &&
-                (wasSession || (autoFailoverPending &&
-                    autoFailoverAttempts < MAX_AUTO_FAILOVER_ATTEMPTS))
+                (wasSession || autoFailoverPending)
             if (shouldFailover) {
                 autoFailoverJob?.cancel()
                 autoFailoverJob = viewModelScope.launch {
@@ -1198,12 +1236,14 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     /**
      * Auto-failover after an unexpected drop: reconnect to the best free
      * server in a DIFFERENT country than the one that dropped (lowest
-     * ping), bounded to [MAX_AUTO_FAILOVER_ATTEMPTS] attempts per session.
+     * real ping). v1.1.7: there is no attempt cap any more — the failover
+     * keeps going until a tunnel verifies or the user disconnects; when
+     * no untried real-pinged server remains it refreshes the list and
+     * tries again after a backoff, staying in RETRYING (never FAILED).
      * Servers that failed tunnel verification within the last 6 hours are
-     * excluded. Shows a brief notice of the switch; gives up with a
-     * message when no server is left. In MANUAL mode the user's pick is
-     * never silently replaced (v1.1.5 §3): a drop ends the session with
-     * the precise reason and a return-to-auto offer instead.
+     * excluded. Shows a brief notice of the switch. In MANUAL mode the
+     * user's pick is never silently replaced (v1.1.5 §3): a drop ends the
+     * session with the precise reason and a return-to-auto offer instead.
      */
     private fun attemptAutoFailover() {
         val app = getApplication<Application>()
@@ -1221,21 +1261,6 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
             return
         }
-        if (autoFailoverAttempts >= MAX_AUTO_FAILOVER_ATTEMPTS) {
-            autoFailoverPending = false
-            _uiState.update {
-                it.copy(
-                    connectState = Vpn5gAutoConnect.transition(
-                        it.connectState, Vpn5gConnectEvent.GIVE_UP
-                    ),
-                    lastError = app.getString(R.string.vpn5g_autofailover_gave_up),
-                    autoFailoverNotice = app.getString(
-                        R.string.vpn5g_autofailover_gave_up
-                    ),
-                )
-            }
-            return
-        }
         val droppedGuid = MmkvManager.getSelectServer()
         val failed = Vpn5gFailedServers.prune(
             Vpn5gFailedServers.load(), System.currentTimeMillis()
@@ -1243,29 +1268,46 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         val candidates = _uiState.value.countries
             .flatMap { it.servers }
             .filter {
-                it.isFree && it.guid != droppedGuid && it.guid !in failed &&
-                    it.pingMillis > 0
+                it.isFree && it.hasRealPing && it.guid != droppedGuid &&
+                    it.guid !in failed && it.pingMillis > 0
             }
         val next = candidates
             .filter { it.country != droppedCountry }
             .minByOrNull { it.pingMillis }
             ?: candidates.minByOrNull { it.pingMillis }
         if (next == null) {
-            autoFailoverPending = false
+            // v1.1.7: no untried real-pinged server right now — the chain
+            // does NOT give up. Stay in RETRYING, refresh the list after
+            // a backoff, and try again; the user can still disconnect.
+            // (The minimal refresh here duplicates the server-list part
+            // of refresh(): the failover retry only needs fresh servers,
+            // not the remote config / auth state that refresh() also loads.)
+            autoFailoverPending = true
             _uiState.update {
                 it.copy(
-                    connectState = Vpn5gAutoConnect.transition(
-                        it.connectState, Vpn5gConnectEvent.GIVE_UP
-                    ),
-                    lastError = app.getString(R.string.vpn5g_autofailover_gave_up),
-                    autoFailoverNotice = app.getString(
-                        R.string.vpn5g_autofailover_gave_up
-                    ),
+                    connectState = Vpn5gConnectState.RETRYING,
+                    autoFailoverNotice = app.getString(R.string.vpn5g_refreshing_servers),
                 )
+            }
+            autoFailoverJob?.cancel()
+            autoFailoverJob = viewModelScope.launch(Dispatchers.IO) {
+                delay(EMPTY_POOL_BACKOFF_MS)
+                if (!isActive || userStopRequested || suppressAutoFailover) return@launch
+                runCatching {
+                    Vpn5gSync.refresh(getApplication<Application>(), skipRealProbe = false)
+                }
+                if (!isActive || userStopRequested || suppressAutoFailover) return@launch
+                val countries = Vpn5gSync.loadGroupedServers()
+                _uiState.update { it.copy(countries = countries) }
+                if (!isActive || userStopRequested || suppressAutoFailover) return@launch
+                attemptAutoFailover()
             }
             return
         }
         autoFailoverAttempts++
+        // v1.1.7: the counter is a session diagnostic now (the chain has
+        // no attempt cap); logging it keeps the field read, not write-only.
+        LogUtil.i(AppConfig.TAG, "Vpn5gHomeViewModel: drop failover #$autoFailoverAttempts")
         autoFailoverPending = true
         failoverTargetName = displayCountryName(
             next,
@@ -1317,10 +1359,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         verifyJob?.cancel()
         verifyJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-            // verifyAttempts is a session field, not a local: a failover
-            // restart may cancel and recreate this job, and the bound must
-            // still hold for the whole session.
-            while (isActive && verifyAttempts < MAX_TUNNEL_ATTEMPTS) {
+            // v1.1.7: the chain has NO attempt cap — it keeps trying the
+            // next pinged free server until one VERIFIES as a real tunnel
+            // or the user disconnects (Aref: "تا زمانی که وصل نشده
+            // کانفینگ اتومات تمام نشود"). verifyAttempts is a session
+            // diagnostic counter only; the chain is bounded sanely by the
+            // candidate list (one pass, then a re-refresh) and by
+            // per-attempt timeouts, the 6h failed store and the 30-minute
+            // session timer — never by a count.
+            while (isActive) {
                 delay(1_500L)
                 if (!_uiState.value.isRunning) return@launch
                 val guid = MmkvManager.getSelectServer() ?: return@launch
@@ -1361,6 +1408,14 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     Vpn5gTunnelCheck.Verdict.FAILED,
                     Vpn5gTunnelCheck.Verdict.UNKNOWN -> {
                         verifyAttempts++
+                        // v1.1.7: the counter is a session diagnostic now
+                        // (the chain has no attempt cap); logging it keeps
+                        // the field read, not write-only.
+                        LogUtil.i(
+                            AppConfig.TAG,
+                            "Vpn5gHomeViewModel: tunnel verify failed " +
+                                "(attempt #$verifyAttempts)",
+                        )
                         triedGuids += guid
                         // Keep a dead server out of the auto picker for 6h.
                         val failed = Vpn5gFailedServers.prune(
@@ -1406,28 +1461,49 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         val failedCountry = _uiState.value.countries
                             .flatMap { it.servers }
                             .firstOrNull { it.guid == guid }?.country
-                        val next = nextBestServer(
+                        var next = nextBestServer(
                             excluding = triedGuids,
                             differentCountryThan = failedCountry,
                         )
-                        if (next == null || verifyAttempts >= MAX_TUNNEL_ATTEMPTS) {
-                            tunnelFailedStop = true
-                            LauncherManager.stopService(getApplication())
-                            Vpn5gSounds.playError()
-                            val reason = getApplication<Application>()
-                                .getString(R.string.vpn5g_tunnel_failed_all)
+                        if (next == null) {
+                            // v1.1.7: the pinged free list is exhausted —
+                            // the chain does NOT give up. Refresh the list
+                            // (new servers, fresh pings, fresh real-ping
+                            // probe) and keep going; the 6h failed store
+                            // keeps the dead servers out, so a refresh can
+                            // only add servers that were not tried. If the
+                            // refresh yields no untried candidate either,
+                            // wait with backoff in RETRYING and refresh
+                            // again — never a FAILED state while the user
+                            // has not disconnected.
                             _uiState.update {
                                 it.copy(
-                                    connectState = Vpn5gAutoConnect.transition(
-                                        it.connectState, Vpn5gConnectEvent.GIVE_UP
-                                    ),
-                                    tunnelState = Vpn5gTunnelState.FAILED,
-                                    tunnelMessage = reason,
-                                    lastError = reason,
+                                    connectState = Vpn5gConnectState.RETRYING,
+                                    tunnelState = Vpn5gTunnelState.SWITCHING,
+                                    tunnelMessage = getApplication<Application>()
+                                        .getString(R.string.vpn5g_refreshing_servers),
                                 )
                             }
-                            return@launch
+                            while (isActive && next == null) {
+                                runCatching {
+                                    Vpn5gSync.refresh(
+                                        getApplication<Application>(), skipRealProbe = false
+                                    )
+                                }
+                                _uiState.update {
+                                    it.copy(countries = Vpn5gSync.loadGroupedServers())
+                                }
+                                next = nextBestServer(
+                                    excluding = triedGuids,
+                                    differentCountryThan = failedCountry,
+                                )
+                                if (next == null) {
+                                    if (!_uiState.value.isRunning) return@launch
+                                    delay(EMPTY_POOL_BACKOFF_MS)
+                                }
+                            }
                         }
+                        val target = next ?: return@launch
                         _uiState.update {
                             it.copy(
                                 connectState = Vpn5gAutoConnect.transition(
@@ -1445,7 +1521,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         // the next server.
                         suppressAutoFailover = true
                         failoverRestartInProgress = true
-                        _failoverEvent.emit(next.guid)
+                        _failoverEvent.emit(target.guid)
                         // Switch immediately: wait only until the restart
                         // actually happens (service stops, then runs again
                         // with the new server), in short polls — not a
@@ -1489,10 +1565,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Next best free server with a measured ping, preferring a DIFFERENT
-     * country than [differentCountryThan] (a dead server's country is
-     * avoided first); falls back to the same country when nothing else is
-     * left. Never returns a config with no ping result, and never a server
+     * Next best free server with a REAL through-the-proxy ping (v1.1.7),
+     * preferring a DIFFERENT country than [differentCountryThan] (a dead
+     * server's country is avoided first); falls back to the same country
+     * when nothing else is left. Never returns a config with a TCP-only
+     * ping (a middlebox can fake it) or no ping result, and never a server
      * that failed tunnel verification within the last 6 hours.
      */
     private fun nextBestServer(
@@ -1505,8 +1582,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         val candidates = _uiState.value.countries
             .flatMap { it.servers }
             .filter {
-                it.isFree && it.guid !in excluding && it.guid !in failed &&
-                    it.pingMillis > 0
+                it.isFree && it.hasRealPing && it.guid !in excluding &&
+                    it.guid !in failed && it.pingMillis > 0
             }
         if (differentCountryThan.isNullOrBlank()) {
             return candidates.minByOrNull { it.pingMillis }
@@ -1571,6 +1648,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 },
                 currentServerFlag = server?.flag.orEmpty(),
                 currentPingMillis = ping,
+                currentHasRealPing = server?.hasRealPing ?: false,
             )
         }
     }
@@ -2203,11 +2281,11 @@ fun Vpn5gHomeScreen(
     val freeSections = splitSections.filter { it.isFree }
     val lockedSections = splitSections.filter { !it.isFree }
     val freeCount = freeSections.sumOf { it.servers.size }
-    // Free servers always have a measured ping (top-20 selection), so
-    // the fastest free server is the best one; never fall back to a
-    // no-ping or locked server.
+    // Free servers always have a real through-the-proxy ping (v1.1.7
+    // top-20 selection), so the fastest free server is the best one;
+    // never fall back to a TCP-only, no-ping or locked server.
     val bestServer = freeSections.flatMap { it.servers }
-        .filter { it.pingMillis > 0 }
+        .filter { it.hasRealPing && it.pingMillis > 0 }
         .minByOrNull { it.pingMillis }
 
     // The home text comes from the connect state machine only (v1.1.4
@@ -2377,10 +2455,17 @@ fun Vpn5gHomeScreen(
                             Spacer(Modifier.height(4.dp))
                             Row {
                                 Text(
-                                    text = stringResource(
-                                        R.string.vpn5g_ping_ms,
-                                        state.currentPingMillis,
-                                    ),
+                                    // v1.1.7: a TCP-only ping is never shown
+                                    // as a number — only a real
+                                    // through-the-proxy delay is.
+                                    text = if (state.currentHasRealPing) {
+                                        stringResource(
+                                            R.string.vpn5g_ping_ms,
+                                            state.currentPingMillis,
+                                        )
+                                    } else {
+                                        "—"
+                                    },
                                     color = if (state.currentPingMillis < 0L) colorPingRed else colorPing,
                                     fontSize = 14.sp,
                                 )
@@ -2562,13 +2647,20 @@ fun Vpn5gHomeScreen(
                     }
                     val manualSubtitle =
                         if (state.connectMode == Vpn5gConnectMode.MANUAL && manualServer != null) {
+                            // v1.1.7: the ping suffix is shown only for a
+                            // real through-the-proxy delay, never for a
+                            // TCP-only one.
                             stringResource(R.string.vpn5g_manual_label) + ": " +
                                 manualServer.flag + " " + displayCountryName(
                                 manualServer,
                                 stringResource(R.string.vpn5g_country_unknown),
-                            ) + " — " + stringResource(
-                                R.string.vpn5g_ping_ms, manualServer.pingMillis
-                            )
+                            ) + if (manualServer.hasRealPing) {
+                                " — " + stringResource(
+                                    R.string.vpn5g_ping_ms, manualServer.pingMillis
+                                )
+                            } else {
+                                ""
+                            }
                         } else {
                             null
                         }
@@ -2586,7 +2678,7 @@ fun Vpn5gHomeScreen(
                         if (pickerCountry == null) {
                             freeSections.forEach { section ->
                                 val bestPing = section.servers
-                                    .filter { it.pingMillis > 0 }
+                                    .filter { it.hasRealPing && it.pingMillis > 0 }
                                     .minOfOrNull { it.pingMillis }
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -2654,7 +2746,7 @@ fun Vpn5gHomeScreen(
                             }
                             pickedSection?.servers?.forEach { server ->
                                 val selected = server.guid == state.manualGuid
-                                val hasPing = server.pingMillis > 0
+                                val hasPing = server.hasRealPing && server.pingMillis > 0
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
@@ -2753,7 +2845,7 @@ fun Vpn5gHomeScreen(
                             bestServer,
                             stringResource(R.string.vpn5g_country_unknown),
                         ),
-                        badge = if (bestServer.pingMillis > 0L) {
+                        badge = if (bestServer.hasRealPing && bestServer.pingMillis > 0L) {
                             stringResource(R.string.vpn5g_ping_ms, bestServer.pingMillis)
                         } else {
                             "—"
@@ -2925,7 +3017,7 @@ fun Vpn5gHomeScreen(
                             )
                         }
                         Text(
-                            text = if (bestServer.pingMillis > 0L) {
+                            text = if (bestServer.hasRealPing && bestServer.pingMillis > 0L) {
                                 stringResource(R.string.vpn5g_ping_ms, bestServer.pingMillis)
                             } else {
                                 "—"
@@ -3454,7 +3546,8 @@ private fun Vpn5gCountrySection(
                     )
                 }
                 Text(
-                    text = if (server.pingMillis > 0L) {
+                    // v1.1.7: a TCP-only ping is never shown as a number.
+                    text = if (server.hasRealPing && server.pingMillis > 0L) {
                         stringResource(R.string.vpn5g_ping_ms, server.pingMillis)
                     } else {
                         "—"

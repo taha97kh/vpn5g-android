@@ -645,7 +645,7 @@
     <string name="vpn5g_auto_connect">اتصال خودکار به بهترین سرور</string>
     <string name="vpn5g_exit_ip">آی‌پی خروجی: %1$s</string>
     <string name="vpn5g_tunnel_failed_retry">این سرور تونل نکرد؛ در حال تلاش با سرور بعدی…</string>
-    <string name="vpn5g_tunnel_failed_all">هیچ سروری تونل نکرد؛ لیست را به‌روزرسانی کنید و دوباره تلاش کنید</string>
+    <string name="vpn5g_refreshing_servers">لیست سرورها تمام شد؛ در حال به‌روزرسانی لیست و تلاش دوباره…</string>
     <string name="vpn5g_tunnel_failed">این سرور تونل نکرد؛ ترافیک از داخل VPN عبور نکرد</string>
     <string name="vpn5g_tunnel_unknown">نتوانستیم عبور ترافیک از داخل VPN را تأیید کنیم</string>
     <string name="vpn5g_profile_account">حساب کاربری</string>
@@ -684,7 +684,6 @@
     <string name="vpn5g_premium_banner_button">مشاهده طرح‌ها</string>
     <string name="vpn5g_autofailover_switching">اتصال قطع شد؛ در حال اتصال به سرور %1$s…</string>
     <string name="vpn5g_autofailover_switched">به سرور «%1$s» وصل شد</string>
-    <string name="vpn5g_autofailover_gave_up">اتصال قطع شد و سرور جایگزینی پیدا نشد؛ دوباره تلاش کنید</string>
 
     <!-- v1.1: premium comparison / plans / trial / bank gateway -->
     <string name="vpn5g_premium_title">امتیازات ویژه</string>
