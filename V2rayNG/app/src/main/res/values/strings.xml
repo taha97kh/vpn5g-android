@@ -598,6 +598,7 @@
     <string name="vpn5g_ping_ms">%1$d میلی‌ثانیه</string>
     <string name="vpn5g_timer_ended_title">VPN5G IRBOT</string>
     <string name="vpn5g_timer_ended_body">۳۰ دقیقه تمام شد و اتصال قطع شد. برای اتصال دوباره، در صفحه اصلی یک سرور انتخاب کنید.</string>
+    <string name="vpn5g_session_unlimited">بدون محدودیت زمانی</string>
     <string name="vpn5g_imported_config">کانفیگ وارد شد</string>
     <string name="vpn5g_imported_file">%1$d کانفیگ از فایل وارد شد</string>
     <string name="vpn5g_import_failed">وارد کردن کانفیگ ناموفق بود</string>
@@ -609,6 +610,7 @@
     <string name="vpn5g_subscription_title">وضعیت اشتراک</string>
     <string name="vpn5g_subscription_none">اشتراکی ثبت نشده است</string>
     <string name="vpn5g_subscription_none_body">برای تهیه اشتراک و باز کردن کشورهای ویژه، از ربات اقدام کنید.</string>
+    <string name="vpn5g_subscription_expired">اشتراک شما تمام شده است</string>
     <string name="vpn5g_subscription_plan">طرح: %1$s</string>
     <string name="vpn5g_subscription_days">روز باقی‌مانده: %1$d</string>
     <string name="vpn5g_subscription_volume">حجم باقی‌مانده: %1$s گیگابایت</string>
@@ -702,6 +704,7 @@
     <string name="vpn5g_premium_banner_button">مشاهده طرح‌ها</string>
     <string name="vpn5g_autofailover_switching">اتصال قطع شد؛ در حال اتصال به سرور %1$s…</string>
     <string name="vpn5g_autofailover_switched">به سرور «%1$s» وصل شد</string>
+    <string name="vpn5g_failover_no_server">هیچ سرور سالمی در دسترس نیست؛ اینترنت را بررسی کنید و دوباره وصل شوید</string>
 
     <!-- v1.1: premium comparison / plans / trial / bank gateway -->
     <string name="vpn5g_premium_title">امتیازات ویژه</string>

@@ -951,3 +951,80 @@ from the signup path.
   cannot run in this sandbox (local Gradle is blocked); CI is the
   only check. The guard flow (function → check → signup → record)
   needs his phone to test for real.
+
+## v1.1.11 (2026-11-23, versionCode 13)
+
+Aref ordered (2026-11-23 20:55): people who bought a subscription
+must use the powerful servers with NO cutoff and NO time limit, and
+if the net/tunnel drops anywhere, the app must quickly connect to
+another tunnel. Free users keep the 30-minute timer.
+
+- **Per-user subscription (new file `Vpn5gSubscriptionStatus.kt`).**
+  The app reads the signed-in user's OWN row from
+  `public.vpn5g_registrations` with the user's own access token
+  (RLS: `auth.uid() = user_id`). Subscriber = `subscription_status`
+  `active` AND `subscription_expires_at` in the future. The
+  `user.id` is now captured from the signup/token response
+  (`Vpn5gAuthSession.userId`, null for pre-1.1.11 sessions) and
+  linked to the row with `set_own_user_id()` after every successful
+  sign-in (best effort — a failure never blocks sign-in; rows
+  registered before the migration get linked on the next sign-in,
+  or by the admin from the dashboard). The result is cached in MMKV
+  (`KEY_USER_SUBSCRIPTION_JSON`) and refreshed on app start, on
+  every list refresh, and on connect. A failed fetch never clears
+  the cache; sign-out does.
+- **Subscribers: unlimited, full pool.** No 30-minute disconnect
+  work is scheduled, the home countdown shows «بدون محدودیت
+  زمانی», and the power-button ring stays full. `freeGuidsFor()`
+  marks EVERY real-pinged server as pickable for a subscriber (no
+  20-config cap), sorted fastest first — the same `isFree` flag the
+  auto picker, manual validation and failover already gate on, so
+  the whole pool opens at once. Free users keep the exact current
+  behavior (top-20 free, 30-minute timer). The Premium screen shows
+  the per-user plan (name looked up from the published plans) and
+  remaining days when subscribed, and «اشتراک شما تمام شده است»
+  when an active row already expired.
+- **Fast in-session failover (watchdog).** While CONNECTED, a light
+  single-fetch exit-IP probe (`Vpn5gTunnelCheck.probeOnce`, 5 s
+  budget) runs every 20 s; two consecutive FAILED probes drop the
+  tunnel and the existing drop detector fails over to the next-best
+  healthy server (different country first) with the brief
+  "switching server" state — never a disconnect screen. One failed
+  probe is forgiven as a blip. The 60-second full re-verification
+  still runs alongside as the deeper check. A stop after 29 minutes
+  is no longer treated as "the timer ended" for subscribers (they
+  have no timer), so long sessions still fail over.
+- **Bounded on a dead network.** The drop failover now gives up
+  with a clear error («هیچ سرور سالمی در دسترس نیست؛ اینترنت را
+  بررسی کنید و دوباره وصل شوید») after 3 no-candidate refresh
+  rounds (60 s backoff each) instead of looping forever when the
+  network is dead. When candidates exist the chain still never
+  gives up (v1.1.7).
+- **Signed-in account UI (Aref, 2026-11-23 21:20).** Once the
+  user is signed in with email, the «ورود با ایمیل» option no
+  longer appears anywhere: the Premium screen's bottom sign-in
+  button is replaced by an account block — the user's email, their
+  own remaining credit (plan + remaining days for subscribers,
+  «اشتراک شما تمام شده است» for an expired row, «اشتراکی ثبت نشده
+  است» otherwise) and a «خروج از حساب» button (direct sign-out,
+  same as the Me screen — no confirmation, matching the existing
+  sign-out). The Me screen's subscription section now also prefers
+  the per-user row over the bot-published global status, so a
+  signed-in subscriber sees their own remaining days there too.
+  Signed out, both screens show the sign-in option exactly as
+  before.
+- **Live-verified before shipping.** The subscription SQL was run in
+  the new project 2026-11-23 21:14 ("Success. No rows returned");
+  probed live with the anon key: the table answers 401/42501
+  (exists, no anon access — as designed) and `set_own_user_id`
+  answers 200 `false` unauthenticated (function exists; no JWT, so
+  nothing to link). **Not verified on a device:** the end-to-end
+  subscriber path (admin activates a plan for an email → the app
+  shows unlimited + full pool on the next sign-in) needs his phone
+  and a real activated account. `:app:testPlaystoreDebugUnitTest` /
+  `:app:compilePlaystoreDebugKotlin` cannot run in this sandbox
+  (local Gradle is blocked); CI is the only check.
+- **Tests.** New `Vpn5gSubscriptionStatusTest`: active+future /
+  active+expired / cancelled / none / missing expiry, remaining
+  days, row parsing (incl. Z and +03:30 ISO forms), subscriber vs
+  free pool selection, `user.id` extraction.

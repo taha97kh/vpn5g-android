@@ -361,6 +361,27 @@ object Vpn5gSync {
     }
 
     /**
+     * Which servers are pickable (v1.1.11): subscribers get the whole
+     * powerful pool — every server with a real through-the-proxy ping,
+     * fastest first, no 20-config cap; free users get the top
+     * [FREE_SERVER_COUNT] only. Pure, JVM-tested. The "free" flag is
+     * what the pickers, the manual validation and the failover all
+     * gate on, so one flag carries the whole subscriber benefit.
+     */
+    fun freeGuidsFor(
+        servers: List<Vpn5gServerUi>,
+        subscriber: Boolean,
+    ): Set<String> {
+        if (subscriber) {
+            return servers
+                .filter { it.hasRealPing && it.pingMillis > 0 }
+                .map { it.guid }
+                .toSet()
+        }
+        return selectFreeGuids(servers)
+    }
+
+    /**
      * Reads the stored "VPN5G IRBOT" group and builds home-screen sections.
      * Free countries first (by server count), then locked ones. Each server
      * row carries the flag + Persian country name parsed from its remark
@@ -368,7 +389,8 @@ object Vpn5gSync {
      * by [enrichCountries] (DNS + bundled GeoIP table) so the first paint is
      * never blocked on DNS. The free tier is the 20 fastest REAL-pinging
      * servers ([selectFreeGuids], v1.1.7); a section is "free" when it holds
-     * at least one free server.
+     * at least one free server. v1.1.11: a subscriber (cached subscription
+     * active) gets the whole real-pinged pool instead — see [freeGuidsFor].
      */
     fun loadGroupedServers(): List<Vpn5gCountryUi> {
         val subId = MmkvManager.decodeSubscriptions()
@@ -406,7 +428,12 @@ object Vpn5gSync {
                 )
             )
         }
-        val freeGuids = selectFreeGuids(byCountry.values.flatten())
+        // v1.1.11: subscribers get the whole real-pinged pool (no
+        // 20-config cap); free users get the top 20. The cached
+        // subscription decides — it is refreshed on app start and on
+        // connect, and a stale cache can only under-grant, never crash.
+        val subscriber = Vpn5gSubscriptionStatus.cachedIsSubscriber()
+        val freeGuids = freeGuidsFor(byCountry.values.flatten(), subscriber)
         val sections = byCountry.map { (key, servers) ->
             val marked = servers
                 .map { it.copy(isFree = it.guid in freeGuids) }

@@ -123,6 +123,9 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.DROP_FAILOVER_DEBOUNCE_MS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.EMPTY_POOL_BACKOFF_MS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_UPDATE_LAST_CHECK_MS
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_DROP_FAILOVER_ROUNDS
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.WATCHDOG_MAX_CONSECUTIVE_FAILURES
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.WATCHDOG_PROBE_INTERVAL_TICKS
 import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gFailedServers
 import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
@@ -134,6 +137,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gRemoteConfig
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerValidator
 import com.v2ray.ang.handler.vpn5g.Vpn5gSounds
+import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
 import com.v2ray.ang.handler.vpn5g.Vpn5gSync
 import com.v2ray.ang.handler.vpn5g.Vpn5gTimer
 import com.v2ray.ang.handler.vpn5g.Vpn5gTunnelCheck
@@ -204,6 +208,14 @@ data class Vpn5gHomeUiState(
      * (v1.1.7); false = TCP-only, shown as "—" instead of a number. */
     val currentHasRealPing: Boolean = false,
     val remainingMillis: Long? = null,
+    /**
+     * The signed-in user's own subscription (v1.1.11): null when
+     * signed out or never fetched. [isSubscriber] is the gate for
+     * the unlimited session, the full server pool and the fast
+     * failover; the Premium screen shows the plan + remaining days.
+     */
+    val userSubscription: Vpn5gSubscriptionStatus.Vpn5gUserSubscription? = null,
+    val isSubscriber: Boolean = false,
     val subscriptionStatus: SubscriptionStatusRemote? = null,
     val errorMessage: String? = null,
     val tunnelState: Vpn5gTunnelState = Vpn5gTunnelState.IDLE,
@@ -260,6 +272,19 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     /** Periodic tunnel re-verification while connected (v1.1.4 §7). */
     private var reverifyJob: Job? = null
     private var ticksSinceReverify = 0
+
+    /** In-session tunnel watchdog (v1.1.11): light exit-IP probe. */
+    private var watchdogJob: Job? = null
+    private var watchdogTicks = 0
+    private var watchdogFailures = 0
+
+    /**
+     * Drop-failover rounds with an empty pool (v1.1.11): counts the
+     * no-candidate refresh rounds in [attemptAutoFailover]; after
+     * [MAX_DROP_FAILOVER_ROUNDS] the chain gives up with a clear
+     * error instead of looping forever on a dead network.
+     */
+    private var dropFailoverRounds = 0
 
     /** Fired with the downloaded APK file; the Activity opens the installer. */
     private val _updateInstallEvent = MutableSharedFlow<File>(extraBufferCapacity = 1)
@@ -392,6 +417,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     trialEnabled = cached.trial_enabled ?: false,
                     trialHours = cached.trial_hours ?: 24,
                     signedInEmail = Vpn5gAuthService.currentSession()?.email,
+                    userSubscription = Vpn5gSubscriptionStatus.loadCached(),
+                    isSubscriber = Vpn5gSubscriptionStatus.cachedIsSubscriber(),
                     offline = usedFallback,
                 )
             }
@@ -435,14 +462,22 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         // Live 30-minute countdown, once a second while connected, plus
         // a 60-second tunnel re-verification while connected (v1.1.4 §7):
         // a tunnel that silently stops carrying traffic must not keep
-        // showing "connected".
+        // showing "connected". v1.1.11: subscribers have no countdown
+        // (remainingMillis stays null) and a light watchdog probe every
+        // 20 s drops a dead tunnel fast so the failover can switch.
         viewModelScope.launch {
             while (isActive) {
                 delay(1_000L)
                 val state = _uiState.value
                 if (state.isRunning) {
                     _uiState.update {
-                        it.copy(remainingMillis = Vpn5gTimer.remainingMillis())
+                        it.copy(
+                            remainingMillis = if (state.isSubscriber) {
+                                null
+                            } else {
+                                Vpn5gTimer.remainingMillis()
+                            }
+                        )
                     }
                     if (state.connectState == Vpn5gConnectState.CONNECTED) {
                         ticksSinceReverify++
@@ -450,8 +485,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                             ticksSinceReverify = 0
                             reverifyTunnel()
                         }
+                        watchdogTicks++
+                        if (watchdogTicks >= WATCHDOG_PROBE_INTERVAL_TICKS) {
+                            watchdogTicks = 0
+                            runWatchdogProbe()
+                        }
                     } else {
                         ticksSinceReverify = 0
+                        watchdogTicks = 0
+                        watchdogFailures = 0
                     }
                 }
             }
@@ -463,6 +505,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         updateDownloadJob?.cancel()
         connectChainJob?.cancel()
         reverifyJob?.cancel()
+        watchdogJob?.cancel()
         autoFailoverJob?.cancel()
         runCatching {
             MessageHelper.sendMsg2Service(getApplication(), AppConfig.MSG_UNREGISTER_CLIENT, "")
@@ -491,6 +534,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     skipRealProbe = _uiState.value.isRunning,
                 )
                 val cached = Vpn5gRemoteConfig.cached()
+                // v1.1.11: refresh the per-user subscription BEFORE
+                // building the list — the subscriber flag decides
+                // whether the pool is the top 20 or all servers. A
+                // failed fetch keeps the cached subscription.
+                val subscription = Vpn5gSubscriptionStatus.refresh(
+                    Vpn5gAuthService.currentSession()
+                )
+                val nowSeconds = System.currentTimeMillis() / 1000
+                val subscriber = Vpn5gSubscriptionStatus.isSubscriber(subscription, nowSeconds)
                 val countries = Vpn5gSync.loadGroupedServers()
                 _uiState.update {
                     it.copy(
@@ -500,6 +552,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         notice = result.notice ?: cached.notice,
                         announcement = visibleAnnouncement(cached),
                         countries = countries,
+                        userSubscription = subscription,
+                        isSubscriber = subscriber,
                         subscriptionStatus = cached.subscription_status,
                         promoCodes = cached.codes,
                         plans = cached.plans,
@@ -514,6 +568,33 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             } catch (e: Exception) {
                 LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: refresh failed", e)
                 _uiState.update { it.copy(isRefreshing = false, isLoading = false, offline = true) }
+            }
+        }
+    }
+
+    /**
+     * Re-checks the signed-in user's subscription in the background
+     * (v1.1.11), e.g. on connect: the chain never waits for it. When
+     * the subscriber flag flips, the server list is rebuilt so the
+     * pool (top 20 vs all) matches the new status immediately. Never
+     * throws.
+     */
+    private fun refreshSubscriptionInBackground() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val wasSubscriber = _uiState.value.isSubscriber
+            val subscription = Vpn5gSubscriptionStatus.refresh(
+                Vpn5gAuthService.currentSession()
+            )
+            val nowSeconds = System.currentTimeMillis() / 1000
+            val subscriber = Vpn5gSubscriptionStatus.isSubscriber(subscription, nowSeconds)
+            _uiState.update {
+                it.copy(userSubscription = subscription, isSubscriber = subscriber)
+            }
+            if (subscriber != wasSubscriber) {
+                val countries = runCatching { Vpn5gSync.loadGroupedServers() }
+                    .getOrElse { emptyList() }
+                _uiState.update { it.copy(countries = countries) }
+                refreshSelection()
             }
         }
     }
@@ -667,6 +748,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         connectChainJob?.cancel()
         connectChainJob = viewModelScope.launch {
             userStopRequested = false
+            // v1.1.11: re-check the subscription in the background —
+            // the chain never waits for it, but the pool and the timer
+            // follow the fresh status as soon as it lands.
+            refreshSubscriptionInBackground()
             _uiState.update {
                 it.copy(
                     connectState = Vpn5gAutoConnect.transition(
@@ -985,6 +1070,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         reverifyJob?.cancel()
         reverifyJob = null
         ticksSinceReverify = 0
+        watchdogJob?.cancel()
+        watchdogJob = null
+        watchdogTicks = 0
+        watchdogFailures = 0
+        dropFailoverRounds = 0
         _uiState.update {
             it.copy(
                 autoFailoverNotice = null,
@@ -1049,7 +1139,13 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun signOut() {
         Vpn5gAuthService.signOut()
-        _uiState.update { it.copy(signedInEmail = null) }
+        _uiState.update {
+            it.copy(
+                signedInEmail = null,
+                userSubscription = null,
+                isSubscriber = false,
+            )
+        }
     }
 
     fun setPromoInput(value: String) {
@@ -1101,10 +1197,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     private fun onRunningChanged(running: Boolean) {
         val app = getApplication<Application>()
         if (running) {
-            // Start the 30-minute session clock once per session.
-            if (Vpn5gTimer.connectedAt() == 0L) {
+            // Start the 30-minute session clock once per session —
+            // subscribers have no timer at all (v1.1.11): unlimited
+            // session, no auto-disconnect, no countdown.
+            if (Vpn5gTimer.connectedAt() == 0L && !_uiState.value.isSubscriber) {
                 Vpn5gTimer.scheduleDisconnect(app)
             }
+            dropFailoverRounds = 0
+            watchdogTicks = 0
+            watchdogFailures = 0
             sessionActive = true
             sessionStartedAtMs = System.currentTimeMillis()
             userStopRequested = false
@@ -1188,7 +1289,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             } else {
                 0L
             }
-            val timerProbablyEnded = sessionAgeMs >= 29 * 60_000L
+            // Subscribers have no 30-minute timer (v1.1.11), so a long
+            // session ending is never the timer for them — the drop
+            // detector must still fail over.
+            val timerProbablyEnded = !_uiState.value.isSubscriber &&
+                sessionAgeMs >= 29 * 60_000L
             val selectedGuid = MmkvManager.getSelectServer()
             droppedCountry = _uiState.value.countries
                 .flatMap { it.servers }
@@ -1228,7 +1333,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update {
             it.copy(
                 isRunning = running,
-                remainingMillis = if (running) Vpn5gTimer.remainingMillis() else null,
+                remainingMillis = if (running && !it.isSubscriber) {
+                    Vpn5gTimer.remainingMillis()
+                } else {
+                    null
+                },
             )
         }
         viewModelScope.launch(Dispatchers.IO) { refreshSelection() }
@@ -1277,6 +1386,26 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             .minByOrNull { it.pingMillis }
             ?: candidates.minByOrNull { it.pingMillis }
         if (next == null) {
+            // v1.1.11: an empty pool means the network (or the sources)
+            // is dead, not just a bad server. Refresh + backoff a few
+            // rounds, then give up with a clear error instead of
+            // looping forever on a dead network. When candidates exist
+            // the chain still never gives up (v1.1.7).
+            dropFailoverRounds++
+            if (dropFailoverRounds > MAX_DROP_FAILOVER_ROUNDS) {
+                dropFailoverRounds = 0
+                autoFailoverPending = false
+                val reason = app.getString(R.string.vpn5g_failover_no_server)
+                _uiState.update {
+                    it.copy(
+                        connectState = Vpn5gAutoConnect.transition(
+                            it.connectState, Vpn5gConnectEvent.GIVE_UP
+                        ),
+                        lastError = reason,
+                    )
+                }
+                return
+            }
             // v1.1.7: no untried real-pinged server right now — the chain
             // does NOT give up. Stay in RETRYING, refresh the list after
             // a backoff, and try again; the user can still disconnect.
@@ -1306,6 +1435,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             return
         }
         autoFailoverAttempts++
+        // A target was found: the empty-pool rounds reset (v1.1.11).
+        dropFailoverRounds = 0
         // v1.1.7: the counter is a session diagnostic now (the chain has
         // no attempt cap); logging it keeps the field read, not write-only.
         LogUtil.i(AppConfig.TAG, "Vpn5gHomeViewModel: drop failover #$autoFailoverAttempts")
@@ -1629,6 +1760,55 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /**
+     * One light watchdog probe (v1.1.11): a single exit-IP fetch
+     * through the tunnel. Two consecutive FAILED probes drop the
+     * tunnel — the drop detector then fails over to another server.
+     * A single failure is a blip and is forgiven; UNKNOWN (the check
+     * cannot run) is not a failure. Never runs while a verification
+     * or a failover restart is in flight, and never overlaps itself.
+     */
+    private fun runWatchdogProbe() {
+        if (watchdogJob?.isActive == true) return
+        if (verifyJob?.isActive == true || reverifyJob?.isActive == true) return
+        if (failoverRestartInProgress) return
+        watchdogJob = viewModelScope.launch(Dispatchers.IO) {
+            if (!_uiState.value.isRunning ||
+                _uiState.value.connectState != Vpn5gConnectState.CONNECTED
+            ) {
+                return@launch
+            }
+            val result = Vpn5gTunnelCheck.probeOnce(baselineIp)
+            if (!_uiState.value.isRunning ||
+                _uiState.value.connectState != Vpn5gConnectState.CONNECTED
+            ) {
+                return@launch
+            }
+            when (result.verdict) {
+                Vpn5gTunnelCheck.Verdict.VERIFIED,
+                Vpn5gTunnelCheck.Verdict.UNKNOWN -> watchdogFailures = 0
+                Vpn5gTunnelCheck.Verdict.FAILED -> {
+                    watchdogFailures++
+                    if (watchdogFailures >= WATCHDOG_MAX_CONSECUTIVE_FAILURES) {
+                        watchdogFailures = 0
+                        LogUtil.i(
+                            AppConfig.TAG,
+                            "Vpn5gHomeViewModel: watchdog probe failed twice; dropping",
+                        )
+                        _uiState.update {
+                            it.copy(
+                                connectState = Vpn5gAutoConnect.transition(
+                                    it.connectState, Vpn5gConnectEvent.VERIFY_FAILED
+                                ),
+                            )
+                        }
+                        LauncherManager.stopService(getApplication())
+                    }
+                }
+            }
+        }
+    }
+
     private fun refreshSelection() {
         val selected = MmkvManager.getSelectServer()
         val server = selected?.let { guid ->
@@ -1856,6 +2036,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onBack = { destination = Vpn5gDestination.HOME },
                             onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
                             onOpenAuth = { destination = Vpn5gDestination.AUTH },
+                            onSignOut = { viewModel.signOut() },
                             onOpenUrl = { url -> Utils.openUri(this@Vpn5gMainActivity, url) },
                             onPromoInputChange = { viewModel.setPromoInput(it) },
                             onRedeemPromo = { viewModel.redeemPromo() },
@@ -2506,10 +2687,16 @@ fun Vpn5gHomeScreen(
                                 )
                                 Spacer(Modifier.weight(1f))
                                 Text(
-                                    text = stringResource(
-                                        R.string.vpn5g_remaining_time,
-                                        formatRemaining(state.remainingMillis),
-                                    ),
+                                    // v1.1.11: subscribers have no
+                                    // 30-minute timer — no countdown.
+                                    text = if (state.isSubscriber) {
+                                        stringResource(R.string.vpn5g_session_unlimited)
+                                    } else {
+                                        stringResource(
+                                            R.string.vpn5g_remaining_time,
+                                            formatRemaining(state.remainingMillis),
+                                        )
+                                    },
                                     color = Vpn5gOnDark,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,

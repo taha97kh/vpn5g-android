@@ -99,6 +99,13 @@ object Vpn5gAuthService {
         val accessToken: String? = null,
         val refreshToken: String? = null,
         val expiresAtEpochSeconds: Long? = null,
+        /**
+         * Supabase Auth UUID (`user.id` from the signup/token
+         * response, v1.1.11). Null for sessions saved before 1.1.11;
+         * re-filled on the next sign-in. The per-user subscription
+         * lookup keys off this id.
+         */
+        val userId: String? = null,
     )
 
     /** Deep-link redirect for the recovery flow (flow 2). */
@@ -128,6 +135,8 @@ object Vpn5gAuthService {
 
     fun signOut() {
         MmkvManager.encodeSettings(KEY_AUTH_SESSION_JSON, "")
+        // The next account must not inherit this one's subscription.
+        Vpn5gSubscriptionStatus.clearCached()
     }
 
     private fun saveSession(session: Vpn5gAuthSession) {
@@ -177,6 +186,10 @@ object Vpn5gAuthService {
                                 "Vpn5gAuthService: register_account failed for $email",
                             )
                         }
+                        // v1.1.11: link the auth UUID to the
+                        // registration row so the per-user subscription
+                        // lookup can see it. Best effort only.
+                        linkUserIdBestEffort(session)
                         AuthResult.SignedIn(session)
                     } ?: AuthResult.Error("email_not_confirmed")
                 } else {
@@ -201,6 +214,11 @@ object Vpn5gAuthService {
                 if (code in 200..299) {
                     parseSession(body, email)?.let { session ->
                         saveSession(session)
+                        // v1.1.11: link the auth UUID to the
+                        // registration row (best effort; rows
+                        // registered before the migration get linked
+                        // on the next sign-in).
+                        linkUserIdBestEffort(session)
                         AuthResult.SignedIn(session)
                     } ?: AuthResult.Error("password_login_failed")
                 } else {
@@ -257,6 +275,11 @@ object Vpn5gAuthService {
                         },
                     )
                     saveSession(session)
+                    // v1.1.11: link the auth UUID to the registration
+                    // row. The recovery link carries no user id, so
+                    // this links by the JWT email instead — and a
+                    // later sign-in fills the id.
+                    linkUserIdBestEffort(session)
                     AuthResult.SignedIn(session)
                 } else {
                     AuthResult.Error(updatePasswordErrorKey(code))
@@ -465,10 +488,38 @@ object Vpn5gAuthService {
                 accessToken = access,
                 refreshToken = refresh,
                 expiresAtEpochSeconds = expires?.let { System.currentTimeMillis() / 1000 + it },
+                userId = parseUserId(body),
             )
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Vpn5gAuthService: session parse failed", e)
             null
+        }
+    }
+
+    /**
+     * Pulls `user.id` (the Supabase Auth UUID) out of a GoTrue token
+     * response. Pure, JVM-tested. The `user` object carries the id
+     * first, before any nested object, so a bounded scan is enough;
+     * null when the response carries no user id (recovery-link
+     * sessions get theirs on the next password sign-in).
+     */
+    internal fun parseUserId(body: String): String? {
+        return Regex("\"user\"\\s*:\\s*\\{[^}]{0,400}?\"id\"\\s*:\\s*\"([^\"]+)\"")
+            .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Links the signed-in user's auth UUID to their registration row
+     * (v1.1.11, [Vpn5gSubscriptionStatus.linkOwnUserId]). Best effort:
+     * a failure (subscription SQL not run yet, offline) is logged and
+     * never changes the sign-in result — the row can still be linked
+     * on the next sign-in, or by the admin from the dashboard.
+     */
+    private suspend fun linkUserIdBestEffort(session: Vpn5gAuthSession) {
+        if (session.userId.isNullOrBlank()) return
+        val linked = Vpn5gSubscriptionStatus.linkOwnUserId(session)
+        if (!linked) {
+            LogUtil.e(AppConfig.TAG, "Vpn5gAuthService: set_own_user_id failed")
         }
     }
 

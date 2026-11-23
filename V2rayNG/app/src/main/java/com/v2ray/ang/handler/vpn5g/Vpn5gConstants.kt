@@ -111,6 +111,12 @@ object Vpn5gConstants {
     const val KEY_AUTH_SESSION_JSON = "vpn5g_auth_session_json"
     /** Redeemed promo codes, stored as a JSON array of code strings. */
     const val KEY_REDEEMED_CODES_JSON = "vpn5g_redeemed_codes_json"
+    /**
+     * The signed-in user's own subscription row, cached as JSON (v1.1.11):
+     * status/expires_at/plan from vpn5g_registrations. A failed fetch never
+     * clears it; sign-out does.
+     */
+    const val KEY_USER_SUBSCRIPTION_JSON = "vpn5g_user_subscription_json"
     /** GUID of the manually picked free server ("" = auto mode, v1.1.5 §3). */
     const val KEY_MANUAL_SERVER_GUID = "vpn5g_manual_server_guid"
     /** GUIDs of servers whose tunnel check failed in this process run. */
@@ -174,6 +180,28 @@ object Vpn5gConstants {
      * UI stays in RETRYING (connecting family) — never Disconnected.
      */
     const val DROP_FAILOVER_DEBOUNCE_MS = 800L
+
+    /**
+     * In-session tunnel watchdog (v1.1.11): while CONNECTED, a light
+     * single-fetch exit-IP probe runs every [WATCHDOG_PROBE_INTERVAL_TICKS]
+     * seconds (the 1-second ticker counts them). One failed probe is a
+     * blip, not a drop; [WATCHDOG_MAX_CONSECUTIVE_FAILURES] failed
+     * probes in a row drop the tunnel so the drop detector can fail over
+     * to another server. The full 60-second re-verification still runs
+     * alongside this as the deeper check.
+     */
+    const val WATCHDOG_PROBE_INTERVAL_TICKS = 20
+    const val WATCHDOG_MAX_CONSECUTIVE_FAILURES = 2
+
+    /**
+     * Drop failover bound (v1.1.11): how many no-candidate refresh
+     * rounds (empty pool, 60 s backoff each) the drop failover runs
+     * before giving up with a clear error instead of looping forever
+     * on a dead network. This bounds only the "no server at all"
+     * case; when candidates exist the chain keeps trying until a
+     * tunnel verifies (v1.1.7).
+     */
+    const val MAX_DROP_FAILOVER_ROUNDS = 3
 
     /** Dismiss key of the app announcement the user closed (\"\" = none). */
     const val KEY_ANNOUNCEMENT_DISMISSED = "vpn5g_announcement_dismissed"

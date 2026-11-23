@@ -64,6 +64,8 @@ object Vpn5gTunnelCheck {
     private const val TUNNEL_TIMEOUT_MS = 15_000
     /** Per-fetch timeout through the local HTTP proxy. */
     private const val TUNNEL_FETCH_TIMEOUT_MS = 7_000
+    /** Per-probe timeout for the light watchdog probe (v1.1.11). */
+    private const val WATCHDOG_PROBE_TIMEOUT_MS = 5_000
     /** How many fetch rounds verify() tries before giving up on a server. */
     private const val MAX_VERIFY_ROUNDS = 3
     /** Pause between fetch rounds. */
@@ -150,6 +152,33 @@ object Vpn5gTunnelCheck {
                 }
             }
             ip
+        }
+        evaluateExitIp(tunnelIp, baselineIp)
+    }
+
+    /**
+     * Light in-session watchdog probe (v1.1.11): ONE exit-IP fetch
+     * through the tunnel, no rounds, no fallback, bounded by
+     * [timeoutMs]. The ViewModel runs this every 20 s while
+     * connected; two consecutive FAILED results drop the tunnel so
+     * the drop detector can fail over. A single failed probe never
+     * kills a session on its own — a transient blip is not a drop.
+     * UNKNOWN when the local HTTP inbound is unavailable (the check
+     * cannot run); the caller treats that as "no signal", not a
+     * failure. Never throws.
+     */
+    suspend fun probeOnce(
+        baselineIp: String?,
+        timeoutMs: Int = WATCHDOG_PROBE_TIMEOUT_MS,
+    ): TunnelResult = withContext(Dispatchers.IO) {
+        if (SettingsManager.getHttpPort() == 0) {
+            return@withContext TunnelResult(
+                Verdict.UNKNOWN,
+                detail = "no local proxy port",
+            )
+        }
+        val tunnelIp = withTimeoutOrNull(timeoutMs.toLong()) {
+            fetchExitIp(AppConfig.IP_API_URL, timeoutMs)
         }
         evaluateExitIp(tunnelIp, baselineIp)
     }

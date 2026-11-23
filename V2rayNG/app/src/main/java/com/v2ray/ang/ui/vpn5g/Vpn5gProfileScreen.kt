@@ -42,6 +42,7 @@ import com.v2ray.ang.R
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CHANNEL_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_URL
+import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
 
 /**
  * "Me" screen: account (email auth), subscription remaining, and about
@@ -135,8 +136,50 @@ fun Vpn5gProfileScreen(
                 expanded = subscriptionExpanded,
                 onToggleExpand = { subscriptionExpanded = !subscriptionExpanded },
             ) {
+                // v1.1.11 (refinement): a signed-in user's OWN
+                // subscription row wins over the bot-published global
+                // status here too — the Me screen must show the
+                // remaining credit THEY have, not the global one.
+                // (The global status is also what the app falls back
+                // to while signed out, so it stays as the last branch.)
+                val ownSubscription = state.userSubscription
                 val status = state.subscriptionStatus
-                if (status == null) {
+                if (ownSubscription != null && state.isSubscriber) {
+                    val planName = state.plans
+                        ?.firstOrNull { it.id == ownSubscription.plan }?.name_fa
+                        ?: ownSubscription.plan
+                    planName?.let { plan ->
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_plan, plan),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                        )
+                    }
+                    Text(
+                        text = stringResource(
+                            R.string.vpn5g_subscription_days,
+                            Vpn5gSubscriptionStatus.remainingDays(
+                                ownSubscription,
+                                System.currentTimeMillis() / 1000,
+                            ),
+                        ),
+                        color = Vpn5gOnDark,
+                        fontSize = 15.sp,
+                    )
+                } else if (ownSubscription?.status == "active") {
+                    Text(
+                        text = stringResource(R.string.vpn5g_subscription_expired),
+                        color = Vpn5gOnDark,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.vpn5g_subscription_none_body),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
+                    )
+                } else if (status == null) {
                     Text(
                         text = stringResource(R.string.vpn5g_subscription_none),
                         color = Vpn5gOnDarkMuted,

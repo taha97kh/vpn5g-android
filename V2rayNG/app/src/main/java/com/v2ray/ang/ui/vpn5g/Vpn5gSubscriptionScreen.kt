@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
 import com.v2ray.ang.handler.vpn5g.SubscriptionPlanRemote
+import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
 
 /**
  * Premium / subscription screen.
@@ -50,6 +51,9 @@ import com.v2ray.ang.handler.vpn5g.SubscriptionPlanRemote
  * Shows ONLY what the remote app_config.json provides — numbers are never
  * invented. The days bar is measured against a 30-day cycle and labelled as
  * such; volume is shown as text (no total is published by the server).
+ * v1.1.11: when the signed-in user has their own subscription row
+ * (vpn5g_registrations), the status section shows that per-user plan and
+ * its remaining days instead of the bot-published global status.
  *
  * Plans, prices, the 24h free trial, and the bank gateway are ALL driven
  * by app_config.json (bot-managed): when the bot publishes no plans, no
@@ -69,6 +73,7 @@ fun Vpn5gSubscriptionScreen(
     onBack: () -> Unit,
     onOpenBot: () -> Unit,
     onOpenAuth: () -> Unit,
+    onSignOut: () -> Unit,
     onOpenUrl: (String) -> Unit,
     onPromoInputChange: (String) -> Unit,
     onRedeemPromo: () -> Unit,
@@ -99,8 +104,16 @@ fun Vpn5gSubscriptionScreen(
         ?: plans.firstOrNull { it.period == "yearly" }
         ?: plans.firstOrNull()
     var showPayment by rememberSaveable { mutableStateOf(false) }
+    var accountExpanded by remember { mutableStateOf(true) }
     val gateway = state.paymentGateway
     val gatewayReady = gateway?.enabled == true && !gateway.url.isNullOrBlank()
+    // v1.1.11: the signed-in user's own subscription (from their
+    // vpn5g_registrations row) — the per-user truth, used by the
+    // status section above and by the signed-in account block below.
+    val ownSubscription = state.userSubscription
+    val ownPlanName = ownSubscription?.plan?.let { planId ->
+        state.plans?.firstOrNull { it.id == planId }?.name_fa ?: planId
+    }
     // Real live counts, per server: free countries are the countries
     // with at least one free server; free servers are the top-20
     // fastest configs. Never count a whole section as free.
@@ -130,13 +143,50 @@ fun Vpn5gSubscriptionScreen(
         }
 
         val status = state.subscriptionStatus
+        // v1.1.11: the signed-in user's own subscription (from their
+        // vpn5g_registrations row) wins over the bot-published global
+        // status: it is the only per-user truth. An "active" row that
+        // already expired shows the expired line, not plan days.
         Vpn5gStaggeredItem(index = 1, visible = entered) {
             Vpn5gExpandableSection(
                 title = stringResource(R.string.vpn5g_subscription_title),
                 expanded = statusExpanded,
                 onToggleExpand = { statusExpanded = !statusExpanded },
             ) {
-                if (status == null) {
+                if (ownSubscription != null && state.isSubscriber) {
+                    ownPlanName?.let { plan ->
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_plan, plan),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    Text(
+                        text = stringResource(
+                            R.string.vpn5g_subscription_days,
+                            Vpn5gSubscriptionStatus.remainingDays(
+                                ownSubscription,
+                                System.currentTimeMillis() / 1000,
+                            ),
+                        ),
+                        color = Vpn5gOnDark,
+                        fontSize = 15.sp,
+                    )
+                } else if (ownSubscription?.status == "active") {
+                    Text(
+                        text = stringResource(R.string.vpn5g_subscription_expired),
+                        color = Vpn5gOnDark,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.vpn5g_subscription_none_body),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
+                    )
+                } else if (status == null) {
                     Text(
                         text = stringResource(R.string.vpn5g_subscription_none),
                         color = Vpn5gOnDark,
@@ -428,13 +478,88 @@ fun Vpn5gSubscriptionScreen(
                 Text(text = stringResource(R.string.vpn5g_open_bot), fontSize = 16.sp)
             }
         }
+        // v1.1.11 (refinement, Aref 2026-11-23 21:20): the email
+        // sign-in option appears ONLY while signed out. A signed-in
+        // user sees their account here instead — email, remaining
+        // credit, and sign-out — and never a second sign-in button.
+        // Sign-out is direct, same as the Me screen (no confirmation).
         Vpn5gStaggeredItem(index = 7, visible = entered) {
-            TextButton(onClick = onOpenAuth, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = stringResource(R.string.vpn5g_auth_title),
-                    color = Vpn5gAccentLight,
-                    fontSize = 14.sp,
-                )
+            if (state.signedInEmail.isNullOrBlank()) {
+                TextButton(onClick = onOpenAuth, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_auth_title),
+                        color = Vpn5gAccentLight,
+                        fontSize = 14.sp,
+                    )
+                }
+            } else {
+                Vpn5gExpandableSection(
+                    title = stringResource(R.string.vpn5g_profile_account),
+                    expanded = accountExpanded,
+                    onToggleExpand = { accountExpanded = !accountExpanded },
+                ) {
+                    Text(
+                        text = state.signedInEmail,
+                        color = Vpn5gOnDark,
+                        fontSize = 15.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (ownSubscription != null && state.isSubscriber) {
+                        ownPlanName?.let { plan ->
+                            Text(
+                                text = stringResource(R.string.vpn5g_subscription_plan, plan),
+                                color = Vpn5gOnDark,
+                                fontSize = 15.sp,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        Text(
+                            text = stringResource(
+                                R.string.vpn5g_subscription_days,
+                                Vpn5gSubscriptionStatus.remainingDays(
+                                    ownSubscription,
+                                    System.currentTimeMillis() / 1000,
+                                ),
+                            ),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                        )
+                    } else if (ownSubscription?.status == "active") {
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_expired),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_none_body),
+                            color = Vpn5gOnDarkMuted,
+                            fontSize = 14.sp,
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_none),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_none_body),
+                            color = Vpn5gOnDarkMuted,
+                            fontSize = 14.sp,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_auth_signout),
+                            color = Vpn5gAccentLight,
+                            fontSize = 14.sp,
+                        )
+                    }
+                }
             }
         }
         Vpn5gStaggeredItem(index = 8, visible = entered) {
