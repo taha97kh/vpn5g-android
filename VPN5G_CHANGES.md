@@ -889,3 +889,60 @@ dodge the limit with a different email. OTP is removed entirely.
   the recovery link, and the three screens need Aref's phone to test
   for real. The SQL file has not been run against the live project
   yet — Aref runs it in the dashboard (step 1 above).
+
+## v1.1.10 (2026-11-23, versionCode 12)
+
+Aref asked: the signup IP check must not depend on any third-party
+site — only on his own Supabase project ("نمیشه جوری درست کنی وابسته
+به هیچ سایتی نباشه جز خودت gmail?"). ipify and api.ip.sb are gone
+from the signup path.
+
+- **Migration to a new Supabase project.** The app now points at
+  project `atvcpfnnmwguhjvhbbfj` ("vpn5g.irbot@gmail.com's
+  Project", eu-west-1) instead of the old `jsqvjpmqfmgfgzcycngs`
+  project: the old project is owned by a different account that
+  Aref cannot reach, so the registrations SQL Aref ran landed in
+  the new project and the old project's `check_registration` never
+  existed (live probe: 404 PGRST202). **All users must re-register
+  — accounts from the old project do not carry over, including
+  Aref's.** The new project already has the `vpn5g_registrations`
+  table + `check_registration`/`register_account` RPCs, the
+  `get-client-ip` function deployed (JWT ON), email provider ON
+  with Confirm email OFF, and redirect `vpn5g://auth/callback`
+  listed. The IP check now goes through the project's own Edge
+  Function; no ipify/api.ip.sb anywhere in the signup path.
+- **IP lookup is Supabase-only now.** New Edge Function
+  `supabase/functions/get-client-ip` (Deno, `Deno.serve`): reads the
+  caller's public IP from `x-forwarded-for` (first entry),
+  `cf-connecting-ip`, then `x-real-ip`, and answers
+  `{"ip": "<ip>"}`; 400 `{"error": "no ip"}` when no header yields
+  one. JWT verification stays at the default (ON); the app sends the
+  anon key as the Bearer token, exactly as for the REST/RPC calls.
+  Nothing is logged or stored by the function. The app's
+  `fetchPublicIp()` now GETs `/functions/v1/get-client-ip` with the
+  anon key and parses the same `{"ip": ...}` body. The ipify primary
+  and the api.ip.sb fallback are deleted from the signup path — no
+  reference to either remains in the auth code. (Vpn5gTunnelCheck
+  still uses api.ip.sb for exit-IP verification; that is a different
+  feature, untouched.)
+- **Deploy order matters.** The function MUST be deployed before
+  users update to 1.1.10: until it is, signup fails closed with a
+  network error (the function answers 404). Steps are in
+  `supabase/functions/get-client-ip/README-FA.txt`: Supabase
+  dashboard → Edge Functions → create/deploy function `get-client-ip`
+  → paste `index.ts` → Deploy; verify with the curl command in the
+  README (anon key as a placeholder only). The registrations SQL and
+  the redirect URL from v1.1.9 are unchanged.
+- **Tests.** The ipify/ip.sb parse tests are replaced by Edge
+  Function response tests (IPv4, IPv6, missing-ip → null, error
+  body → null). Vpn5gRecoveryLinkTest untouched.
+- **Live-verified before shipping.** The Edge Function and the
+  `check_registration` RPC were probed live against the new
+  project with the new anon key before release: the function
+  answers 200 `{"ip": ...}` and the RPC answers 200 `[]` for an
+  unregistered email/IP. **Not verified on a device.**
+  `:app:testPlaystoreDebugUnitTest` /
+  `:app:compilePlaystoreDebugKotlin` / `:app:assemblePlaystoreDebug`
+  cannot run in this sandbox (local Gradle is blocked); CI is the
+  only check. The guard flow (function → check → signup → record)
+  needs his phone to test for real.

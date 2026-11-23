@@ -6,10 +6,11 @@ import org.junit.jupiter.api.Test
 /** JVM tests for the Supabase auth error-key mapping (pure Kotlin). */
 class Vpn5gAuthErrorKeyTest {
 
-    // v1.1.9: public-IP parsing for the registration guard.
+    // v1.1.10: public-IP parsing for the registration guard — the IP
+    // comes from the get-client-ip Edge Function ({"ip": ...} only).
 
     @Test
-    fun test_parse_ip_from_ipify() {
+    fun test_parse_ip_from_edge_function() {
         assertEquals(
             "1.2.3.4",
             Vpn5gAuthService.parseIp("""{"ip":"1.2.3.4"}"""),
@@ -17,12 +18,10 @@ class Vpn5gAuthErrorKeyTest {
     }
 
     @Test
-    fun test_parse_ip_from_ip_sb_geoip() {
+    fun test_parse_ip_ipv6_from_edge_function() {
         assertEquals(
             "2001:db8::1",
-            Vpn5gAuthService.parseIp(
-                """{"ip":"2001:db8::1","country_code":"IR","city":"Ardabil"}"""
-            ),
+            Vpn5gAuthService.parseIp("""{"ip":"2001:db8::1"}"""),
         )
     }
 
@@ -31,6 +30,7 @@ class Vpn5gAuthErrorKeyTest {
         assertEquals(null, Vpn5gAuthService.parseIp("""{"country":"IR"}"""))
         assertEquals(null, Vpn5gAuthService.parseIp(""))
         assertEquals(null, Vpn5gAuthService.parseIp("""{"ip":""}"""))
+        assertEquals(null, Vpn5gAuthService.parseIp("""{"error":"no ip"}"""))
     }
 
     // v1.1.8: direct signup (scenario 1).

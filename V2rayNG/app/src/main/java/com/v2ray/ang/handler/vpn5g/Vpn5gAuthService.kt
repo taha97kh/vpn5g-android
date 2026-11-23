@@ -37,12 +37,14 @@ import java.util.concurrent.TimeUnit
  *     passwordless signup.
  *     Before signup, the one-account-per-IP+email guard runs (see
  *     [Vpn5gRegistrationGuard] and `supabase/vpn5g_registrations.sql`):
- *     the device's public IP is fetched directly (no proxy — signup
- *     happens before any VPN connection), then POST
- *     /rest/v1/rpc/check_registration asks the server whether the
- *     email or the IP is already registered. Either taken fails the
- *     signup with a stable key; any guard failure fails CLOSED
- *     (no signup is attempted on an unchecked registration). After
+ *     the device's public IP is read from Aref's own Supabase project
+ *     (v1.1.10: Edge Function `supabase/functions/get-client-ip` —
+ *     no third-party IP site; signup happens before any VPN
+ *     connection, so the IP the function sees is the real one), then POST /rest/v1/rpc/check_registration asks
+ *     the server whether the email or the IP is already registered.
+ *     Either taken fails the signup with a stable key; any guard
+ *     failure fails CLOSED (no signup is attempted on an unchecked
+ *     registration). After
  *     a successful signup, POST /rest/v1/rpc/register_account
  *     records the (email, ip) pair; if that record call fails, the
  *     session is still real and returned — the table's UNIQUE(ip)
@@ -105,8 +107,8 @@ object Vpn5gAuthService {
     private val JSON = "application/json; charset=utf-8".toMediaType()
     private const val TIMEOUT_MS = 15_000L
 
-    /** Primary public-IP endpoint (direct fetch, no proxy). */
-    private const val PUBLIC_IP_URL = "https://api.ipify.org?format=json"
+    /** Edge Function that returns the caller's public IP (v1.1.10). */
+    private const val CLIENT_IP_FUNCTION_PATH = "/functions/v1/get-client-ip"
 
     private fun client(): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -263,23 +265,36 @@ object Vpn5gAuthService {
         }
 
     /**
-     * The device's public IP, fetched directly (no proxy — signup
-     * happens before any VPN connection, so the direct fetch is the
-     * real IP). Primary is ipify, fallback is the app's IP API
-     * ([AppConfig.IP_API_URL], api.ip.sb/geoip — the same endpoint
-     * [Vpn5gTunnelCheck] uses). Null when neither source answers;
-     * the caller fails CLOSED on null. Never throws.
+     * The device's public IP, read from Aref's own Supabase project
+     * (v1.1.10): GET /functions/v1/get-client-ip (Edge Function
+     * `supabase/functions/get-client-ip`) answers {"ip": "..."} with
+     * the IP Supabase sees for this request. No third-party IP site
+     * is used anymore — signup happens before any VPN connection, so
+     * the IP the function sees is the real one, and signup already
+     * requires Supabase, so this adds no new failure mode. Null when
+     * the function is missing (404), unreachable, or returns no IP;
+     * the caller fails CLOSED on null. Never throws. The anon key is
+     * sent exactly as for the other Supabase calls.
      */
     suspend fun fetchPublicIp(): String? = withContext(Dispatchers.IO) {
-        fetchIpFrom(PUBLIC_IP_URL) ?: fetchIpFrom(AppConfig.IP_API_URL)
+        try {
+            val request = Request.Builder()
+                .url(Vpn5gAuthConfig.SUPABASE_URL.trimEnd('/') + CLIENT_IP_FUNCTION_PATH)
+                .header("apikey", Vpn5gAuthConfig.SUPABASE_ANON_KEY)
+                .header("Authorization", "Bearer ${Vpn5gAuthConfig.SUPABASE_ANON_KEY}")
+                .get()
+                .build()
+            client().newCall(request).execute().use { response ->
+                if (response.code !in 200..299) return@withContext null
+                parseIp(response.body?.string().orEmpty())?.takeIf { it.isNotBlank() }
+            }
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Vpn5gAuthService: get-client-ip failed", e)
+            null
+        }
     }
 
-    private suspend fun fetchIpFrom(url: String): String? {
-        val body = getRaw(url) ?: return null
-        return parseIp(body)?.takeIf { it.isNotBlank() }
-    }
-
-    /** Pulls the `ip` value out of an ipify / ip.sb JSON body. Pure. */
+    /** Pulls the `ip` value out of the get-client-ip response body. Pure. */
     internal fun parseIp(body: String): String? {
         return Regex("\"ip\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
     }
@@ -402,20 +417,6 @@ object Vpn5gAuthService {
             }
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Vpn5gAuthService: POST $path failed", e)
-            null
-        }
-    }
-
-    /** Raw GET returning the body on 2xx, null otherwise. Never throws. */
-    private suspend fun getRaw(url: String): String? {
-        return try {
-            val request = Request.Builder().url(url).get().build()
-            client().newCall(request).execute().use { response ->
-                if (response.code !in 200..299) null
-                else response.body?.string()
-            }
-        } catch (e: Exception) {
-            LogUtil.e(AppConfig.TAG, "Vpn5gAuthService: GET $url failed", e)
             null
         }
     }

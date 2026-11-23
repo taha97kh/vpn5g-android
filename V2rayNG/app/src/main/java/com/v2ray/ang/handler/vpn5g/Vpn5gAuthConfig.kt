@@ -1,12 +1,16 @@
 package com.v2ray.ang.handler.vpn5g
 
 /**
- * Supabase Auth configuration for VPN5G IRBOT (v1.1.9).
+ * Supabase Auth configuration for VPN5G IRBOT (v1.1.10).
  *
- * Project "vpn5g" exists (Frankfurt eu-central-1, free plan, ref
- * jsqvjpmqfmgfgzcycngs). Email auth is enabled with "Allow new users
- * to sign up"; "Confirm email" is OFF (turned off by Aref
- * 2026-11-23), so a direct signup returns a session immediately.
+ * Project "vpn5g.irbot@gmail.com's Project" (eu-west-1, free plan,
+ * ref atvcpfnnmwguhjvhbbfj). MIGRATED in v1.1.10 from the old
+ * "vpn5g" project (ref jsqvjpmqfmgfgzcycngs) — the old project is
+ * owned by a different account and is no longer used. All users
+ * must re-register: accounts from the old project do not carry
+ * over. Email auth is enabled with "Allow new users to sign up";
+ * "Confirm email" is OFF (turned off by Aref 2026-11-23), so a
+ * direct signup returns a session immediately.
  * All other providers are disabled. [Vpn5gAuthService] calls the
  * real GoTrue REST endpoints with the anon key in the apikey header:
  * POST /auth/v1/signup (direct signup, flow 1), POST
@@ -38,13 +42,21 @@ package com.v2ray.ang.handler.vpn5g
  *     password for that mailbox goes into Supabase's SMTP settings,
  *     never into this app): without it the recovery-link emails go
  *     through the built-in service and are rate-limited.
+ *  4. Deploy the `get-client-ip` Edge Function (v1.1.10):
+ *     Supabase dashboard → Edge Functions → create/deploy function
+ *     `get-client-ip` from `supabase/functions/get-client-ip/index.ts`
+ *     (steps in its README-FA.txt) — until it is deployed, every
+ *     signup fails closed with a network error. DONE 2026-11-23 in
+ *     the new project (dashboard "Successfully deployed", JWT ON;
+ *     live-verified: unauthenticated call returns 401, with the
+ *     anon key it answers {"ip": ...}).
  */
 object Vpn5gAuthConfig {
-    /** Supabase project URL for "vpn5g". */
-    const val SUPABASE_URL = "https://jsqvjpmqfmgfgzcycngs.supabase.co"
+    /** Supabase project URL for "vpn5g" (migrated v1.1.10: new project atvcpfnnmwguhjvhbbfj). */
+    const val SUPABASE_URL = "https://atvcpfnnmwguhjvhbbfj.supabase.co"
 
-    /** Supabase anon/public key for "vpn5g". */
-    const val SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpzcXZqcG1xZm1nZmd6Y3ljbmdzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxNzg4ODgsImV4cCI6MjExMDc1NDg4OH0.ZfRnA0GznbVE9zVZ8ndKSq04W-9AB4RJTKErXkxB7ZA"
+    /** Supabase anon/public key for "vpn5g" (migrated v1.1.10: new project). */
+    const val SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF0dmNwZm5ubXdndWhqdmhiYmZqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU0MzQ1MjUsImV4cCI6MjExMTAxMDUyNX0.4Xm5jUrfVP3rkGBFbWaaY6xJ9BBBONaWzevUNbFg6J4"
 
     /** True once a Supabase project has been created and pasted above. */
     fun isConfigured(): Boolean =
