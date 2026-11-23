@@ -86,22 +86,26 @@ the benefit centrally and decrements `remaining_uses`.
 | `code` | string | Code as the user types it, e.g. `"WELCOME10"`. |
 | `type` | string | `"discount"` or `"gift"`. |
 | `discount_percent` | integer \| null | Discount percent (1–100) when type is `"discount"`. |
-| `gift_days` | integer \| null | Gift duration in days when type is `"gift"`. |
-| `max_uses` | integer \| null | Total allowed redemptions, or null for unlimited. |
-| `remaining_uses` | integer \| null | Redemptions left, as last published by the bot. Null = unknown/unlimited. `0` means exhausted. |
+| `gift_days` | integer \| null | Gift duration in days when type is `"gift"`. **Legacy** — prefer `gift_hours` (below); when both are set, `gift_hours` wins. |
+| `gift_hours` | integer \| null | **(v1.1.14)** Gift duration in HOURS when type is `"gift"`. The admin duration choices: `1`, `5`, `24`, or `168` (7 days). Wins over `gift_days`. |
+| `tier` | string \| null | **(v1.1.14)** Which tier a gift grants: `"gift"` (the middle tier — top 50 servers, no 30-minute cutoff while the gift lasts) or a plan id such as `"sub_12"` (a FULL subscription for that plan's duration). Default: `"gift"` when no plan id is given. |
+| `max_uses` | integer \| null | Total allowed redemptions, or null for unlimited. **(v1.1.14)** The admin people-limit (e.g. `5`): how many people may redeem this code in total. |
+| `remaining_uses` | integer \| null | Redemptions left, as last published by the bot. Null = unknown/unlimited. `0` means exhausted. **(v1.1.14)** The bot must decrement this on every publish (it checks the `vpn5g_code_redemptions` table) and set `0` once the limit is reached. May be > 1 for multi-use gift codes. |
 
 ### `plans` — subscription plans
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | string | Stable id, e.g. `"monthly"`, `"yearly"`. |
-| `period` | string | `"monthly"` or `"yearly"` (drives the card layout; yearly gets the "most popular" badge and is the default selection). |
-| `name_fa` | string \| null | Display name in Persian, e.g. `"ماهانه"`. Falls back to the period label. |
+| `id` | string | Stable id. **(v1.1.14)** The bot's plan ids are `sub_1` (30 days), `sub_3` (90 days), `sub_6` (180 days), `sub_12` (360 days); legacy `monthly`/`yearly` still work. |
+| `days` | integer \| null | **(v1.1.14)** Duration in days (30 / 90 / 180 / 360). The app accepts a plan when `days` is set OR the id is a known `sub_*` id OR the period is monthly/yearly. Explicit `days` wins. |
+| `period` | string | `"monthly"` or `"yearly"` (legacy; drives the card layout for old plans). |
+| `name_fa` | string \| null | Display name in Persian, e.g. `"ماهانه"`. Falls back to the plan id. |
 | `price_toman` | integer \| null | Price in Toman. Null hides the card. |
 
-Plans with a missing id, an unknown period, or no price are ignored by the
-app. The yearly plan is the default selection; the user picks a plan, taps
-"ادامه", then chooses a payment method.
+Plans with a missing id, no known duration, or no price are ignored by the
+app. The app renders the plans from this config on every app start and on
+every manual refresh (see "Bot → app sync" below) — **no app update is needed
+for a plan or price change**. The longest plan is the default selection.
 
 ### `payment_gateway` — direct bank payment gateway
 
@@ -171,11 +175,14 @@ configs (TCP connect fails) are dropped and never stored.
   },
   "codes": [
     { "code": "WELCOME10", "type": "discount", "discount_percent": 10, "max_uses": 100, "remaining_uses": 87 },
-    { "code": "GIFT7", "type": "gift", "gift_days": 7, "max_uses": 50, "remaining_uses": 50 }
+    { "code": "GIFT5H", "type": "gift", "gift_hours": 5, "tier": "gift", "max_uses": 5, "remaining_uses": 5 },
+    { "code": "GIFT12M", "type": "gift", "gift_days": 360, "tier": "sub_12", "max_uses": 1, "remaining_uses": 1 }
   ],
   "plans": [
-    { "id": "monthly", "period": "monthly", "name_fa": "ماهانه", "price_toman": 150000 },
-    { "id": "yearly", "period": "yearly", "name_fa": "سالانه", "price_toman": 1200000 }
+    { "id": "sub_1", "days": 30, "name_fa": "یک ماهه", "price_toman": 150000 },
+    { "id": "sub_3", "days": 90, "name_fa": "سه ماهه", "price_toman": 390000 },
+    { "id": "sub_6", "days": 180, "name_fa": "شش ماهه", "price_toman": 690000 },
+    { "id": "sub_12", "days": 360, "name_fa": "یک ساله", "price_toman": 1200000 }
   ],
   "payment_gateway": {
     "enabled": false,
@@ -224,14 +231,21 @@ commerce works end to end:
    `HF_TOKEN`. The codes / plans / gateway / trial fields are still
    unpublished — the admin actions for them are items 2–6 below.
 2. **Admin commands for codes**: add / edit / remove entries in the `codes`
-   array (code, type, discount percent or gift days, max uses,
-   remaining uses).
+   array (code, type, discount percent or gift hours/days, `tier`, max uses,
+   remaining uses). **(v1.1.14)** Gift codes now carry `gift_hours` (1 / 5 /
+   24 / 168), `tier` (`"gift"` or a `sub_*` plan id) and a multi-use
+   `max_uses` / `remaining_uses`; the bot must decrement `remaining_uses`
+   on publish (it checks the `vpn5g_code_redemptions` table — see item 8)
+   and set it to `0` once the people-limit is reached.
 3. **Redeem handler**: a `/start=redeem_<CODE>` deep-link handler that
    validates the code again server-side, applies the discount/gift, and
    decrements `remaining_uses` (the app only validates locally and links
    the user to the bot).
 4. **Admin commands for plans**: add / edit / remove entries in the `plans`
-   array (id, period, Persian name, price in Toman).
+   array (id, **days**, Persian name, price in Toman). **(v1.1.14)** Plans
+   are now the bot's `sub_1` / `sub_3` / `sub_6` / `sub_12` ids with
+   `days` 30 / 90 / 180 / 360 — the app renders whatever the bot
+   publishes, on every app start, with no app update.
 5. **24h free trial on membership**: the bot's membership flow must likewise
    offer 24 hours free (same as the app's trial flag).
 6. **Bank gateway credentials**: the user will send the gateway details
@@ -241,3 +255,18 @@ commerce works end to end:
 7. **Purchase completion**: the bot applies every purchase, trial, and
    promo-code benefit centrally and updates `subscription_status` /
    `remaining_uses` so the app shows the result on the next refresh.
+8. **(v1.1.14) Redemption records**: create table
+   `vpn5g_code_redemptions` (code PK, email, redeemed_at default now) +
+   SECURITY DEFINER RPC `record_code_redemption(p_code, p_email)`
+   returning true only when newly inserted + GRANT EXECUTE to anon. The
+   app calls this RPC best-effort right after every successful redeem
+   (gift activation and discount validation); it never fails a redeem.
+   **(v1.1.14) Bot → app sync**: the app re-fetches `app_config.json` on
+   every app start, every 5 minutes while open, and on manual refresh —
+   any change the admin publishes (plans, prices, announcements, codes)
+   reaches the app without an app update. No bot change is needed for
+   the fetch itself; the publisher must simply republish the file.
+9. **(v1.1.14) Support deep link**: add a `start=support` handler to the
+   bot — the app's "پشتیبانی آنلاین" button now opens
+   `https://t.me/VPN5G_IRBot?start=support` (the bot handles membership
+   and routes the user to its support section).

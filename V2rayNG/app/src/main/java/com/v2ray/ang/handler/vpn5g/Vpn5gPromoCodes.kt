@@ -108,11 +108,26 @@ object Vpn5gPromoCodes {
         val type = entry.type?.trim()?.lowercase()
         val usable = when (type) {
             "discount" -> (entry.discount_percent ?: 0) in 1..100
-            "gift" -> (entry.gift_days ?: 0) > 0
+            // v1.1.14: a gift grants hours (1/5/24/168) or days.
+            "gift" -> giftDurationSeconds(entry) != null
             else -> false
         }
         if (!usable) return Validation.InvalidEntry
         return Validation.Valid(entry)
+    }
+
+    /**
+     * Gift duration in seconds (v1.1.14): `gift_hours` wins when set
+     * (the finer unit — 1 / 5 / 24 hours, 168 = 7 days), otherwise
+     * `gift_days` in days. Null when the entry grants no duration.
+     * Pure, JVM-tested.
+     */
+    fun giftDurationSeconds(entry: PromoCodeRemote): Long? {
+        val hours = entry.gift_hours
+        if (hours != null && hours > 0) return hours * 3_600L
+        val days = entry.gift_days
+        if (days != null && days > 0) return days * 86_400L
+        return null
     }
 
     /**
@@ -177,13 +192,27 @@ object Vpn5gPromoCodes {
 
     /**
      * Expiry a gift code grants (epoch seconds), or null when the entry
-     * is not a gift with days. Pure, JVM-tested.
+     * is not a gift with a duration. Pure, JVM-tested. v1.1.14: hours
+     * (gift_hours) win over days (gift_days).
      */
     fun activationExpiry(entry: PromoCodeRemote, nowEpochSeconds: Long): Long? {
         if (entry.type?.trim()?.lowercase() != "gift") return null
-        val days = entry.gift_days ?: return null
-        if (days <= 0) return null
-        return nowEpochSeconds + days * 86_400L
+        val durationSeconds = giftDurationSeconds(entry) ?: return null
+        return nowEpochSeconds + durationSeconds
+    }
+
+    /**
+     * Plan id a gift grants (v1.1.14): a sub_* plan id (from `plan`
+     * or `tier`) grants a FULL subscription for that plan's days; any
+     * other gift grants the middle GIFT tier (plan "gift"). Pure.
+     */
+    fun giftPlanId(entry: PromoCodeRemote): String {
+        val candidate = entry.plan?.takeIf { it.isNotBlank() }
+            ?: entry.tier?.takeIf { it.isNotBlank() }
+        if (candidate != null && candidate.trim().lowercase() in Vpn5gPlans.SUB_PLAN_DAYS) {
+            return candidate.trim()
+        }
+        return Vpn5gConstants.GIFT_TIER_PLAN_ID
     }
 
     /**
@@ -202,7 +231,7 @@ object Vpn5gPromoCodes {
         nowEpochSeconds: Long,
     ): Pair<Vpn5gSubscriptionStatus.Vpn5gUserSubscription, String>? {
         val expiresAt = activationExpiry(entry, nowEpochSeconds) ?: return null
-        val plan = entry.plan?.takeIf { it.isNotBlank() } ?: "gift"
+        val plan = giftPlanId(entry)
         val subscription = Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
             status = "active",
             expiresAtEpochSeconds = expiresAt,

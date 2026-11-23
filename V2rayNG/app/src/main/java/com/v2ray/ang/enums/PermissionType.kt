@@ -21,6 +21,11 @@ enum class PermissionType {
         override fun getPermission(): String = Manifest.permission.POST_NOTIFICATIONS
     },
 
+    /** Carrier-name detection for the VPN 5G per-operator adaptation (v1.1.14). */
+    READ_PHONE_STATE {
+        override fun getPermission(): String = Manifest.permission.READ_PHONE_STATE
+    },
+
     /** Local network access permission (Android 17+) */
     ACCESS_LOCAL_NETWORK {
         @RequiresApi(Build.VERSION_CODES.CINNAMON_BUN)
@@ -37,6 +42,7 @@ enum class PermissionType {
             CAMERA -> R.string.permission_camera
             POST_NOTIFICATIONS -> R.string.permission_notification
             ACCESS_LOCAL_NETWORK -> R.string.permission_local_network
+            READ_PHONE_STATE -> R.string.vpn5g_permission_phone_state
         }
     }
 }

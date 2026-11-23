@@ -50,6 +50,9 @@
          distributed through GitHub releases, not Google Play. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- v1.1.14: carrier-name detection for the per-operator adaptation.
+         Requested at runtime only for that feature; denied = "mobile". -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <application
         android:name=".AngApplication"
@@ -136,9 +139,13 @@
                 <data android:pathPattern=".*\\.json" />
             </intent-filter>
         </activity>
+        <!-- v1.1.14: the upstream config list is HIDDEN — MainActivity is
+             not exported any more (the QS-tile long-press preferences
+             filter stays, but no outside caller can open it) and it
+             redirects to Vpn5gMainActivity on launch (defense in depth). -->
         <activity
             android:name=".ui.main.MainActivity"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />

@@ -704,6 +704,29 @@
     <string name="vpn5g_promo_bot_note">برای اینکه ظرفیت این کد در ربات هم کم شود، در ربات ثبتش کنید (اختیاری).</string>
     <string name="vpn5g_persistent_reconnect_failed">اتصال پایدار برقرار نشد؛ دوباره وصل شوید</string>
 
+    <!-- v1.1.14: startup screen, live speeds, operator, gift tier, countries, per-app bypass -->
+    <string name="vpn5g_startup_updating">درحال بروزرسانی سرور</string>
+    <string name="vpn5g_startup_percent">%1$d٪</string>
+    <string name="vpn5g_startup_no_server">هیچ سروری در دسترس نیست؛ اینترنت را بررسی کنید و دوباره تلاش کنید</string>
+    <string name="vpn5g_speed_download">دانلود</string>
+    <string name="vpn5g_speed_upload">آپلود</string>
+    <string name="vpn5g_operator_label">اپراتور: %1$s</string>
+    <string name="vpn5g_permission_phone_state">دسترسی به اطلاعات اپراتور موبایل</string>
+    <string name="vpn5g_gift_title">کد هدیه</string>
+    <string name="vpn5g_gift_remaining_hours">هدیه: %1$d ساعت مانده</string>
+    <string name="vpn5g_buy_code_title">خرید کد اشتراک</string>
+    <string name="vpn5g_buy_code_body">برای خرید کد اشتراک، از ربات تلگرام اقدام کنید؛ بعد از خرید، کد را در بخش «کد هدیه» وارد کنید تا بلافاصله فعال شود.</string>
+    <string name="vpn5g_premium_countries_title">کشورها</string>
+    <string name="vpn5g_premium_countries_none">هنوز کشوری در دسترس نیست؛ اول لیست سرورها را بروز کنید</string>
+    <string name="vpn5g_premium_countries_count">%1$d کشور</string>
+    <string name="vpn5g_premium_plan_days">مدت: %1$d روز</string>
+    <string name="vpn5g_premium_price_plain">%1$s تومان</string>
+    <string name="vpn5g_filter_sub">اشتراکی</string>
+    <string name="vpn5g_filter_free">رایگان</string>
+    <string name="vpn5g_per_app_title">برنامه‌های بدون فیلتر</string>
+    <string name="vpn5g_per_app_body">برنامه‌هایی را انتخاب کنید که نباید از تونل استفاده کنند؛ آن‌ها مستقیم و بدون فیلتر باز می‌شوند. تغییر از اتصال بعدی اعمال می‌شود.</string>
+    <string name="vpn5g_per_app_open">انتخاب برنامه‌ها</string>
+
     <!-- v1.1: server-list tabs / search / recommended / banner / auto-failover -->
     <string name="vpn5g_tab_free">رایگان</string>
     <string name="vpn5g_tab_all">تمام مکان‌ها</string>

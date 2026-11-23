@@ -96,7 +96,10 @@ fun Vpn5gGuideScreen(
                         )
                         GuideLinkRow(
                             label = stringResource(R.string.vpn5g_link_support),
-                            onClick = { onOpenUrl(Vpn5gConstants.SUPPORT_URL) },
+                            // v1.1.14: support goes DIRECTLY to the bot's
+                            // support section (start=support); the bot
+                            // handles membership (not verifiable app-side).
+                            onClick = { onOpenUrl(Vpn5gConstants.SUPPORT_BOT_URL) },
                         )
                     }
                 } else {

@@ -41,7 +41,7 @@ import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CHANNEL_URL
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_URL
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
 
 /**
@@ -57,6 +57,8 @@ fun Vpn5gProfileScreen(
     onOpenAuth: () -> Unit,
     onSignOut: () -> Unit,
     onOpenUrl: (String) -> Unit,
+    /** Opens the per-app bypass screen (v1.1.14). */
+    onOpenPerAppBypass: () -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
     // Section expansion is transient presentation state only (v1.1.5
@@ -64,6 +66,7 @@ fun Vpn5gProfileScreen(
     // either one.
     var accountExpanded by remember { mutableStateOf(true) }
     var subscriptionExpanded by remember { mutableStateOf(true) }
+    var perAppExpanded by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) { entered = true }
 
     Column(
@@ -224,11 +227,44 @@ fun Vpn5gProfileScreen(
             }
         }
 
+        // Per-app bypass (v1.1.14): pick apps that must NOT use the
+        // tunnel, so they open without filter (direct connection). The
+        // mechanism already exists upstream (PerAppProxyActivity +
+        // CoreVpnService.configurePerAppProxy, applied with
+        // addDisallowedApplication at service setup and taking effect
+        // on the next connect) — it was only reachable through the
+        // hidden upstream MainActivity, so it is surfaced here as its
+        // own section. The selection persists in the upstream settings.
+        Vpn5gStaggeredItem(index = 4, visible = entered) {
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_per_app_title),
+                expanded = perAppExpanded,
+                onToggleExpand = { perAppExpanded = !perAppExpanded },
+            ) {
+                Text(
+                    text = stringResource(R.string.vpn5g_per_app_body),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = onOpenPerAppBypass,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Vpn5gAccent,
+                        contentColor = Color.White,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(text = stringResource(R.string.vpn5g_per_app_open), fontSize = 16.sp)
+                }
+            }
+        }
+
         // About links (v1.1.5 §6, labels renamed 2026-11-23 by Aref's
         // order): exactly three buttons, exactly these names, in this
         // order — no extra text, address or description under them.
         // The version lines below are app info, not link descriptions.
-        Vpn5gStaggeredItem(index = 4, visible = entered) {
+        Vpn5gStaggeredItem(index = 5, visible = entered) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Spacer(Modifier.height(8.dp))
                 // Channel / Bot / Support as neomorphism buttons (v1.1.2).
@@ -244,7 +280,10 @@ fun Vpn5gProfileScreen(
                 Spacer(Modifier.height(12.dp))
                 NeuLinkButton(
                     label = stringResource(R.string.vpn5g_link_support),
-                    onClick = { onOpenUrl(SUPPORT_URL) },
+                    // v1.1.14: support goes DIRECTLY to the bot's support
+                    // section (start=support). Bot membership cannot be
+                    // verified app-side — the bot handles it.
+                    onClick = { onOpenUrl(SUPPORT_BOT_URL) },
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -272,7 +311,7 @@ fun Vpn5gProfileScreen(
                 )
             }
         }
-        Vpn5gStaggeredItem(index = 5, visible = entered) {
+        Vpn5gStaggeredItem(index = 6, visible = entered) {
             TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = stringResource(R.string.vpn5g_nav_home),
@@ -281,7 +320,7 @@ fun Vpn5gProfileScreen(
                 )
             }
         }
-        Vpn5gStaggeredItem(index = 6, visible = entered) {
+        Vpn5gStaggeredItem(index = 7, visible = entered) {
             Vpn5gFooter()
         }
     }

@@ -204,4 +204,65 @@ class Vpn5gPromoCodesTest {
             Vpn5gPromoCodes.activationExpiry(gift("BAD", 0, 5), 1_795_392_000L)
         )
     }
+
+    @Test
+    fun test_gift_hours_valid_and_expiry() {
+        // v1.1.14: 1 / 5 / 24 hours and 168 hours (7 days).
+        val oneHour = PromoCodeRemote(
+            code = "H1", type = "gift", gift_hours = 1, remaining_uses = 5
+        )
+        assertTrue(
+            Vpn5gPromoCodes.validateEntry(oneHour, false)
+                is Vpn5gPromoCodes.Validation.Valid
+        )
+        assertEquals(
+            1_795_392_000L + 3_600L,
+            Vpn5gPromoCodes.activationExpiry(oneHour, 1_795_392_000L),
+        )
+        val week = PromoCodeRemote(
+            code = "W7", type = "gift", gift_hours = 168, remaining_uses = 5
+        )
+        assertEquals(
+            1_795_392_000L + 168L * 3_600L,
+            Vpn5gPromoCodes.activationExpiry(week, 1_795_392_000L),
+        )
+    }
+
+    @Test
+    fun test_gift_hours_win_over_days() {
+        // Both set: the finer unit (hours) decides.
+        val both = PromoCodeRemote(
+            code = "BOTH", type = "gift", gift_days = 30, gift_hours = 5,
+            remaining_uses = 5,
+        )
+        assertEquals(5L * 3_600L, Vpn5gPromoCodes.giftDurationSeconds(both))
+        assertEquals(
+            1_795_392_000L + 5L * 3_600L,
+            Vpn5gPromoCodes.activationExpiry(both, 1_795_392_000L),
+        )
+    }
+
+    @Test
+    fun test_gift_plan_id() {
+        // A sub_* plan id grants a FULL subscription; any other gift
+        // grants the middle GIFT tier.
+        assertEquals(
+            "sub_12",
+            Vpn5gPromoCodes.giftPlanId(
+                PromoCodeRemote(code = "X", type = "gift", gift_days = 360, plan = "sub_12")
+            )
+        )
+        assertEquals(
+            "gift",
+            Vpn5gPromoCodes.giftPlanId(
+                PromoCodeRemote(code = "X", type = "gift", gift_hours = 5)
+            )
+        )
+        assertEquals(
+            "gift",
+            Vpn5gPromoCodes.giftPlanId(
+                PromoCodeRemote(code = "X", type = "gift", gift_hours = 5, tier = "gift")
+            )
+        )
+    }
 }

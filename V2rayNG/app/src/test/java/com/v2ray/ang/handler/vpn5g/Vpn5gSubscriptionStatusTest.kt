@@ -210,4 +210,54 @@ class Vpn5gSubscriptionStatusTest {
         )
         assertNull(Vpn5gSubscriptionStatus.effectiveSubscription(null, null, now))
     }
+
+    // v1.1.14: the GIFT tier sits between free and VIP.
+
+    @Test
+    fun test_gift_plan_is_not_a_full_subscriber() {
+        val gift = Vpn5gUserSubscription("active", future, "gift")
+        assertFalse(Vpn5gSubscriptionStatus.isSubscriber(gift, now))
+        assertTrue(Vpn5gSubscriptionStatus.isGiftTier(gift, now))
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.GIFT,
+            Vpn5gSubscriptionStatus.tierOf(gift, now),
+        )
+    }
+
+    @Test
+    fun test_expired_gift_is_free_tier() {
+        val gift = Vpn5gUserSubscription("active", past, "gift")
+        assertFalse(Vpn5gSubscriptionStatus.isGiftTier(gift, now))
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.FREE,
+            Vpn5gSubscriptionStatus.tierOf(gift, now),
+        )
+        assertEquals(0L, Vpn5gSubscriptionStatus.giftRemainingHours(gift, now))
+    }
+
+    @Test
+    fun test_gift_remaining_hours() {
+        val gift = Vpn5gUserSubscription("active", now + 5 * 3_600L + 1_800L, "gift")
+        assertEquals(5L, Vpn5gSubscriptionStatus.giftRemainingHours(gift, now))
+    }
+
+    @Test
+    fun test_effective_subscriber_beats_longer_gift() {
+        // A longer gift must never demote a subscriber to the top-50 pool.
+        val row = Vpn5gUserSubscription("active", future, "sub_12")
+        val longerGift = Vpn5gUserSubscription("active", future + 30 * 86_400L, "gift")
+        assertEquals(
+            row,
+            Vpn5gSubscriptionStatus.effectiveSubscription(row, longerGift, now),
+        )
+    }
+
+    @Test
+    fun test_effective_gift_alone_is_effective() {
+        val gift = Vpn5gUserSubscription("active", future, "gift")
+        assertEquals(
+            gift,
+            Vpn5gSubscriptionStatus.effectiveSubscription(null, gift, now),
+        )
+    }
 }

@@ -5,6 +5,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
@@ -101,6 +104,7 @@ import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.dto.UrlContentRequest
 import com.v2ray.ang.enums.PermissionType
+import com.v2ray.ang.extension.toSpeedString
 import com.v2ray.ang.extension.toast
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
@@ -134,12 +138,15 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gFailedServers
 import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
 import com.v2ray.ang.handler.vpn5g.Vpn5gManualServer
 import com.v2ray.ang.handler.vpn5g.Vpn5gNetworkProfile
+import com.v2ray.ang.handler.vpn5g.Vpn5gOperator
 import com.v2ray.ang.handler.vpn5g.Vpn5gPromoCodes
 import com.v2ray.ang.handler.vpn5g.Vpn5gRecoveryLink
 import com.v2ray.ang.handler.vpn5g.Vpn5gRemoteConfig
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerValidator
 import com.v2ray.ang.handler.vpn5g.Vpn5gSounds
+import com.v2ray.ang.handler.vpn5g.Vpn5gSpeedMonitor
+import com.v2ray.ang.handler.vpn5g.Vpn5gStartupProgress
 import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
 import com.v2ray.ang.handler.vpn5g.Vpn5gSync
 import com.v2ray.ang.handler.vpn5g.Vpn5gTimer
@@ -148,6 +155,7 @@ import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.ui.base.HelperBaseComponentActivity
 import com.v2ray.ang.ui.compose.colorPing
 import com.v2ray.ang.ui.compose.colorPingRed
+import com.v2ray.ang.ui.perappproxy.PerAppProxyActivity
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
@@ -219,6 +227,10 @@ data class Vpn5gHomeUiState(
      */
     val userSubscription: Vpn5gSubscriptionStatus.Vpn5gUserSubscription? = null,
     val isSubscriber: Boolean = false,
+    /** True while the GIFT tier is active (v1.1.14): top-50 pool, no 30-minute cutoff. */
+    val isGift: Boolean = false,
+    /** Whole remaining hours of the gift tier (0 when not a gift). */
+    val giftRemainingHours: Long = 0L,
     val subscriptionStatus: SubscriptionStatusRemote? = null,
     val errorMessage: String? = null,
     val tunnelState: Vpn5gTunnelState = Vpn5gTunnelState.IDLE,
@@ -226,6 +238,17 @@ data class Vpn5gHomeUiState(
     val verifiedExitIp: String? = null,
     val verifiedExitFlag: String = "",
     val signedInEmail: String? = null,
+    /** Live tunnel-only speeds, bytes/s (v1.1.14); 0 = no data yet / disconnected. */
+    val downloadSpeedBps: Long = 0L,
+    val uploadSpeedBps: Long = 0L,
+    /** Current network operator label, e.g. "وای‌فای" / "ایرانسل" (v1.1.14). */
+    val operatorLabel: String? = null,
+    /** Startup sync (v1.1.14): real 0→100% server-update progress. */
+    val startupProgress: Float = 0f,
+    /** True once the startup sync finished with at least one server. */
+    val startupDone: Boolean = false,
+    /** True when the startup sync finished with no server (retry state). */
+    val startupError: Boolean = false,
     val promoCodes: List<PromoCodeRemote>? = null,
     val promoInput: String = "",
     val promoStatus: Vpn5gPromoStatus = Vpn5gPromoStatus.IDLE,
@@ -400,46 +423,13 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             Vpn5gConstants.KEY_ANNOUNCEMENT_DISMISSED
         )
 
-        // Show the last stored list immediately; the bundled snapshot fills
-        // a first launch so the list is never empty on entry; the refresh
-        // replaces it with live data.
-        viewModelScope.launch(Dispatchers.IO) {
-            val cached = Vpn5gRemoteConfig.cached()
-            // A failure to read the stored list must never leave the home
-            // screen stuck on "loading": fall back to an empty list.
-            var countries = runCatching { Vpn5gSync.loadGroupedServers() }.getOrElse {
-                LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: load failed", it)
-                emptyList()
-            }
-            var usedFallback = false
-            if (countries.isEmpty()) {
-                val imported = Vpn5gSync.loadBundledFallback(getApplication())
-                if (imported > 0) {
-                    countries = runCatching { Vpn5gSync.loadGroupedServers() }.getOrElse { emptyList() }
-                    usedFallback = true
-                }
-            }
-            _uiState.update {
-                it.copy(
-                    isLoading = false,
-                    countries = countries,
-                    subscriptionStatus = cached.subscription_status,
-                    notice = cached.notice,
-                    announcement = visibleAnnouncement(cached),
-                    promoCodes = cached.codes,
-                    plans = cached.plans,
-                    paymentGateway = cached.payment_gateway,
-                    trialEnabled = cached.trial_enabled ?: false,
-                    trialHours = cached.trial_hours ?: 24,
-                    signedInEmail = Vpn5gAuthService.currentSession()?.email,
-                    userSubscription = Vpn5gSubscriptionStatus.loadEffective(),
-                    isSubscriber = Vpn5gSubscriptionStatus.cachedIsSubscriber(),
-                    offline = usedFallback,
-                )
-            }
-            refreshSelection()
-            enrichCountries()
-        }
+        // Startup sync (v1.1.14): show the last stored list immediately,
+        // then run the live refresh with REAL 0→100% progress; the home
+        // screen opens only when the sync finishes with at least one
+        // server (otherwise a retry state — never a hang at 100% and
+        // never home with an empty pool). The bundled snapshot fills a
+        // first launch so the list is never empty on entry.
+        runStartupSync()
 
         // Restore the manual server pick (v1.1.5 §3): the choice survives
         // restarts; the pick is re-validated on every connect, so a stale
@@ -456,8 +446,24 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
 
-        // Auto-refresh on entry (and every 5 minutes while open).
-        viewModelScope.launch { refresh() }
+        // Re-check the operator when the network changes (v1.1.14): the
+        // list is re-sorted for the new operator; a live session is kept
+        // unless the operator change breaks it (the watchdog handles
+        // that). Registration is best-effort and unregistered on clear.
+        registerNetworkCallback()
+
+        // Live tunnel speeds (v1.1.14): the monitor only polls while a
+        // session runs; the state below is zero the rest of the time.
+        viewModelScope.launch {
+            Vpn5gSpeedMonitor.speeds.collect { speed ->
+                _uiState.update {
+                    it.copy(
+                        downloadSpeedBps = speed.downBps,
+                        uploadSpeedBps = speed.upBps,
+                    )
+                }
+            }
+        }
 
         // App update check (v1.1.3): once per day at most, silent on failure.
         checkForUpdate()
@@ -487,7 +493,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 if (state.isRunning) {
                     _uiState.update {
                         it.copy(
-                            remainingMillis = if (state.isSubscriber) {
+                            // v1.1.11/1.1.14: subscribers AND gift-tier
+                            // users have no countdown (no 30-minute
+                            // timer while the gift lasts).
+                            remainingMillis = if (state.isSubscriber || state.isGift) {
                                 null
                             } else {
                                 Vpn5gTimer.remainingMillis()
@@ -523,6 +532,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         watchdogJob?.cancel()
         autoFailoverJob?.cancel()
         persistentReconnectJob?.cancel()
+        Vpn5gSpeedMonitor.stop()
+        runCatching {
+            val manager = getApplication<Application>()
+                .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            networkCallback?.let { manager?.unregisterNetworkCallback(it) }
+        }.onFailure {
+            LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: unregister network callback failed", it)
+        }
+        networkCallback = null
         runCatching {
             MessageHelper.sendMsg2Service(getApplication(), AppConfig.MSG_UNREGISTER_CLIENT, "")
         }.onFailure {
@@ -536,7 +554,207 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         super.onCleared()
     }
 
+    /** Operator-change listener (v1.1.14); null until registered. */
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Registers the default-network callback (API 24+); best effort. */
+    private fun registerNetworkCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        try {
+            val manager = getApplication<Application>()
+                .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    onNetworkChanged()
+                }
+
+                override fun onLost(network: Network) {
+                    onNetworkChanged()
+                }
+
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    capabilities: NetworkCapabilities,
+                ) {
+                    onNetworkChanged()
+                }
+            }
+            manager.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: network callback failed", e)
+        }
+    }
+
+    /**
+     * Re-detects the operator after a network change (v1.1.14): when the
+     * operator key changed, the list is rebuilt so the servers that
+     * verified on the new operator sort first; a live session is kept
+     * (only the list order changes — the watchdog drops a broken tunnel
+     * on its own). Never throws.
+     */
+    private fun onNetworkChanged() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val operator = Vpn5gOperator.detect(getApplication())
+                val changed = operator.key != Vpn5gOperator.currentKey()
+                Vpn5gOperator.storeCurrentKey(operator.key)
+                if (changed) {
+                    val countries = runCatching { Vpn5gSync.loadGroupedServers() }
+                        .getOrElse { emptyList() }
+                    _uiState.update {
+                        it.copy(operatorLabel = operator.labelFa, countries = countries)
+                    }
+                    refreshSelection()
+                } else {
+                    _uiState.update { it.copy(operatorLabel = operator.labelFa) }
+                }
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: operator re-detect failed", e)
+            }
+        }
+    }
+
+    /**
+     * Re-detects the operator on demand (v1.1.14): called after the
+     * carrier-name permission is granted, and after a denied request
+     * (detect degrades to "mobile" on its own). Never throws.
+     */
+    fun refreshOperator() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val operator = Vpn5gOperator.detect(getApplication())
+                Vpn5gOperator.storeCurrentKey(operator.key)
+                val countries = runCatching { Vpn5gSync.loadGroupedServers() }
+                    .getOrElse { _uiState.value.countries }
+                _uiState.update {
+                    it.copy(operatorLabel = operator.labelFa, countries = countries)
+                }
+                refreshSelection()
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: refresh operator failed", e)
+            }
+        }
+    }
+
+    /**
+     * Startup sync (v1.1.14): cached list first (with the bundled
+     * fallback on a first launch), then the live refresh with REAL
+     * progress. Retried from the startup screen's retry button via
+     * [retryStartupSync].
+     */
+    private fun runStartupSync() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(
+                    startupProgress = Vpn5gStartupProgress.fraction(
+                        Vpn5gStartupProgress.Stage.LOADING_CACHE, 0f
+                    ),
+                    startupError = false,
+                )
+            }
+            val cached = Vpn5gRemoteConfig.cached()
+            // A failure to read the stored list must never leave the
+            // home screen stuck on "loading": fall back to an empty list.
+            var countries = runCatching { Vpn5gSync.loadGroupedServers() }.getOrElse {
+                LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: load failed", it)
+                emptyList()
+            }
+            var usedFallback = false
+            if (countries.isEmpty()) {
+                val imported = Vpn5gSync.loadBundledFallback(getApplication())
+                if (imported > 0) {
+                    countries = runCatching { Vpn5gSync.loadGroupedServers() }.getOrElse { emptyList() }
+                    usedFallback = true
+                }
+            }
+            val operator = Vpn5gOperator.detect(getApplication())
+            Vpn5gOperator.storeCurrentKey(operator.key)
+            val nowSeconds = System.currentTimeMillis() / 1000
+            val effective = Vpn5gSubscriptionStatus.loadEffective(nowSeconds)
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    countries = countries,
+                    subscriptionStatus = cached.subscription_status,
+                    notice = cached.notice,
+                    announcement = visibleAnnouncement(cached),
+                    promoCodes = cached.codes,
+                    plans = cached.plans,
+                    paymentGateway = cached.payment_gateway,
+                    trialEnabled = cached.trial_enabled ?: false,
+                    trialHours = cached.trial_hours ?: 24,
+                    signedInEmail = Vpn5gAuthService.currentSession()?.email,
+                    userSubscription = effective,
+                    isSubscriber = Vpn5gSubscriptionStatus.isSubscriber(effective, nowSeconds),
+                    isGift = Vpn5gSubscriptionStatus.isGiftTier(effective, nowSeconds),
+                    giftRemainingHours = Vpn5gSubscriptionStatus.giftRemainingHours(
+                        effective, nowSeconds
+                    ),
+                    operatorLabel = operator.labelFa,
+                    offline = usedFallback,
+                    startupProgress = Vpn5gStartupProgress.fraction(
+                        Vpn5gStartupProgress.Stage.LOADING_CACHE, 1f
+                    ),
+                )
+            }
+            refreshSelection()
+            enrichCountries()
+            refreshInternal(
+                onProgress = { stage, within ->
+                    _uiState.update {
+                        it.copy(
+                            startupProgress = Vpn5gStartupProgress.fraction(stage, within)
+                        )
+                    }
+                },
+                finishStartup = true,
+            )
+        }
+    }
+
+    /** Retries the startup sync from the startup screen's retry button. */
+    fun retryStartupSync() {
+        _uiState.update { it.copy(startupError = false, startupProgress = 0f) }
+        runStartupSync()
+    }
+
+    /**
+     * Re-fetches ONLY app_config.json (v1.1.14, bot→app sync): called
+     * when the Premium screen opens, so a bot-side change to plans,
+     * prices, announcements or codes reaches the app WITHOUT an app
+     * update and without waiting for the 5-minute server refresh. The
+     * full refresh (Vpn5gSync.refresh) already re-fetches the config on
+     * app start, every 5 minutes, and on manual refresh — this is the
+     * extra fetch that makes the Premium screen always current.
+     */
+    fun refreshConfig() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val fresh = runCatching { Vpn5gRemoteConfig.fetch() }.getOrNull() ?: return@launch
+            _uiState.update {
+                it.copy(
+                    announcement = visibleAnnouncement(fresh),
+                    promoCodes = fresh.codes,
+                    plans = fresh.plans,
+                    paymentGateway = fresh.payment_gateway,
+                    trialEnabled = fresh.trial_enabled ?: it.trialEnabled,
+                    trialHours = fresh.trial_hours ?: it.trialHours,
+                    notice = fresh.notice ?: it.notice,
+                    subscriptionStatus = fresh.subscription_status ?: it.subscriptionStatus,
+                )
+            }
+        }
+    }
+
     fun refresh() {
+        refreshInternal(onProgress = null, finishStartup = false)
+    }
+
+    private fun refreshInternal(
+        onProgress: ((Vpn5gStartupProgress.Stage, Float) -> Unit)?,
+        finishStartup: Boolean,
+    ) {
         if (_uiState.value.isRefreshing) return
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isRefreshing = true) }
@@ -548,17 +766,21 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 val result = Vpn5gSync.refresh(
                     getApplication<Application>(),
                     skipRealProbe = _uiState.value.isRunning,
+                    onProgress = onProgress,
                 )
                 val cached = Vpn5gRemoteConfig.cached()
                 // v1.1.11: refresh the per-user subscription BEFORE
                 // building the list — the subscriber flag decides
                 // whether the pool is the top 20 or all servers. A
                 // failed fetch keeps the cached subscription.
+                // v1.1.14: the GIFT tier (top 50, no timer) is decided
+                // here too, from the same effective subscription.
                 val subscription = Vpn5gSubscriptionStatus.refresh(
                     Vpn5gAuthService.currentSession()
                 )
                 val nowSeconds = System.currentTimeMillis() / 1000
                 val subscriber = Vpn5gSubscriptionStatus.isSubscriber(subscription, nowSeconds)
+                val gift = Vpn5gSubscriptionStatus.isGiftTier(subscription, nowSeconds)
                 val countries = Vpn5gSync.loadGroupedServers()
                 _uiState.update {
                     it.copy(
@@ -570,6 +792,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         countries = countries,
                         userSubscription = subscription,
                         isSubscriber = subscriber,
+                        isGift = gift,
+                        giftRemainingHours = Vpn5gSubscriptionStatus.giftRemainingHours(
+                            subscription, nowSeconds
+                        ),
                         subscriptionStatus = cached.subscription_status,
                         promoCodes = cached.codes,
                         plans = cached.plans,
@@ -577,13 +803,23 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         trialEnabled = cached.trial_enabled ?: false,
                         trialHours = cached.trial_hours ?: 24,
                         signedInEmail = Vpn5gAuthService.currentSession()?.email,
+                        startupProgress = if (finishStartup) 1f else it.startupProgress,
+                        startupDone = if (finishStartup) countries.isNotEmpty() else it.startupDone,
+                        startupError = if (finishStartup) countries.isEmpty() else it.startupError,
                     )
                 }
                 refreshSelection()
                 enrichCountries()
             } catch (e: Exception) {
                 LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: refresh failed", e)
-                _uiState.update { it.copy(isRefreshing = false, isLoading = false, offline = true) }
+                _uiState.update {
+                    it.copy(
+                        isRefreshing = false,
+                        isLoading = false,
+                        offline = true,
+                        startupError = if (finishStartup) true else it.startupError,
+                    )
+                }
             }
         }
     }
@@ -598,15 +834,24 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     private fun refreshSubscriptionInBackground() {
         viewModelScope.launch(Dispatchers.IO) {
             val wasSubscriber = _uiState.value.isSubscriber
+            val wasGift = _uiState.value.isGift
             val subscription = Vpn5gSubscriptionStatus.refresh(
                 Vpn5gAuthService.currentSession()
             )
             val nowSeconds = System.currentTimeMillis() / 1000
             val subscriber = Vpn5gSubscriptionStatus.isSubscriber(subscription, nowSeconds)
+            val gift = Vpn5gSubscriptionStatus.isGiftTier(subscription, nowSeconds)
             _uiState.update {
-                it.copy(userSubscription = subscription, isSubscriber = subscriber)
+                it.copy(
+                    userSubscription = subscription,
+                    isSubscriber = subscriber,
+                    isGift = gift,
+                    giftRemainingHours = Vpn5gSubscriptionStatus.giftRemainingHours(
+                        subscription, nowSeconds
+                    ),
+                )
             }
-            if (subscriber != wasSubscriber) {
+            if (subscriber != wasSubscriber || gift != wasGift) {
                 val countries = runCatching { Vpn5gSync.loadGroupedServers() }
                     .getOrElse { emptyList() }
                 _uiState.update { it.copy(countries = countries) }
@@ -1166,6 +1411,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 signedInEmail = null,
                 userSubscription = null,
                 isSubscriber = false,
+                isGift = false,
+                giftRemainingHours = 0L,
             )
         }
     }
@@ -1201,6 +1448,19 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                     if (activated != null) {
                         val (subscription, link) = activated
+                        val tier = Vpn5gSubscriptionStatus.tierOf(subscription, nowSeconds)
+                        // v1.1.14: report the redemption server-side so
+                        // the bot can enforce the people-limit
+                        // (remaining_uses) when it republishes the code
+                        // list. Best effort — a missing RPC never fails
+                        // or blocks the redeem.
+                        viewModelScope.launch(Dispatchers.IO) {
+                            runCatching {
+                                Vpn5gAuthService.recordCodeRedemption(
+                                    entry.code.orEmpty(), email.orEmpty()
+                                )
+                            }
+                        }
                         val countries = runCatching {
                             Vpn5gSync.loadGroupedServers()
                         }.getOrElse { emptyList() }
@@ -1209,7 +1469,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                                 promoStatus = Vpn5gPromoStatus.REDEEMED,
                                 promoBotLink = link,
                                 userSubscription = subscription,
-                                isSubscriber = true,
+                                isSubscriber = tier ==
+                                    Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
+                                isGift = tier ==
+                                    Vpn5gSubscriptionStatus.Vpn5gTier.GIFT,
+                                giftRemainingHours = Vpn5gSubscriptionStatus
+                                    .giftRemainingHours(subscription, nowSeconds),
                                 countries = countries,
                             )
                         }
@@ -1217,6 +1482,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     } else {
                         // Discount code (or a gift without days): the bot
                         // applies it — the old VALID + deep-link path.
+                        // The redemption is still reported best-effort
+                        // so the bot can decrement remaining_uses.
+                        viewModelScope.launch(Dispatchers.IO) {
+                            runCatching {
+                                Vpn5gAuthService.recordCodeRedemption(
+                                    entry.code.orEmpty(), email.orEmpty()
+                                )
+                            }
+                        }
                         val link = Vpn5gPromoCodes.redeem(entry, email = email)
                         _uiState.update {
                             it.copy(promoStatus = Vpn5gPromoStatus.VALID, promoBotLink = link)
@@ -1267,10 +1541,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         if (running) {
             // Start the 30-minute session clock once per session —
             // subscribers have no timer at all (v1.1.11): unlimited
-            // session, no auto-disconnect, no countdown.
-            if (Vpn5gTimer.connectedAt() == 0L && !_uiState.value.isSubscriber) {
+            // session, no auto-disconnect, no countdown. v1.1.14: the
+            // GIFT tier has no timer either while the gift lasts.
+            if (Vpn5gTimer.connectedAt() == 0L && !_uiState.value.isSubscriber &&
+                !_uiState.value.isGift
+            ) {
                 Vpn5gTimer.scheduleDisconnect(app)
             }
+            // Live tunnel speeds (v1.1.14): poll while the session runs.
+            Vpn5gSpeedMonitor.start()
             dropFailoverRounds = 0
             watchdogTicks = 0
             watchdogFailures = 0
@@ -1331,6 +1610,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
         } else {
             Vpn5gTimer.cancelDisconnect(app)
+            // Live tunnel speeds stop with the session (v1.1.14).
+            Vpn5gSpeedMonitor.stop()
             // A planned failover restart's own stop must not kill the
             // verification job that is waiting for the restart (v1.1.5
             // §2 root fix) — the job owns the stop/start cycle and the
@@ -1369,8 +1650,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
             // Subscribers have no 30-minute timer (v1.1.11), so a long
             // session ending is never the timer for them — the drop
-            // detector must still fail over.
+            // detector must still fail over. Same for the gift tier
+            // (v1.1.14): no timer while the gift lasts.
             val timerProbablyEnded = !_uiState.value.isSubscriber &&
+                !_uiState.value.isGift &&
                 sessionAgeMs >= 29 * 60_000L
             val selectedGuid = MmkvManager.getSelectServer()
             droppedCountry = _uiState.value.countries
@@ -1667,6 +1950,20 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 val result = Vpn5gTunnelCheck.verify(baselineIp)
                 when (result.verdict) {
                     Vpn5gTunnelCheck.Verdict.VERIFIED -> {
+                        // v1.1.14: this server proved itself on the
+                        // CURRENT operator — record it in the
+                        // operator's own history so the auto pick
+                        // prefers it next time on this operator.
+                        runCatching {
+                            val operatorKey = Vpn5gOperator.currentKey()
+                            val profile = MmkvManager.decodeServerConfig(guid)
+                            if (operatorKey != null && profile != null) {
+                                Vpn5gOperator.recordVerified(
+                                    operatorKey,
+                                    Vpn5gServerValidator.dedupeKey(profile),
+                                )
+                            }
+                        }
                         val flag = result.exitIp?.let { ip ->
                             Vpn5gGeoIp.countryForIp(getApplication(), ip).flag
                         }.orEmpty()
@@ -2144,15 +2441,36 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             }
         }
 
-        // Launch splash (v1.1.2): full-screen branded image for exactly
-        // 3 seconds, then the main screen.
-        var showSplash by remember { mutableStateOf(true) }
+        // Carrier-name permission (v1.1.14, per-operator adaptation):
+        // requested once, only for this feature; denied = the operator
+        // just shows as "mobile" and nothing else changes. The
+        // notification permission (moved here from the hidden
+        // MainActivity) is requested alongside it.
         LaunchedEffect(Unit) {
-            delay(3_000L)
-            showSplash = false
+            checkAndRequestPermission(PermissionType.POST_NOTIFICATIONS) {}
+            checkAndRequestPermission(PermissionType.PHONE_STATE) {
+                viewModel.refreshOperator()
+            }
         }
-        if (showSplash) {
-            Vpn5gSplashScreen()
+
+        // Bot→app sync (v1.1.14): entering Premium re-fetches ONLY
+        // app_config.json, so bot-side plan/price/announcement/code
+        // changes show without an app update.
+        LaunchedEffect(destination) {
+            if (destination == Vpn5gDestination.PREMIUM) viewModel.refreshConfig()
+        }
+
+        // Startup sync screen (v1.1.14): real 0→100% server-update
+        // progress — it REPLACES the old fixed 3-second splash, it does
+        // not add a second wait on top. The home opens when the sync
+        // reaches 100% AND at least one server is available; an empty
+        // sync shows a retry state instead of hanging.
+        if (!uiState.startupDone) {
+            Vpn5gStartupScreen(
+                progress = uiState.startupProgress,
+                isError = uiState.startupError,
+                onRetry = { viewModel.retryStartupSync() },
+            )
             return
         }
 
@@ -2210,6 +2528,8 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                                     Utils.openUri(this@Vpn5gMainActivity, link)
                                 }
                             },
+                            onCountryServerTap = { guid -> onServerTap(guid) },
+                            onLockedCountryTap = { lockedCountry = it },
                         )
                         Vpn5gDestination.GUIDE -> Vpn5gGuideScreen(
                             onBack = { destination = Vpn5gDestination.HOME },
@@ -2221,6 +2541,14 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onOpenAuth = { destination = Vpn5gDestination.AUTH },
                             onSignOut = { viewModel.signOut() },
                             onOpenUrl = { url -> Utils.openUri(this@Vpn5gMainActivity, url) },
+                            onOpenPerAppBypass = {
+                                startActivity(
+                                    Intent(
+                                        this@Vpn5gMainActivity,
+                                        PerAppProxyActivity::class.java,
+                                    )
+                                )
+                            },
                         )
                         Vpn5gDestination.AUTH -> Vpn5gAuthScreen(
                             onBack = { destination = Vpn5gDestination.ME },
@@ -2665,9 +2993,18 @@ fun Vpn5gHomeScreen(
     // Free servers always have a real through-the-proxy ping (v1.1.7
     // top-20 selection), so the fastest free server is the best one;
     // never fall back to a TCP-only, no-ping or locked server.
-    val bestServer = freeSections.flatMap { it.servers }
-        .filter { it.hasRealPing && it.pingMillis > 0 }
-        .minByOrNull { it.pingMillis }
+    // v1.1.14: servers that verified on the CURRENT operator sort
+    // first — the operator's own history beats raw ping; with no
+    // history for the operator this is exactly the ping order.
+    val bestServer = run {
+        val pool = freeSections.flatMap { it.servers }
+            .filter { it.hasRealPing && it.pingMillis > 0 }
+        val preferred = pool.filter { it.operatorVerified }.ifEmpty { pool }
+        preferred.minByOrNull { it.pingMillis }
+    }
+    // ALL-tab filter pills (v1.1.14): null = show both, subscription
+    // first; SUB = subscription only; FREE = free only.
+    var allFilter by rememberSaveable { mutableStateOf<String?>(null) }
 
     // The home text comes from the connect state machine only (v1.1.4
     // §1, v1.1.5 §2): "connected" appears only after real traffic passed
@@ -2775,6 +3112,20 @@ fun Vpn5gHomeScreen(
                 }
             }
 
+            // Current network operator (v1.1.14): Wi-Fi / carrier, from
+            // the device itself — never invented. Tapping it re-detects.
+            state.operatorLabel?.let { operator ->
+                item(key = "operator_row") {
+                    Text(
+                        text = stringResource(R.string.vpn5g_operator_label, operator),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+
             item {
                 // Big circular power button with a cyan ring.
                 Vpn5gStaggeredItem(index = 2, visible = entered) {
@@ -2867,15 +3218,62 @@ fun Vpn5gHomeScreen(
                                 Text(
                                     // v1.1.11: subscribers have no
                                     // 30-minute timer — no countdown.
-                                    text = if (state.isSubscriber) {
-                                        stringResource(R.string.vpn5g_session_unlimited)
-                                    } else {
-                                        stringResource(
+                                    // v1.1.14: same for the gift tier;
+                                    // its remaining hours are shown.
+                                    text = when {
+                                        state.isSubscriber -> stringResource(
+                                            R.string.vpn5g_session_unlimited
+                                        )
+                                        state.isGift -> stringResource(
+                                            R.string.vpn5g_gift_remaining_hours,
+                                            state.giftRemainingHours,
+                                        )
+                                        else -> stringResource(
                                             R.string.vpn5g_remaining_time,
                                             formatRemaining(state.remainingMillis),
                                         )
                                     },
                                     color = Vpn5gOnDark,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                            // Live tunnel speeds (v1.1.14): tunnel-only
+                            // (proxy) rates, ~1 s poll; dashes while the
+                            // counter has no data yet — never a made-up
+                            // number.
+                            Spacer(Modifier.height(4.dp))
+                            Row {
+                                Text(
+                                    text = stringResource(R.string.vpn5g_speed_download),
+                                    color = Vpn5gOnDarkMuted,
+                                    fontSize = 14.sp,
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = if (state.downloadSpeedBps > 0L) {
+                                        state.downloadSpeedBps.toSpeedString()
+                                    } else {
+                                        "—"
+                                    },
+                                    color = colorPing,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Spacer(Modifier.width(16.dp))
+                                Text(
+                                    text = stringResource(R.string.vpn5g_speed_upload),
+                                    color = Vpn5gOnDarkMuted,
+                                    fontSize = 14.sp,
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = if (state.uploadSpeedBps > 0L) {
+                                        state.uploadSpeedBps.toSpeedString()
+                                    } else {
+                                        "—"
+                                    },
+                                    color = colorPing,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
                                 )
@@ -3400,11 +3798,10 @@ fun Vpn5gHomeScreen(
             }
 
             // Recommended: the fastest free server, one tap to connect.
-            // Hidden on the Free tab (v1.1.2): it shows only the free
-            // service card and the auto row, no server rows.
+            // v1.1.14: on the FIRST page (home) — shown on the Free tab
+            // too, not only on All. Hidden on the Special tab only.
             if (bestServer != null && searchQuery.isBlank() &&
-                serverTab != Vpn5gServerTab.SPECIAL &&
-                serverTab != Vpn5gServerTab.FREE
+                serverTab != Vpn5gServerTab.SPECIAL
             ) {
                 item(key = "recommended_header") {
                     Text(
@@ -3489,10 +3886,65 @@ fun Vpn5gHomeScreen(
             // free-service picker and the auto row above. The list is
             // always shown on the other tabs (v1.1.5 §3: the free-servers
             // row is now the picker, not a list toggle).
+            // v1.1.14: on the ALL tab the subscription sections come
+            // FIRST, then free — and the two floating filter pills
+            // (اشتراکی / رایگان, subscription first) narrow the list.
+            if (serverTab == Vpn5gServerTab.ALL) {
+                item(key = "all_filter_pills") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        listOf(
+                            "sub" to R.string.vpn5g_filter_sub,
+                            "free" to R.string.vpn5g_filter_free,
+                        ).forEach { (key, labelRes) ->
+                            val selected = allFilter == key
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(
+                                        if (selected) Vpn5gCyan.copy(alpha = 0.25f)
+                                        else Vpn5gOnDark.copy(alpha = 0.08f)
+                                    )
+                                    .border(
+                                        width = if (selected) 1.dp else 0.dp,
+                                        color = Vpn5gCyan,
+                                        shape = RoundedCornerShape(20.dp),
+                                    )
+                                    .clickable(
+                                        role = Role.Button,
+                                        onClickLabel = stringResource(labelRes),
+                                    ) {
+                                        allFilter = if (selected) null else key
+                                    }
+                                    .padding(vertical = 10.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(labelRes),
+                                    color = if (selected) Vpn5gCyan else Vpn5gOnDark,
+                                    fontSize = 14.sp,
+                                    fontWeight = if (selected) {
+                                        FontWeight.Bold
+                                    } else {
+                                        FontWeight.Normal
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             val ordered = when (serverTab) {
                 Vpn5gServerTab.FREE -> emptyList()
-                Vpn5gServerTab.ALL -> freeSections.map { it to false } +
-                    lockedSections.map { it to true }
+                Vpn5gServerTab.ALL -> when (allFilter) {
+                    "sub" -> lockedSections.map { it to true }
+                    "free" -> freeSections.map { it to false }
+                    else -> lockedSections.map { it to true } +
+                        freeSections.map { it to false }
+                }
                 Vpn5gServerTab.SPECIAL -> lockedSections.map { it to true }
             }
             var promoShown = false

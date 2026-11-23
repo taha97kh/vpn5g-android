@@ -24,7 +24,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -242,6 +245,107 @@ fun Vpn5gFooter() {
             fontSize = 12.sp,
             textAlign = TextAlign.Center,
         )
+    }
+}
+
+/**
+ * Startup screen (v1.1.14): replaces the old fixed 3-second splash.
+ *
+ * Shows the animated VPN 5G logo (the same pulsing logo as the connect
+ * circle language — it scales and floats, then the fire/fade treatment
+ * lives on the connect button itself) with "4ref.ai" underneath, and a
+ * REAL 0→100% progress bar driven by the server-list sync stages
+ * (fetching sources, pinging) — never a fake timer. The home opens when
+ * the bar reaches 100% AND at least one server is available. When the
+ * sync finishes with no server, [isError] shows a retry state instead
+ * of hanging at 100% forever.
+ */
+@Composable
+fun Vpn5gStartupScreen(
+    progress: Float,
+    isError: Boolean,
+    onRetry: () -> Unit,
+) {
+    Vpn5gAnimatedBackground {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 32.dp, vertical = 48.dp),
+        ) {
+            Spacer(Modifier.weight(1f))
+            Vpn5gPulsingLogo(size = 120.dp)
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_home_brand),
+                color = Vpn5gOnDark,
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "4ref.ai",
+                color = Vpn5gCyan,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(48.dp))
+            if (isError) {
+                Text(
+                    text = stringResource(R.string.vpn5g_startup_no_server),
+                    color = Vpn5gOnDark,
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = onRetry,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Vpn5gCyan,
+                        contentColor = Color.Black,
+                    ),
+                ) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_retry),
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            } else {
+                Text(
+                    text = stringResource(R.string.vpn5g_startup_updating),
+                    color = Vpn5gOnDark,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(16.dp))
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Vpn5gCyan,
+                    trackColor = Vpn5gOnDark.copy(alpha = 0.15f),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(
+                        R.string.vpn5g_startup_percent,
+                        (progress.coerceIn(0f, 1f) * 100).toInt(),
+                    ),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = stringResource(R.string.vpn5g_footer_made_by),
+                color = Vpn5gOnDarkMuted,
+                fontSize = 12.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 

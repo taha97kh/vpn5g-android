@@ -11,7 +11,7 @@ import com.v2ray.ang.extension.toast
 import com.v2ray.ang.extension.toastError
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.ui.base.BaseComponentActivity
-import com.v2ray.ang.ui.main.MainActivity
+import com.v2ray.ang.ui.vpn5g.Vpn5gMainActivity
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -51,7 +51,13 @@ class UrlSchemeActivity : BaseComponentActivity() {
                 }
             }
 
-            startActivity(Intent(this, MainActivity::class.java))
+            // v1.1.14: deep links land on the VPN 5G home screen, never
+            // the upstream config list.
+            startActivity(
+                Intent(this, Vpn5gMainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+            )
             finish()
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Error processing URL scheme", e)

@@ -345,6 +345,32 @@ object Vpn5gAuthService {
     }
 
     /**
+     * Records a gift-code redemption server-side (PostgREST RPC
+     * `record_code_redemption`, v1.1.14). True when the server stored
+     * a NEW redemption row; false on any failure — INCLUDING when the
+     * RPC does not exist yet (the bot side creates the table/RPC; the
+     * app must never fail or block a redeem over it). Best effort by
+     * design: the caller treats the local activation as done either
+     * way. The bot uses the redemption count to enforce the
+     * people-limit (remaining_uses) when it republishes app_config.json.
+     * Never throws.
+     */
+    suspend fun recordCodeRedemption(code: String, email: String): Boolean {
+        val result = postRaw(
+            path = "/rest/v1/rpc/record_code_redemption",
+            body = """{"p_code":"${jsonEscape(code.trim().uppercase())}","p_email":"${jsonEscape(email.trim())}"}""",
+        ) ?: return false
+        if (result.first !in 200..299) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gAuthService: record_code_redemption HTTP ${result.first}",
+            )
+            return false
+        }
+        return result.second.trim() == "true"
+    }
+
+    /**
      * Records the (email, ip) pair after a successful signup
      * (PostgREST RPC `register_account`). True when the server
      * stored the row; false on any failure — the caller still treats

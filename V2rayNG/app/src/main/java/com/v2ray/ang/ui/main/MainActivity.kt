@@ -16,7 +16,6 @@ import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.EConfigType
-import com.v2ray.ang.enums.PermissionType
 import com.v2ray.ang.extension.toast
 import com.v2ray.ang.extension.toastError
 import com.v2ray.ang.extension.toastSuccess
@@ -48,6 +47,7 @@ import com.v2ray.ang.ui.server.ServerWireguardActivity
 import com.v2ray.ang.ui.settings.SettingsActivity
 import com.v2ray.ang.ui.subscription.SubSettingActivity
 import com.v2ray.ang.ui.userasset.UserAssetActivity
+import com.v2ray.ang.ui.vpn5g.Vpn5gMainActivity
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.Dispatchers
@@ -94,9 +94,17 @@ class MainActivity : HelperBaseComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        mainViewModel.onAction(MainAction.Initialize)
-
-        checkAndRequestPermission(PermissionType.POST_NOTIFICATIONS) {}
+        // v1.1.14: the upstream config list is HIDDEN — any path that
+        // still reaches this activity (deep link, shortcut, tile)
+        // forwards to the VPN 5G home screen and finishes. The class
+        // stays so the QS-tile preferences filter keeps resolving.
+        startActivity(
+            Intent(this, Vpn5gMainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+        )
+        finish()
+        return
     }
 
     @Composable

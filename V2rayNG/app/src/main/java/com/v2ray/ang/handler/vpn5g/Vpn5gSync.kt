@@ -68,13 +68,19 @@ object Vpn5gSync {
      * [skipRealProbe] is true while the VPN is running: a throwaway core
      * is never spawned next to the live one, and the real-ping evidence
      * is keyed by server identity so proven servers keep their real ping.
+     * [onProgress] (v1.1.14) reports the REAL sync stages for the
+     * startup screen's 0→100% bar — it is only called when provided
+     * (startup); the 5-minute ticker and manual refresh pass none.
      */
     suspend fun refresh(
         context: Context,
         skipRealProbe: Boolean = false,
+        onProgress: ((Vpn5gStartupProgress.Stage, Float) -> Unit)? = null,
     ): Vpn5gSyncResult = withContext(Dispatchers.IO) {
         try {
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_CONFIG, 0f)
             val remoteConfig = Vpn5gRemoteConfig.fetch()
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_CONFIG, 1f)
 
             val sources = linkedSetOf<String>()
             sources += Vpn5gConstants.DEFAULT_CONFIG_SOURCES
@@ -84,7 +90,12 @@ object Vpn5gSync {
 
             val candidates = mutableListOf<Candidate>()
             var anyFetchOk = false
-            for (url in sources) {
+            val sourceList = sources.toList()
+            for ((sourceIndex, url) in sourceList.withIndex()) {
+                onProgress?.invoke(
+                    Vpn5gStartupProgress.Stage.FETCH_SOURCES,
+                    sourceIndex.toFloat() / sourceList.size.coerceAtLeast(1),
+                )
                 val body = try {
                     HttpUtil.getUrlContent(UrlContentRequest(url = url, timeout = FETCH_TIMEOUT_MS))
                 } catch (e: Exception) {
@@ -117,6 +128,8 @@ object Vpn5gSync {
                 // Nothing fetched: keep the last good list untouched.
                 return@withContext Vpn5gSyncResult(offline = true, notice = remoteConfig.notice)
             }
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_SOURCES, 1f)
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.PARSE_VALIDATE, 0f)
 
             val subId = ensureSubscriptionId()
 
@@ -155,6 +168,8 @@ object Vpn5gSync {
             }
 
             val semaphore = Semaphore(MAX_CONCURRENT_PINGS)
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.PARSE_VALIDATE, 1f)
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 0f)
             val pinged = unique.map { (profile, _) ->
                 async {
                     semaphore.withPermit {
@@ -173,6 +188,7 @@ object Vpn5gSync {
             // HARD RULE: dead configs (ping < 0) are never stored or shown.
             val live = pinged.filter { it.second >= 0 }
             val dropped = pinged.size - live.size
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 1f)
 
             val profiles = linkedMapOf<String, ProfileItem>()
             val rawConfigs = mutableMapOf<String, String>()
@@ -210,6 +226,7 @@ object Vpn5gSync {
             // server identity, which survives a refresh).
             var realPingCount = 0
             if (profiles.isNotEmpty()) {
+                onProgress?.invoke(Vpn5gStartupProgress.Stage.REAL_PROBE, 0f)
                 if (!skipRealProbe) {
                     val allCandidates = live.mapIndexed { index, (profile, _, _) ->
                         val guid = profiles.keys.elementAt(index)
@@ -255,6 +272,11 @@ object Vpn5gSync {
                 realPingCount = live.count { (profile, _, _) ->
                     Vpn5gServerValidator.dedupeKey(profile) in realKeys
                 }
+                onProgress?.invoke(Vpn5gStartupProgress.Stage.REAL_PROBE, 1f)
+                onProgress?.invoke(Vpn5gStartupProgress.Stage.SAVING, 1f)
+                onProgress?.invoke(Vpn5gStartupProgress.Stage.DONE, 1f)
+            } else {
+                onProgress?.invoke(Vpn5gStartupProgress.Stage.DONE, 1f)
             }
 
             Vpn5gSyncResult(
@@ -361,24 +383,47 @@ object Vpn5gSync {
     }
 
     /**
-     * Which servers are pickable (v1.1.11): subscribers get the whole
-     * powerful pool — every server with a real through-the-proxy ping,
-     * fastest first, no 20-config cap; free users get the top
-     * [FREE_SERVER_COUNT] only. Pure, JVM-tested. The "free" flag is
-     * what the pickers, the manual validation and the failover all
-     * gate on, so one flag carries the whole subscriber benefit.
+     * Which servers are pickable (v1.1.11, gift tier v1.1.14):
+     * subscribers get the whole powerful pool — every server with a
+     * real through-the-proxy ping, fastest first, no 20-config cap;
+     * the GIFT tier gets the [GIFT_SERVER_COUNT] fastest real-pinged
+     * servers; free users get the top [FREE_SERVER_COUNT] only. Pure,
+     * JVM-tested. The "free" flag is what the pickers, the manual
+     * validation and the failover all gate on, so one flag carries the
+     * whole tier benefit.
      */
+    fun freeGuidsFor(
+        servers: List<Vpn5gServerUi>,
+        tier: Vpn5gSubscriptionStatus.Vpn5gTier,
+    ): Set<String> {
+        return when (tier) {
+            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER -> servers
+                .filter { it.hasRealPing && it.pingMillis > 0 }
+                .map { it.guid }
+                .toSet()
+            Vpn5gSubscriptionStatus.Vpn5gTier.GIFT -> servers
+                .filter { it.hasRealPing && it.pingMillis > 0 }
+                .sortedBy { it.pingMillis }
+                .take(Vpn5gConstants.GIFT_SERVER_COUNT)
+                .map { it.guid }
+                .toSet()
+            Vpn5gSubscriptionStatus.Vpn5gTier.FREE -> selectFreeGuids(servers)
+        }
+    }
+
+    /** Boolean overload (v1.1.11): subscriber → full pool, else free tier. */
     fun freeGuidsFor(
         servers: List<Vpn5gServerUi>,
         subscriber: Boolean,
     ): Set<String> {
-        if (subscriber) {
-            return servers
-                .filter { it.hasRealPing && it.pingMillis > 0 }
-                .map { it.guid }
-                .toSet()
-        }
-        return selectFreeGuids(servers)
+        return freeGuidsFor(
+            servers,
+            if (subscriber) {
+                Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER
+            } else {
+                Vpn5gSubscriptionStatus.Vpn5gTier.FREE
+            },
+        )
     }
 
     /**
@@ -425,6 +470,8 @@ object Vpn5gSync {
                     // EConfigType schemes carry a "://" suffix ("vless://").
                     protocol = profile.configType.protocolScheme
                         .removeSuffix("://").lowercase(),
+                    operatorVerified = Vpn5gServerValidator.dedupeKey(profile)
+                        in operatorVerifiedKeys,
                 )
             )
         }
@@ -432,8 +479,14 @@ object Vpn5gSync {
         // 20-config cap); free users get the top 20. The cached
         // subscription decides — it is refreshed on app start and on
         // connect, and a stale cache can only under-grant, never crash.
-        val subscriber = Vpn5gSubscriptionStatus.cachedIsSubscriber()
-        val freeGuids = freeGuidsFor(byCountry.values.flatten(), subscriber)
+        // v1.1.14: the GIFT tier gets the top 50 instead. Servers that
+        // verified on the CURRENT operator are marked (own history
+        // only) so the auto pick can prefer them.
+        val tier = Vpn5gSubscriptionStatus.cachedTier()
+        val freeGuids = freeGuidsFor(byCountry.values.flatten(), tier)
+        val operatorKey = Vpn5gOperator.currentKey()
+        val operatorVerifiedKeys = operatorKey
+            ?.let { Vpn5gOperator.verifiedKeysFor(it) }.orEmpty()
         val sections = byCountry.map { (key, servers) ->
             val marked = servers
                 .map { it.copy(isFree = it.guid in freeGuids) }

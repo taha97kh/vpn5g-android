@@ -191,7 +191,8 @@ object CoreServiceManager {
         if (!isReload) {
             MessageHelper.sendMsg2UI(service, AppConfig.MSG_STATE_START_SUCCESS, "")
         }
-        NotificationManager.startSpeedNotification()
+        // v1.1.14: the VPN 5G flow always shows live tunnel speeds.
+        NotificationManager.startSpeedNotification(force = true)
         LogUtil.i(AppConfig.TAG, "StartCore-Manager: Core started successfully")
     }
 
@@ -559,7 +560,7 @@ object CoreServiceManager {
 
                 Intent.ACTION_SCREEN_ON -> {
                     LogUtil.i(AppConfig.TAG, "StartCore-Manager: Screen on")
-                    NotificationManager.startSpeedNotification()
+                    NotificationManager.startSpeedNotification(force = true)
                 }
             }
         }

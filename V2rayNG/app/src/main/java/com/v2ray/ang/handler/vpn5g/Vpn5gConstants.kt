@@ -95,11 +95,32 @@ object Vpn5gConstants {
     const val BOT_URL = "https://t.me/VPN5G_IRBot"
     const val CHANNEL_URL = "https://t.me/VPNCRACKNET"
     const val SUPPORT_URL = "https://t.me/Aref_5G"
+    /**
+     * Online-support deep link (v1.1.14): opens the bot with a support
+     * start-param so the user lands on support directly. The bot must
+     * handle `start=support` (otherwise it lands on the main menu,
+     * where پشتیبانی is one tap away). Bot membership cannot be
+     * verified app-side — the app has no Telegram identity — so the
+     * button opens the bot and the bot handles membership.
+     */
+    const val SUPPORT_BOT_URL = "https://t.me/VPN5G_IRBot?start=support"
 
     const val SUBSCRIPTION_REMARKS = "VPN5G IRBOT"
 
     /** Free tier: this many fastest-pinging configs are free (v1.1.2). */
     const val FREE_SERVER_COUNT = 20
+
+    /**
+     * GIFT tier (v1.1.14): a redeemed gift code grants this many
+     * fastest-pinging configs — more than the 20 free ones, not the
+     * full VIP pool — plus the countries those servers belong to, and
+     * no 30-minute cutoff while the gift lasts. The gift expires when
+     * its duration ends (stored at redeem time).
+     */
+    const val GIFT_SERVER_COUNT = 50
+
+    /** Plan id the app stores for a gift-tier redemption (v1.1.14). */
+    const val GIFT_TIER_PLAN_ID = "gift"
 
     /** Auto-disconnect after this long. */
     const val SESSION_LIMIT_MINUTES = 30L
@@ -150,6 +171,10 @@ object Vpn5gConstants {
     const val KEY_PROTOCOL_FILTER = "vpn5g_protocol_filter"
     /** Last successful app-update check, epoch millis (v1.1.3, at most daily). */
     const val KEY_UPDATE_LAST_CHECK_MS = "vpn5g_update_last_check_ms"
+    /** Per-operator verification history, JSON object operatorKey -> CSV of server dedupe keys (v1.1.14). */
+    const val KEY_OPERATOR_HISTORY_JSON = "vpn5g_operator_history_json"
+    /** Last detected operator key (v1.1.14): "wifi", "cell:irancell", "cell:mci", "cell:rightel", "cell:unknown", "other". */
+    const val KEY_OPERATOR_LAST = "vpn5g_operator_last"
 
     /** Bundled fallback assets (assets/vpn5g/). */
     const val ASSET_FALLBACK_SERVERS = "vpn5g/fallback_servers.json"

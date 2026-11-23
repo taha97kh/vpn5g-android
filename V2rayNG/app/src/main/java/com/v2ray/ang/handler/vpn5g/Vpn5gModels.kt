@@ -96,6 +96,13 @@ data class SubscriptionPlanRemote(
     val id: String? = null,
     /** "monthly" or "yearly" (drives the card layout and badge). */
     val period: String? = null,
+    /**
+     * Duration in days, as published by the bot (v1.1.14). The bot's
+     * plan ids are sub_1/sub_3/sub_6/sub_12 = 30/90/180/360 days; when
+     * [days] is absent the id (then the period) decides — see
+     * [Vpn5gPlans.planDays]. Null = not published.
+     */
+    val days: Int? = null,
     /** Display name in Persian, e.g. "ماهانه". */
     val name_fa: String? = null,
     /** Price in Toman. Null = price not published (card hidden). */
@@ -143,6 +150,21 @@ data class PromoCodeRemote(
     val discount_percent: Int? = null,
     /** Gift duration in days when type is "gift". */
     val gift_days: Int? = null,
+    /**
+     * Gift duration in HOURS when type is "gift" (v1.1.14): the admin
+     * picks 1 / 5 / 24 hours or 7 days for a gift code. When set it
+     * wins over [gift_days] (hours are the finer unit); a gift with
+     * neither is malformed. 7 days is published as 168 hours.
+     */
+    val gift_hours: Int? = null,
+    /**
+     * Tier a gift grants (v1.1.14): "gift" = the middle GIFT tier
+     * (more than the 20 free configs, not the full VIP pool, no
+     * 30-minute cutoff while it lasts) or a plan id ("sub_1" …)
+     * granting a full subscription. Null = a gift with no plan id
+     * grants the GIFT tier.
+     */
+    val tier: String? = null,
     /** Total allowed redemptions, or null for unlimited. */
     val max_uses: Int? = null,
     /** Redemptions left, as last published by the bot. Null = unknown/unlimited. */
@@ -211,6 +233,12 @@ data class Vpn5gServerUi(
     val hasRealPing: Boolean = false,
     /** Config protocol scheme ("vless", "vmess", "trojan", "ss"), or "" when unknown. */
     val protocol: String = "",
+    /**
+     * True when this server already verified on the CURRENT network
+     * operator (v1.1.14): the app's own verification history prefers
+     * it for this operator. False with no history — never invented.
+     */
+    val operatorVerified: Boolean = false,
 )
 
 /** One country section on the home screen. */

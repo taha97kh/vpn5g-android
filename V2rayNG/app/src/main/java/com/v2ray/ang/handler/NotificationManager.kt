@@ -17,14 +17,13 @@ import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.extension.delay
 import com.v2ray.ang.extension.toSpeedString
 import com.v2ray.ang.helper.NotificationHelper
-import com.v2ray.ang.ui.main.MainActivity
+import com.v2ray.ang.ui.vpn5g.Vpn5gMainActivity
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.min
 
 object NotificationManager {
     private const val NOTIFICATION_ID = 1
@@ -32,7 +31,8 @@ object NotificationManager {
     private const val NOTIFICATION_PENDING_INTENT_STOP_V2RAY = 1
     private const val NOTIFICATION_PENDING_INTENT_RESTART_V2RAY = 2
     private const val NOTIFICATION_ICON_THRESHOLD = 3000
-    private const val QUERY_INTERVAL_MS = 3000L
+    /** Speed poll interval (v1.1.14): ~1 s so the floating speeds feel live. */
+    private const val QUERY_INTERVAL_MS = 1000L
 
     private var lastQueryTime = 0L
     private var mBuilder: NotificationCompat.Builder? = null
@@ -41,10 +41,16 @@ object NotificationManager {
 
     /**
      * Starts the speed notification.
+     *
+     * v1.1.14: the VPN 5G flow forces it on — live tunnel speeds are
+     * part of the product now, not a hidden setting ([force] is true
+     * when the service was started from the VPN 5G flow). The legacy
+     * upstream setting ([AppConfig.PREF_SPEED_ENABLED]) still gates
+     * the non-forced path.
      * @param currentConfig The current profile configuration.
      */
-    fun startSpeedNotification() {
-        if (MmkvManager.decodeSettingsBool(AppConfig.PREF_SPEED_ENABLED) != true) return
+    fun startSpeedNotification(force: Boolean = false) {
+        if (!force && MmkvManager.decodeSettingsBool(AppConfig.PREF_SPEED_ENABLED) != true) return
         if (speedNotificationJob != null || CoreServiceManager.isRunning() == false) return
 
         var lastZeroSpeed = false
@@ -69,7 +75,13 @@ object NotificationManager {
 
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
 
-        val startMainIntent = Intent(service, MainActivity::class.java)
+        // v1.1.14: the notification opens the VPN 5G home screen, NEVER
+        // the upstream config list (MainActivity) — the raw config list
+        // must stay completely hidden. singleTop + clear-top: no second
+        // task stack, the existing home comes forward.
+        val startMainIntent = Intent(service, Vpn5gMainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
         val contentPendingIntent = PendingIntent.getActivity(service, NOTIFICATION_PENDING_INTENT_CONTENT, startMainIntent, flags)
 
         val stopV2RayIntent = Intent(AppConfig.BROADCAST_ACTION_SERVICE)
@@ -205,23 +217,6 @@ object NotificationManager {
     }
 
     /**
-     * Appends the speed string to the given text.
-     * @param text The text to append to.
-     * @param name The name of the tag.
-     * @param up The uplink speed.
-     * @param down The downlink speed.
-     */
-    private fun appendSpeedString(text: StringBuilder, name: String?, up: Double, down: Double) {
-        var n = name ?: "no tag"
-        n = n.take(min(n.length, 6))
-        text.append(n)
-        for (i in n.length..6 step 2) {
-            text.append("\t")
-        }
-        text.append("•  ${up.toLong().toSpeedString()}↑  ${down.toLong().toSpeedString()}↓\n")
-    }
-
-    /**
      * Updates the speed notification once.
      * Queries traffic stats, separates proxy and direct, and updates the notification.
      * @param lastZeroSpeed The previous zero speed state.
@@ -267,19 +262,22 @@ object NotificationManager {
         val directTotal = directUplink + directDownlink
         val zeroSpeed = proxyTotal + directTotal == 0L
         if (!zeroSpeed || !lastZeroSpeed) {
-            val text = StringBuilder()
-            appendSpeedString(
-                text, AppConfig.TAG_PROXY,
-                proxyUplink / sinceLastQueryInSeconds,
-                proxyDownlink / sinceLastQueryInSeconds
-            )
-
-            appendSpeedString(
-                text, AppConfig.TAG_DIRECT,
-                directUplink / sinceLastQueryInSeconds,
-                directDownlink / sinceLastQueryInSeconds
-            )
-            updateNotification(text.toString(), proxyTotal, directTotal)
+            // v1.1.14: TUNNEL-ONLY speeds with Persian labels — the
+            // bypassed (direct) traffic is never shown, and nothing is
+            // shown when the tunnel counter is unavailable (zeroSpeed
+            // with a previous zero stays silent above).
+            val service = getService()
+            val text = if (service != null) {
+                service.getString(R.string.vpn5g_speed_download) + " " +
+                    (proxyDownlink / sinceLastQueryInSeconds).toLong().toSpeedString() +
+                    "  •  " +
+                    service.getString(R.string.vpn5g_speed_upload) + " " +
+                    (proxyUplink / sinceLastQueryInSeconds).toLong().toSpeedString()
+            } else {
+                "proxy •  ${(proxyUplink / sinceLastQueryInSeconds).toLong().toSpeedString()}↑  " +
+                    "${(proxyDownlink / sinceLastQueryInSeconds).toLong().toSpeedString()}↓"
+            }
+            updateNotification(text, proxyTotal, directTotal)
         }
         lastQueryTime = queryTime
         return zeroSpeed

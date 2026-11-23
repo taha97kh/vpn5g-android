@@ -13,11 +13,11 @@ android {
         applicationId = "com.taha97kh.vpn5g"
         minSdk = 24
         targetSdk = 37
-        versionCode = 15
-        versionName = "1.1.13"
+        versionCode = 16
+        versionName = "1.1.14"
 
         // Build date stamped into BuildConfig.BUILD_TIME (VPN 5G About screen).
-        buildConfigField("String", "BUILD_TIME", "\"2026-11-23\"")
+        buildConfigField("String", "BUILD_TIME", "\"2026-11-24\"")
 
         val abiFilterList = (properties["ABI_FILTERS"] as? String)?.split(';')
         splits {

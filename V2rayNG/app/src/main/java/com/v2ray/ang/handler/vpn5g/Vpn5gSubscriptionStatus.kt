@@ -47,6 +47,14 @@ object Vpn5gSubscriptionStatus {
         val plan: String? = null,
     )
 
+    /**
+     * Access tier (v1.1.14): FREE = top-20 servers + 30-minute timer;
+     * GIFT = a redeemed gift code (top-50 servers, the countries those
+     * servers belong to, no 30-minute cutoff while it lasts); SUBSCRIBER
+     * = a bot-activated plan (full pool, no timer).
+     */
+    enum class Vpn5gTier { FREE, GIFT, SUBSCRIBER }
+
     /** Result of a fetch attempt: found, genuinely absent, or failed. */
     sealed interface FetchResult {
         data class Found(val subscription: Vpn5gUserSubscription) : FetchResult
@@ -58,17 +66,60 @@ object Vpn5gSubscriptionStatus {
     private const val TIMEOUT_MS = 15_000L
 
     /**
-     * True only for an active subscription whose expiry is in the
+     * True only for an active FULL subscription whose expiry is in the
      * future. Pure, JVM-tested. Null, "none", "cancelled", an expired
      * "active" row and a missing expiry are all "not a subscriber".
+     * v1.1.14: a gift-tier redemption (plan "gift") is NOT a full
+     * subscription — it is [Vpn5gTier.GIFT] (top-50 pool, no timer),
+     * never the full pool.
      */
     fun isSubscriber(
         subscription: Vpn5gUserSubscription?,
         nowEpochSeconds: Long,
     ): Boolean {
         if (subscription?.status != "active") return false
+        if (subscription.plan == Vpn5gConstants.GIFT_TIER_PLAN_ID) return false
         val expiresAt = subscription.expiresAtEpochSeconds ?: return false
         return expiresAt > nowEpochSeconds
+    }
+
+    /**
+     * True only for an active GIFT-tier redemption (plan "gift") whose
+     * expiry is in the future. Pure, JVM-tested. The gift tier sits
+     * between free and VIP: more servers than free, not the full pool,
+     * and no 30-minute cutoff while it lasts.
+     */
+    fun isGiftTier(
+        subscription: Vpn5gUserSubscription?,
+        nowEpochSeconds: Long,
+    ): Boolean {
+        if (subscription?.status != "active") return false
+        if (subscription.plan != Vpn5gConstants.GIFT_TIER_PLAN_ID) return false
+        val expiresAt = subscription.expiresAtEpochSeconds ?: return false
+        return expiresAt > nowEpochSeconds
+    }
+
+    /** The access tier a subscription grants right now. Pure, JVM-tested. */
+    fun tierOf(
+        subscription: Vpn5gUserSubscription?,
+        nowEpochSeconds: Long,
+    ): Vpn5gTier {
+        return when {
+            isSubscriber(subscription, nowEpochSeconds) -> Vpn5gTier.SUBSCRIBER
+            isGiftTier(subscription, nowEpochSeconds) -> Vpn5gTier.GIFT
+            else -> Vpn5gTier.FREE
+        }
+    }
+
+    /** Whole remaining hours of a gift-tier subscription (0 when not a gift / expired). Pure. */
+    fun giftRemainingHours(
+        subscription: Vpn5gUserSubscription?,
+        nowEpochSeconds: Long,
+    ): Long {
+        if (!isGiftTier(subscription, nowEpochSeconds)) return 0L
+        val remaining = (subscription?.expiresAtEpochSeconds ?: 0L) - nowEpochSeconds
+        if (remaining <= 0L) return 0L
+        return remaining / 3_600L
     }
 
     /**
@@ -203,10 +254,10 @@ object Vpn5gSubscriptionStatus {
         }
 
     /**
-     * The effective subscription (v1.1.12): the later-expiring of the
-     * bot-activated row and a locally redeemed gift code, considering
-     * only currently-active ones. A redeemed code and a bot-activated
-     * subscription combine sensibly — the later expiry wins — and a
+     * The effective subscription (v1.1.12, tier-aware v1.1.14): a
+     * FULL subscription always beats a gift-tier redemption, whatever
+     * the expiries — a longer gift must never demote a subscriber to
+     * the top-50 pool. Within one tier the later expiry wins. A
      * redeemed code is never demoted by a row fetch that finds no row
      * or a "none" row. When neither is active, the row is returned (so
      * the UI can show its expired state) or the redeemed one when
@@ -218,9 +269,15 @@ object Vpn5gSubscriptionStatus {
         nowEpochSeconds: Long,
     ): Vpn5gUserSubscription? {
         val active = listOfNotNull(row, redeemed)
+            .filter { isSubscriber(it, nowEpochSeconds) || isGiftTier(it, nowEpochSeconds) }
+        val bestSubscriber = active
             .filter { isSubscriber(it, nowEpochSeconds) }
-        val best = active.maxByOrNull { it.expiresAtEpochSeconds ?: 0L }
-        if (best != null) return best
+            .maxByOrNull { it.expiresAtEpochSeconds ?: 0L }
+        if (bestSubscriber != null) return bestSubscriber
+        val bestGift = active
+            .filter { isGiftTier(it, nowEpochSeconds) }
+            .maxByOrNull { it.expiresAtEpochSeconds ?: 0L }
+        if (bestGift != null) return bestGift
         return row ?: redeemed
     }
 
@@ -285,6 +342,16 @@ object Vpn5gSubscriptionStatus {
     /** True when the effective subscription is currently active. */
     fun cachedIsSubscriber(nowEpochSeconds: Long = System.currentTimeMillis() / 1000): Boolean {
         return isSubscriber(loadEffective(nowEpochSeconds), nowEpochSeconds)
+    }
+
+    /** True when the effective subscription is currently the GIFT tier. */
+    fun cachedIsGift(nowEpochSeconds: Long = System.currentTimeMillis() / 1000): Boolean {
+        return isGiftTier(loadEffective(nowEpochSeconds), nowEpochSeconds)
+    }
+
+    /** The effective access tier right now (FREE / GIFT / SUBSCRIBER). */
+    fun cachedTier(nowEpochSeconds: Long = System.currentTimeMillis() / 1000): Vpn5gTier {
+        return tierOf(loadEffective(nowEpochSeconds), nowEpochSeconds)
     }
 
     fun saveCached(subscription: Vpn5gUserSubscription) {
