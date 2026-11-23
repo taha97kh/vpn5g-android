@@ -1403,7 +1403,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // re-runs the connect chain with backoff, bounded. A
             // manual disconnect never reaches here.
             if (!shouldFailover && Vpn5gConnectionPersistence.shouldAutoReconnect(
-                    wasSession = wasSession,
+                    wasConnected = wasSession,
                     manualStopRequested = userStopRequested,
                     timerProbablyEnded = timerProbablyEnded,
                     tunnelFailedStop = tunnelFailedStop,
