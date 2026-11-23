@@ -88,7 +88,7 @@ object Vpn5gRealPing {
     fun addRealPingKeys(keys: Collection<String>) {
         if (keys.isEmpty()) return
         val merged = loadRealPingKeys() + keys.filter { it.isNotBlank() }
-        MmkvManager.encodeSettingsString(
+        MmkvManager.encodeSettings(
             Vpn5gConstants.KEY_REAL_PING_KEYS_CSV,
             merged.joinToString(","),
         )
