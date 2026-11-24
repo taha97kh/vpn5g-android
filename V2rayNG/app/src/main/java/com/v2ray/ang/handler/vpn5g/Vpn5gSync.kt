@@ -496,7 +496,7 @@ object Vpn5gSync {
         // verified on the CURRENT operator are marked (own history
         // only) so the auto pick can prefer them.
         val tier = if (forceFreeTier) {
-            Vpn5gTier.FREE
+            Vpn5gSubscriptionStatus.Vpn5gTier.FREE
         } else {
             Vpn5gSubscriptionStatus.cachedTier()
         }

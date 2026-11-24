@@ -708,14 +708,15 @@ fun Vpn5gSubscriptionScreen(
                         },
                         onClick = {
                             val url = gateway?.url
+                            val planId = selectedPlan?.id
                             if (gatewayReady && !url.isNullOrBlank()) {
                                 onOpenUrl(url)
-                            } else if (selectedPlan != null) {
+                            } else if (planId != null) {
                                 // v1.1.15 (unique payments, G): the buy
                                 // deep link carries the selected plan so
                                 // the bot can generate the UNIQUE payable
                                 // amount for that order.
-                                onOpenBuyBot(selectedPlan.id)
+                                onOpenBuyBot(planId)
                             } else {
                                 onOpenBot()
                             }
@@ -727,8 +728,8 @@ fun Vpn5gSubscriptionScreen(
                         body = stringResource(R.string.vpn5g_premium_pay_bot_body),
                         badge = null,
                         onClick = {
-                            val plan = selectedPlan
-                            if (plan != null) onOpenBuyBot(plan.id) else onOpenBot()
+                            val planId = selectedPlan?.id
+                            if (planId != null) onOpenBuyBot(planId) else onOpenBot()
                         },
                     )
                     Spacer(Modifier.height(8.dp))
