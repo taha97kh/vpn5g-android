@@ -752,6 +752,14 @@
     <string name="vpn5g_tamper_warning">نسخه برنامه دست‌کاری شده است؛ فقط حالت رایگان در دسترس است</string>
     <string name="vpn5g_open_link">باز کردن پیوند</string>
 
+    <!-- v1.1.16: separate gift/subscription code sections, crash report -->
+    <string name="vpn5g_gift_body">کد هدیه‌ای که از ربات گرفته‌اید را اینجا وارد کنید؛ هدیه بلافاصله فعال می‌شود.</string>
+    <string name="vpn5g_sub_code_body">برای خرید کد اشتراک، از ربات تلگرام اقدام کنید؛ بعد از خرید، کد را همین‌جا وارد کنید تا بلافاصله فعال شود.</string>
+    <string name="vpn5g_promo_wrong_section">این کد در این بخش قابل استفاده نیست؛ آن را در بخش دیگر وارد کنید.</string>
+    <string name="vpn5g_crash_report_title">گزارش خرابی ذخیره شد</string>
+    <string name="vpn5g_crash_report_body">برنامه در اتصال قبلی به‌طور ناگهانی بسته شد؛ گزارش کوتاه خرابی را برای پشتیبانی بفرستید تا علت آن پیدا شود.</string>
+    <string name="vpn5g_crash_report_share">ارسال گزارش</string>
+
     <!-- v1.1: server-list tabs / search / recommended / banner / auto-failover -->
     <string name="vpn5g_tab_free">رایگان</string>
     <string name="vpn5g_tab_all">تمام مکان‌ها</string>

@@ -75,11 +75,16 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
  * (`validate_and_redeem_code`); the config list is only the fallback
  * when the RPC is unreachable.
  *
- * v1.1.15 layout (master order): title → benefits description →
+ * v1.1.16 layout (master order): title → benefits description →
  * REGISTER-CODE button (top) → gift-code section → locked countries
  * (collapsible tree, closed by default) → subscription status
  * (remaining time inside it) → plans → payment → buy-code →
- * comparison → account → back-home. ALL sections start closed.
+ * comparison → account → back-home. v1.1.16: gift codes and purchased
+ * subscription codes have SEPARATE sections with their OWN entry
+ * boxes (never a shared input); the top register button opens the
+ * SUBSCRIPTION-code section, the ALL-tab gift button opens the gift
+ * section, and the status section opens itself whenever a plan is
+ * active or a code was just redeemed, so the active plan is visible.
  * Buying stays inside Premium; the buy deep link carries the selected
  * plan id (`start=buy_<plan_id>`) so the bot can generate the UNIQUE
  * payable amount for that order — the app never shows a round plan
@@ -93,8 +98,12 @@ fun Vpn5gSubscriptionScreen(
     onOpenAuth: () -> Unit,
     onSignOut: () -> Unit,
     onOpenUrl: (String) -> Unit,
-    onPromoInputChange: (String) -> Unit,
-    onRedeemPromo: () -> Unit,
+    /** Gift-code section input (v1.1.16: separate from subscription codes). */
+    onGiftCodeInputChange: (String) -> Unit,
+    onRedeemGiftCode: () -> Unit,
+    /** Subscription-code section input (v1.1.16: separate from gift codes). */
+    onSubCodeInputChange: (String) -> Unit,
+    onRedeemSubCode: () -> Unit,
     onOpenPromoBot: () -> Unit,
     /** One-tap connect to a country's fastest server (subscribers / gift tier). */
     onCountryServerTap: (String) -> Unit,
@@ -128,6 +137,20 @@ fun Vpn5gSubscriptionScreen(
     // the register button at the top.
     LaunchedEffect(giftCodeRequest) {
         if (giftCodeRequest > 0) promoExpanded = true
+    }
+    // v1.1.16: the active plan must be VISIBLE after redeeming — the
+    // status section opens itself whenever a plan is active or a code
+    // was just redeemed. The user can still close it by hand.
+    LaunchedEffect(
+        state.isSubscriber, state.isGift,
+        state.giftCodeStatus, state.subCodeStatus,
+    ) {
+        if (state.isSubscriber || state.isGift ||
+            state.giftCodeStatus == Vpn5gPromoStatus.REDEEMED ||
+            state.subCodeStatus == Vpn5gPromoStatus.REDEEMED
+        ) {
+            statusExpanded = true
+        }
     }
 
     // Plans as published by the bot (valid entries only: id + price +
@@ -191,12 +214,13 @@ fun Vpn5gSubscriptionScreen(
             )
         }
 
-        // v1.1.15: the register-code button at the TOP of Premium —
-        // it expands the gift-code section directly below it; redeeming
-        // never navigates anywhere.
+        // v1.1.15: the register-code button at the TOP of Premium.
+        // v1.1.16: it expands the SUBSCRIPTION-code section (a
+        // purchased code is registered there, not in the gift
+        // section); redeeming never navigates anywhere.
         Vpn5gStaggeredItem(index = 2, visible = entered) {
             Button(
-                onClick = { promoExpanded = true },
+                onClick = { buyCodeExpanded = true },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Vpn5gGold,
                     contentColor = Color.Black,
@@ -208,7 +232,8 @@ fun Vpn5gSubscriptionScreen(
         }
 
         // Gift code (v1.1.14): its OWN section, separate from buying a
-        // subscription code. The code input + submit are RIGHT HERE
+        // subscription code — with its OWN entry box (v1.1.16, never a
+        // shared input). The code input + submit are RIGHT HERE
         // inline — redeeming never navigates to another page.
         Vpn5gStaggeredItem(index = 3, visible = entered) {
             Vpn5gExpandableSection(
@@ -217,14 +242,14 @@ fun Vpn5gSubscriptionScreen(
                 onToggleExpand = { promoExpanded = !promoExpanded },
             ) {
                 Text(
-                    text = stringResource(R.string.vpn5g_promo_body),
+                    text = stringResource(R.string.vpn5g_gift_body),
                     color = Vpn5gOnDarkMuted,
                     fontSize = 14.sp,
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = state.promoInput,
-                    onValueChange = onPromoInputChange,
+                    value = state.giftCodeInput,
+                    onValueChange = onGiftCodeInputChange,
                     label = { Text(stringResource(R.string.vpn5g_promo_code)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
@@ -233,7 +258,7 @@ fun Vpn5gSubscriptionScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = onRedeemPromo,
+                    onClick = onRedeemGiftCode,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Vpn5gAccent,
                         contentColor = Color.White,
@@ -242,170 +267,12 @@ fun Vpn5gSubscriptionScreen(
                 ) {
                     Text(text = stringResource(R.string.vpn5g_promo_redeem), fontSize = 16.sp)
                 }
-                when (state.promoStatus) {
-                    Vpn5gPromoStatus.VALID -> {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_promo_valid),
-                            color = Color(0xFF4ADE80),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Button(
-                            onClick = onOpenPromoBot,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Vpn5gAccent,
-                                contentColor = Color.White,
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(text = stringResource(R.string.vpn5g_promo_confirm_bot), fontSize = 16.sp)
-                        }
-                    }
-                    Vpn5gPromoStatus.UNKNOWN_CODE -> {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_promo_unknown),
-                            color = Color(0xFFF87171),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Vpn5gPromoStatus.EXHAUSTED -> {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_promo_exhausted),
-                            color = Color(0xFFF87171),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Vpn5gPromoStatus.ALREADY_REDEEMED -> {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_promo_already),
-                            color = Color(0xFFF87171),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Vpn5gPromoStatus.INVALID -> {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_promo_invalid),
-                            color = Color(0xFFF87171),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Vpn5gPromoStatus.REDEEMED -> {
-                        // v1.1.12: the gift code activated the subscription
-                        // immediately — plan + remaining days prominent.
-                        // The bot button below is OPTIONAL: it only lets
-                        // the bot decrement remaining_uses server-side.
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_promo_redeemed),
-                            color = Color(0xFF4ADE80),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        val activated = state.userSubscription
-                        if (activated != null && state.isSubscriber) {
-                            Spacer(Modifier.height(8.dp))
-                            ownPlanName?.let { plan ->
-                                Text(
-                                    text = stringResource(R.string.vpn5g_subscription_plan, plan),
-                                    color = Vpn5gOnDark,
-                                    fontSize = 15.sp,
-                                )
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = stringResource(
-                                    R.string.vpn5g_subscription_days,
-                                    Vpn5gSubscriptionStatus.remainingDays(
-                                        activated,
-                                        System.currentTimeMillis() / 1000,
-                                    ),
-                                ),
-                                color = Vpn5gOnDark,
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        } else if (activated != null && state.isGift) {
-                            // v1.1.14: a gift-tier redemption shows its
-                            // remaining HOURS, not days.
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                text = stringResource(
-                                    R.string.vpn5g_gift_remaining_hours,
-                                    state.giftRemainingHours,
-                                ),
-                                color = Vpn5gOnDark,
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_promo_bot_note),
-                            color = Vpn5gOnDarkMuted,
-                            fontSize = 13.sp,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Button(
-                            onClick = onOpenPromoBot,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Vpn5gAccent,
-                                contentColor = Color.White,
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(text = stringResource(R.string.vpn5g_promo_confirm_bot), fontSize = 16.sp)
-                        }
-                    }
-                    Vpn5gPromoStatus.EXPIRED -> {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_promo_expired),
-                            color = Color(0xFFF87171),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Vpn5gPromoStatus.NOT_YOURS -> {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_promo_not_yours),
-                            color = Color(0xFFF87171),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Vpn5gPromoStatus.NOT_SIGNED_IN -> {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_promo_not_signed_in),
-                            color = Color(0xFFF87171),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Button(
-                            onClick = onOpenAuth,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Vpn5gAccent,
-                                contentColor = Color.White,
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(text = stringResource(R.string.vpn5g_auth_title), fontSize = 16.sp)
-                        }
-                    }
-                    Vpn5gPromoStatus.IDLE -> Unit
-                }
+                Vpn5gCodeStatusBlock(
+                    status = state.giftCodeStatus,
+                    state = state,
+                    onOpenPromoBot = onOpenPromoBot,
+                    onOpenAuth = onOpenAuth,
+                )
             }
         }
 
@@ -748,7 +615,9 @@ fun Vpn5gSubscriptionScreen(
 
         // Buy a subscription code (v1.1.14): a SEPARATE section from the
         // gift-code section above — buying happens through the bot; the
-        // app never sells a code itself.
+        // app never sells a code itself. v1.1.16: a PURCHASED code is
+        // redeemed HERE, in its own entry box — never in the gift
+        // section's box.
         Vpn5gStaggeredItem(index = 8, visible = entered) {
             Vpn5gExpandableSection(
                 title = stringResource(R.string.vpn5g_buy_code_title),
@@ -756,9 +625,36 @@ fun Vpn5gSubscriptionScreen(
                 onToggleExpand = { buyCodeExpanded = !buyCodeExpanded },
             ) {
                 Text(
-                    text = stringResource(R.string.vpn5g_buy_code_body),
+                    text = stringResource(R.string.vpn5g_sub_code_body),
                     color = Vpn5gOnDarkMuted,
                     fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = state.subCodeInput,
+                    onValueChange = onSubCodeInputChange,
+                    label = { Text(stringResource(R.string.vpn5g_promo_code)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                    colors = vpn5gPromoFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = onRedeemSubCode,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Vpn5gAccent,
+                        contentColor = Color.White,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(text = stringResource(R.string.vpn5g_promo_redeem), fontSize = 16.sp)
+                }
+                Vpn5gCodeStatusBlock(
+                    status = state.subCodeStatus,
+                    state = state,
+                    onOpenPromoBot = onOpenPromoBot,
+                    onOpenAuth = onOpenAuth,
                 )
                 Spacer(Modifier.height(8.dp))
                 Button(
@@ -1113,3 +1009,194 @@ private fun vpn5gPromoFieldColors() = androidx.compose.material3.OutlinedTextFie
     unfocusedBorderColor = Vpn5gOnDarkMuted,
     cursorColor = Vpn5gAccentLight,
 )
+
+/**
+ * Redeem-result block shared by the gift and subscription code
+ * sections (v1.1.16): one status display, two entry boxes. On
+ * REDEEMED it shows the activated plan + remaining time right where
+ * the code was entered, so the active plan is visible immediately.
+ */
+@Composable
+private fun Vpn5gCodeStatusBlock(
+    status: Vpn5gPromoStatus,
+    state: Vpn5gHomeUiState,
+    onOpenPromoBot: () -> Unit,
+    onOpenAuth: () -> Unit,
+) {
+    val ownPlanName = state.userSubscription?.plan?.let { planId ->
+        state.plans?.firstOrNull { it.id == planId }?.name_fa ?: planId
+    }
+    when (status) {
+        Vpn5gPromoStatus.VALID -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_valid),
+                color = Color(0xFF4ADE80),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onOpenPromoBot,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Vpn5gAccent,
+                    contentColor = Color.White,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(text = stringResource(R.string.vpn5g_promo_confirm_bot), fontSize = 16.sp)
+            }
+        }
+        Vpn5gPromoStatus.UNKNOWN_CODE -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_unknown),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Vpn5gPromoStatus.EXHAUSTED -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_exhausted),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Vpn5gPromoStatus.ALREADY_REDEEMED -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_already),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Vpn5gPromoStatus.INVALID -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_invalid),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Vpn5gPromoStatus.REDEEMED -> {
+            // v1.1.12: the gift code activated the subscription
+            // immediately — plan + remaining days prominent.
+            // The bot button below is OPTIONAL: it only lets
+            // the bot decrement remaining_uses server-side.
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_redeemed),
+                color = Color(0xFF4ADE80),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            val activated = state.userSubscription
+            if (activated != null && state.isSubscriber) {
+                Spacer(Modifier.height(8.dp))
+                ownPlanName?.let { plan ->
+                    Text(
+                        text = stringResource(R.string.vpn5g_subscription_plan, plan),
+                        color = Vpn5gOnDark,
+                        fontSize = 15.sp,
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(
+                        R.string.vpn5g_subscription_days,
+                        Vpn5gSubscriptionStatus.remainingDays(
+                            activated,
+                            System.currentTimeMillis() / 1000,
+                        ),
+                    ),
+                    color = Vpn5gOnDark,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            } else if (activated != null && state.isGift) {
+                // v1.1.14: a gift-tier redemption shows its
+                // remaining HOURS, not days.
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(
+                        R.string.vpn5g_gift_remaining_hours,
+                        state.giftRemainingHours,
+                    ),
+                    color = Vpn5gOnDark,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_bot_note),
+                color = Vpn5gOnDarkMuted,
+                fontSize = 13.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onOpenPromoBot,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Vpn5gAccent,
+                    contentColor = Color.White,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(text = stringResource(R.string.vpn5g_promo_confirm_bot), fontSize = 16.sp)
+            }
+        }
+        Vpn5gPromoStatus.EXPIRED -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_expired),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Vpn5gPromoStatus.NOT_YOURS -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_not_yours),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Vpn5gPromoStatus.NOT_SIGNED_IN -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_not_signed_in),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onOpenAuth,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Vpn5gAccent,
+                    contentColor = Color.White,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(text = stringResource(R.string.vpn5g_auth_title), fontSize = 16.sp)
+            }
+        }
+        Vpn5gPromoStatus.WRONG_SECTION -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_wrong_section),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Vpn5gPromoStatus.IDLE -> Unit
+    }
+}

@@ -9,6 +9,7 @@ import com.v2ray.ang.AppConfig.ANG_PACKAGE
 import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
+import com.v2ray.ang.handler.vpn5g.Vpn5gCrashHandler
 import com.v2ray.ang.ui.compose.ThemeManager
 import kotlin.concurrent.thread
 
@@ -35,6 +36,12 @@ class AngApplication : Application() {
      */
     override fun onCreate() {
         super.onCreate()
+
+        // v1.1.16: record uncaught exceptions to a shareable file
+        // BEFORE anything else runs, so a crash anywhere — including
+        // the connect chain — leaves a report behind. The handler
+        // chains to Android's default, so the crash dialog still shows.
+        Vpn5gCrashHandler.install(this)
 
         MmkvManager.initialize(this)
 

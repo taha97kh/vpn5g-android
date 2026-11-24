@@ -13,6 +13,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.FREE_SERVER_COUNT
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.LIVE_JSON
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUBSCRIPTION_REMARKS
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUB_TXT
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.normalizeCountry
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
@@ -44,6 +45,178 @@ object Vpn5gSync {
         val uri: String,
         val country: String,
     )
+
+    /**
+     * Parse + validate + dedupe one candidate list (v1.1.16: shared by
+     * the full refresh and the quick first-screen refresh). Returns the
+     * unique (profile, candidate) pairs and the invalid count. Invalid
+     * configs are dropped here — never pinged, never stored, never
+     * shown (v1.1.4 §5). Dedupe is by server identity
+     * (scheme://host:port:uuid-or-password), not by raw URI text.
+     */
+    private fun parseValidateCandidates(
+        candidates: List<Candidate>,
+        subId: String,
+    ): Pair<List<Pair<ProfileItem, Candidate>>, Int> {
+        // Parse first (local, cheap), then validate, then TCP-ping the
+        // parsed host:port.
+        val parsed = candidates.mapNotNull { candidate ->
+            val profile = try {
+                AngConfigManager.parseConfig(candidate.uri, subId, null)
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "Vpn5gSync: parse failed", e)
+                null
+            } ?: return@mapNotNull null
+            profile.country = candidate.country
+            profile to candidate
+        }
+
+        var invalid = 0
+        val validated = parsed.mapNotNull { (profile, candidate) ->
+            val validation = Vpn5gServerValidator.validate(profile)
+            if (!validation.isValid) {
+                invalid++
+                return@mapNotNull null
+            }
+            Vpn5gServerValidator.normalize(profile)
+            profile to candidate
+        }
+        val unique = validated.distinctBy { (profile, _) ->
+            Vpn5gServerValidator.dedupeKey(profile)
+        }
+        return unique to invalid
+    }
+
+    /**
+     * TCP-pings the candidates (8-way concurrency, 1.5 s each) and
+     * returns only the live ones. Shared by both refresh paths.
+     */
+    private suspend fun tcpPingCandidates(
+        unique: List<Pair<ProfileItem, Candidate>>,
+    ): List<Triple<ProfileItem, Long, String>> = coroutineScope {
+        val semaphore = Semaphore(MAX_CONCURRENT_PINGS)
+        val pinged = unique.map { (profile, _) ->
+            async {
+                semaphore.withPermit {
+                    val host = profile.server.orEmpty()
+                    val port = profile.serverPort?.toIntOrNull() ?: -1
+                    val delay = if (host.isBlank() || port <= 0) {
+                        -1L
+                    } else {
+                        SpeedtestManager.socketConnectTime(host, port, PING_TIMEOUT_MS)
+                    }
+                    Triple(profile, delay, profile.country)
+                }
+            }
+        }.awaitAll()
+        // HARD RULE: dead configs (ping < 0) are never stored or shown.
+        pinged.filter { it.second >= 0 }
+    }
+
+    /**
+     * Saves the TCP-live profiles, real-probes the fastest batch, and
+     * returns (per-country counts, real-pinged count). Shared by both
+     * refresh paths; [probeCount]/[probeBudgetMs] are the full-refresh
+     * values (24 / 45 s) or the quick values (12 / 8 s). The stored
+     * ping of a verified server becomes the REAL through-the-proxy
+     * delay; a server that fails the real test has its ping withdrawn
+     * so it is never free or auto-picked this round.
+     */
+    private suspend fun publishLiveProfiles(
+        context: Context,
+        live: List<Triple<ProfileItem, Long, String>>,
+        subId: String,
+        skipRealProbe: Boolean,
+        probeCount: Int,
+        probeBudgetMs: Long,
+        onProgress: ((Vpn5gStartupProgress.Stage, Float) -> Unit)?,
+    ): Pair<Map<String, Int>, Int> {
+        val profiles = linkedMapOf<String, ProfileItem>()
+        val rawConfigs = mutableMapOf<String, String>()
+        val perCountry = mutableMapOf<String, Int>()
+        live.forEach { (profile, _, country) ->
+            val guid = Utils.getUuid()
+            profiles[guid] = profile
+            rawConfigs[guid] = ""
+            val key = normalizeCountry(country).ifEmpty { "بین‌الملل" }
+            perCountry[key] = (perCountry[key] ?: 0) + 1
+        }
+
+        if (profiles.isNotEmpty()) {
+            MmkvManager.saveServerProfiles(
+                profiles = profiles,
+                rawConfigs = rawConfigs,
+                subscriptionId = subId,
+                append = false,
+            )
+            // Record the measured ping for the home screen.
+            live.forEachIndexed { index, (_, delay, _) ->
+                val guid = profiles.keys.elementAt(index)
+                MmkvManager.encodeServerTestDelayMillis(guid, delay)
+            }
+        }
+
+        // v1.1.7 real ping: a TCP connect only proves a handshake
+        // completed — on a filtered network a middlebox answers it
+        // in-transit while the protocol handshake never completes, so
+        // a dead server can show 1 ms. The fastest TCP-pinged
+        // candidates are therefore put through a real through-the-proxy
+        // test; only servers that pass it get a shown ping, the free
+        // tier, or an auto pick. Candidates already proven in an
+        // earlier refresh are not re-tested (evidence is keyed by
+        // server identity, which survives a refresh).
+        var realPingCount = 0
+        if (profiles.isNotEmpty()) {
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.REAL_PROBE, 0f)
+            if (!skipRealProbe) {
+                val allCandidates = live.mapIndexed { index, (profile, _, _) ->
+                    val guid = profiles.keys.elementAt(index)
+                    Vpn5gRealPing.RealPingCandidate(
+                        guid,
+                        Vpn5gServerValidator.dedupeKey(profile),
+                    )
+                }
+                val tcpDelays = live.mapIndexed { index, (_, delay, _) ->
+                    profiles.keys.elementAt(index) to delay
+                }.toMap()
+                val probeCandidates = Vpn5gRealPing.selectCandidates(
+                    allCandidates,
+                    tcpDelays,
+                    Vpn5gRealPing.loadRealPingKeys(),
+                    probeCount,
+                )
+                if (probeCandidates.isNotEmpty()) {
+                    val probe = Vpn5gRealPing.probeCandidates(
+                        context, probeCandidates, probeBudgetMs
+                    )
+                    if (probe.verifiedKeys.isNotEmpty()) {
+                        Vpn5gRealPing.addRealPingKeys(probe.verifiedKeys)
+                    }
+                    probe.realDelays.forEach { (guid, delay) ->
+                        MmkvManager.encodeServerTestDelayMillis(guid, delay)
+                    }
+                    probe.failedGuids.forEach { guid ->
+                        MmkvManager.encodeServerTestDelayMillis(guid, -1L)
+                    }
+                    LogUtil.i(
+                        AppConfig.TAG,
+                        "Vpn5gSync: real ping " +
+                            "${probe.verifiedKeys.size}/${probe.tested} verified",
+                    )
+                }
+            }
+            val realKeys = Vpn5gRealPing.loadRealPingKeys()
+            realPingCount = live.count { (profile, _, _) ->
+                Vpn5gServerValidator.dedupeKey(profile) in realKeys
+            }
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.REAL_PROBE, 1f)
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.SAVING, 1f)
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.DONE, 1f)
+        } else {
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.DONE, 1f)
+        }
+        return perCountry to realPingCount
+    }
 
     /**
      * Finds the "VPN5G IRBOT" subscription group, creating it on first use.
@@ -133,151 +306,26 @@ object Vpn5gSync {
 
             val subId = ensureSubscriptionId()
 
-            // Parse first (local, cheap), then validate, then TCP-ping the
-            // parsed host:port. Invalid configs are dropped here — never
-            // pinged, never stored, never shown (v1.1.4 §5).
-            val parsed = candidates.mapNotNull { candidate ->
-                val profile = try {
-                    AngConfigManager.parseConfig(candidate.uri, subId, null)
-                } catch (e: Exception) {
-                    LogUtil.e(AppConfig.TAG, "Vpn5gSync: parse failed", e)
-                    null
-                } ?: return@mapNotNull null
-                profile.country = candidate.country
-                profile to candidate
-            }
-
-            var invalid = 0
-            val validated = parsed.mapNotNull { (profile, candidate) ->
-                val validation = Vpn5gServerValidator.validate(profile)
-                if (!validation.isValid) {
-                    invalid++
-                    return@mapNotNull null
-                }
-                Vpn5gServerValidator.normalize(profile)
-                profile to candidate
-            }
-            // Dedupe by server identity (scheme://host:port:uuid-or-password),
-            // not by raw URI text — the same server under a different remark
-            // is one server.
-            val unique = validated.distinctBy { (profile, _) ->
-                Vpn5gServerValidator.dedupeKey(profile)
-            }
+            val (unique, invalid) = parseValidateCandidates(candidates, subId)
             if (invalid > 0) {
                 LogUtil.i(AppConfig.TAG, "Vpn5gSync: dropped $invalid invalid configs")
             }
 
-            val semaphore = Semaphore(MAX_CONCURRENT_PINGS)
             onProgress?.invoke(Vpn5gStartupProgress.Stage.PARSE_VALIDATE, 1f)
             onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 0f)
-            val pinged = unique.map { (profile, _) ->
-                async {
-                    semaphore.withPermit {
-                        val host = profile.server.orEmpty()
-                        val port = profile.serverPort?.toIntOrNull() ?: -1
-                        val delay = if (host.isBlank() || port <= 0) {
-                            -1L
-                        } else {
-                            SpeedtestManager.socketConnectTime(host, port, PING_TIMEOUT_MS)
-                        }
-                        Triple(profile, delay, profile.country)
-                    }
-                }
-            }.awaitAll()
-
-            // HARD RULE: dead configs (ping < 0) are never stored or shown.
-            val live = pinged.filter { it.second >= 0 }
-            val dropped = pinged.size - live.size
+            val live = tcpPingCandidates(unique)
+            val dropped = unique.size - live.size
             onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 1f)
 
-            val profiles = linkedMapOf<String, ProfileItem>()
-            val rawConfigs = mutableMapOf<String, String>()
-            val perCountry = mutableMapOf<String, Int>()
-            live.forEach { (profile, _, country) ->
-                val guid = Utils.getUuid()
-                profiles[guid] = profile
-                rawConfigs[guid] = ""
-                val key = normalizeCountry(country).ifEmpty { "بین‌الملل" }
-                perCountry[key] = (perCountry[key] ?: 0) + 1
-            }
-
-            if (profiles.isNotEmpty()) {
-                MmkvManager.saveServerProfiles(
-                    profiles = profiles,
-                    rawConfigs = rawConfigs,
-                    subscriptionId = subId,
-                    append = false,
-                )
-                // Record the measured ping for the home screen.
-                live.forEachIndexed { index, (_, delay, _) ->
-                    val guid = profiles.keys.elementAt(index)
-                    MmkvManager.encodeServerTestDelayMillis(guid, delay)
-                }
-            }
-
-            // v1.1.7 real ping: a TCP connect only proves a handshake
-            // completed — on a filtered network a middlebox answers it
-            // in-transit while the protocol handshake never completes, so
-            // a dead server can show 1 ms. The fastest TCP-pinged
-            // candidates are therefore put through a real through-the-proxy
-            // test; only servers that pass it get a shown ping, the free
-            // tier, or an auto pick. Candidates already proven in an
-            // earlier refresh are not re-tested (evidence is keyed by
-            // server identity, which survives a refresh).
-            var realPingCount = 0
-            if (profiles.isNotEmpty()) {
-                onProgress?.invoke(Vpn5gStartupProgress.Stage.REAL_PROBE, 0f)
-                if (!skipRealProbe) {
-                    val allCandidates = live.mapIndexed { index, (profile, _, _) ->
-                        val guid = profiles.keys.elementAt(index)
-                        Vpn5gRealPing.RealPingCandidate(
-                            guid,
-                            Vpn5gServerValidator.dedupeKey(profile),
-                        )
-                    }
-                    val tcpDelays = live.mapIndexed { index, (_, delay, _) ->
-                        profiles.keys.elementAt(index) to delay
-                    }.toMap()
-                    val probeCandidates = Vpn5gRealPing.selectCandidates(
-                        allCandidates,
-                        tcpDelays,
-                        Vpn5gRealPing.loadRealPingKeys(),
-                    )
-                    if (probeCandidates.isNotEmpty()) {
-                        val probe = Vpn5gRealPing.probeCandidates(context, probeCandidates)
-                        if (probe.verifiedKeys.isNotEmpty()) {
-                            Vpn5gRealPing.addRealPingKeys(probe.verifiedKeys)
-                        }
-                        // The stored ping of a verified server becomes the
-                        // REAL through-the-proxy delay (not the TCP connect
-                        // time): the number the app shows is the number
-                        // that was actually measured through the proxy.
-                        probe.realDelays.forEach { (guid, delay) ->
-                            MmkvManager.encodeServerTestDelayMillis(guid, delay)
-                        }
-                        // A server that fails the real test is dead for our
-                        // purposes even though TCP answered: withdraw its
-                        // ping so it is never free or auto-picked this round.
-                        probe.failedGuids.forEach { guid ->
-                            MmkvManager.encodeServerTestDelayMillis(guid, -1L)
-                        }
-                        LogUtil.i(
-                            AppConfig.TAG,
-                            "Vpn5gSync: real ping " +
-                                "${probe.verifiedKeys.size}/${probe.tested} verified",
-                        )
-                    }
-                }
-                val realKeys = Vpn5gRealPing.loadRealPingKeys()
-                realPingCount = live.count { (profile, _, _) ->
-                    Vpn5gServerValidator.dedupeKey(profile) in realKeys
-                }
-                onProgress?.invoke(Vpn5gStartupProgress.Stage.REAL_PROBE, 1f)
-                onProgress?.invoke(Vpn5gStartupProgress.Stage.SAVING, 1f)
-                onProgress?.invoke(Vpn5gStartupProgress.Stage.DONE, 1f)
-            } else {
-                onProgress?.invoke(Vpn5gStartupProgress.Stage.DONE, 1f)
-            }
+            val (perCountry, realPingCount) = publishLiveProfiles(
+                context = context,
+                live = live,
+                subId = subId,
+                skipRealProbe = skipRealProbe,
+                probeCount = Vpn5gConstants.REAL_PING_CANDIDATES,
+                probeBudgetMs = Vpn5gConstants.REAL_PING_BUDGET_MS,
+                onProgress = onProgress,
+            )
 
             Vpn5gSyncResult(
                 fetched = candidates.size,
@@ -292,6 +340,181 @@ object Vpn5gSync {
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Vpn5gSync: refresh failed", e)
             Vpn5gSyncResult(offline = true)
+        }
+    }
+
+    // v1.1.16 (first screen < 20 s): the quick first-screen refresh.
+    // The full refresh fetches 8 sources SEQUENTIALLY (10 s timeout
+    // each), TCP-pings everything and real-probes 24 candidates with a
+    // 45 s budget — minutes on a fresh install, and the empty-cache
+    // path blocked entry on it. The quick path fetches ONLY the two
+    // small HF sources (live_configs.json + sub.txt) IN PARALLEL with
+    // 5 s timeouts, validates, TCP-pings, and real-probes just the
+    // fastest 12 with an 8 s budget, inside a 15 s total budget.
+    // Whatever verifies becomes the free list immediately; the full
+    // refresh still runs afterwards in the background and merges the
+    // rest. The ViewModel additionally bounds the whole first-screen
+    // wait at 20 s (STARTUP_DEADLINE_MS in Vpn5gMainActivity).
+    private const val QUICK_FETCH_TIMEOUT_MS = 5_000
+    private const val QUICK_PROBE_CANDIDATES = 12
+    private const val QUICK_PROBE_BUDGET_MS = 8_000L
+    /** The whole quick path must finish inside this budget. */
+    const val QUICK_TOTAL_BUDGET_MS = 15_000L
+
+    /**
+     * The quick probe batch (pure): the fastest [QUICK_PROBE_CANDIDATES]
+     * candidates by TCP delay whose identity has not already been proven
+     * real. Covered by JVM unit tests.
+     */
+    fun selectQuickCandidates(
+        candidates: List<Vpn5gRealPing.RealPingCandidate>,
+        tcpDelays: Map<String, Long>,
+        knownReal: Set<String>,
+    ): List<Vpn5gRealPing.RealPingCandidate> {
+        return Vpn5gRealPing.selectCandidates(
+            candidates, tcpDelays, knownReal, QUICK_PROBE_CANDIDATES,
+        )
+    }
+
+    /**
+     * Quick first-screen refresh (v1.1.16). Same contract as [refresh]
+     * but bounded: two small sources in parallel, a capped sub.txt
+     * sample, and a 12-candidate / 8 s real probe. When BOTH small
+     * sources fail, the STORED profiles (bundled fallback on a fresh
+     * install) are real-probed instead, so the free list can still
+     * verify without any fetch succeeding. Never throws.
+     */
+    suspend fun quickRefresh(
+        context: Context,
+        skipRealProbe: Boolean = false,
+        onProgress: ((Vpn5gStartupProgress.Stage, Float) -> Unit)? = null,
+    ): Vpn5gSyncResult = withContext(Dispatchers.IO) {
+        try {
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_CONFIG, 0f)
+            val remoteConfig = Vpn5gRemoteConfig.fetch()
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_CONFIG, 1f)
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_SOURCES, 0f)
+            val bodies = coroutineScope {
+                listOf(LIVE_JSON, SUB_TXT).map { url ->
+                    async {
+                        url to runCatching {
+                            HttpUtil.getUrlContent(
+                                UrlContentRequest(url = url, timeout = QUICK_FETCH_TIMEOUT_MS)
+                            )
+                        }.getOrNull()
+                    }
+                }.awaitAll().toMap()
+            }
+            val candidates = mutableListOf<Candidate>()
+            var anyFetchOk = false
+            bodies.forEach { (url, body) ->
+                if (body.isNullOrBlank()) return@forEach
+                anyFetchOk = true
+                if (url == LIVE_JSON) {
+                    candidates += parseLiveJson(body)
+                } else {
+                    val text = decodeSubscriptionBody(body)
+                    candidates += parseUriLines(text, 100)
+                }
+            }
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_SOURCES, 1f)
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.PARSE_VALIDATE, 0f)
+            val subId = ensureSubscriptionId()
+            val (unique, invalid) = parseValidateCandidates(candidates, subId)
+            if (invalid > 0) {
+                LogUtil.i(AppConfig.TAG, "Vpn5gSync: quick dropped $invalid invalid configs")
+            }
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.PARSE_VALIDATE, 1f)
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 0f)
+            val live = tcpPingCandidates(unique)
+            val dropped = unique.size - live.size
+            onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 1f)
+            if (live.isEmpty()) {
+                // Nothing usable from the network: verify the STORED
+                // profiles (bundled fallback) instead — the real probe
+                // IS the test there, no TCP stage needed.
+                val storedCount = probeStoredProfiles(context, subId, skipRealProbe)
+                onProgress?.invoke(Vpn5gStartupProgress.Stage.DONE, 1f)
+                return@withContext Vpn5gSyncResult(
+                    fetched = candidates.size,
+                    live = 0,
+                    dropped = dropped,
+                    invalid = invalid,
+                    realPingCount = storedCount,
+                    offline = !anyFetchOk,
+                    notice = remoteConfig.notice,
+                )
+            }
+            val (perCountry, realPingCount) = publishLiveProfiles(
+                context = context,
+                live = live,
+                subId = subId,
+                skipRealProbe = skipRealProbe,
+                probeCount = QUICK_PROBE_CANDIDATES,
+                probeBudgetMs = QUICK_PROBE_BUDGET_MS,
+                onProgress = onProgress,
+            )
+            Vpn5gSyncResult(
+                fetched = candidates.size,
+                live = live.size,
+                dropped = dropped,
+                invalid = invalid,
+                realPingCount = realPingCount,
+                perCountry = perCountry,
+                offline = false,
+                notice = remoteConfig.notice,
+            )
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Vpn5gSync: quick refresh failed", e)
+            Vpn5gSyncResult(offline = true)
+        }
+    }
+
+    /**
+     * Real-probes the stored profiles (bundled fallback) directly: the
+     * first [QUICK_PROBE_CANDIDATES] unproven identities, bounded by
+     * [QUICK_PROBE_BUDGET_MS]. Verified identities join the real-ping
+     * set (so the servers become free / auto-pickable); failed GUIDs
+     * have their ping withdrawn. Returns the verified count. Never
+     * throws.
+     */
+    private suspend fun probeStoredProfiles(
+        context: Context,
+        subId: String,
+        skipRealProbe: Boolean,
+    ): Int {
+        if (skipRealProbe) return 0
+        return try {
+            val guids = MmkvManager.decodeServerList(subId)
+            if (guids.isEmpty()) return 0
+            val candidates = guids.mapNotNull { guid ->
+                val profile = MmkvManager.decodeServerConfig(guid) ?: return@mapNotNull null
+                Vpn5gRealPing.RealPingCandidate(
+                    guid,
+                    Vpn5gServerValidator.dedupeKey(profile),
+                )
+            }
+            val batch = Vpn5gRealPing.selectCandidates(
+                candidates,
+                emptyMap(),
+                Vpn5gRealPing.loadRealPingKeys(),
+                QUICK_PROBE_CANDIDATES,
+            )
+            if (batch.isEmpty()) return 0
+            val probe = Vpn5gRealPing.probeCandidates(context, batch, QUICK_PROBE_BUDGET_MS)
+            if (probe.verifiedKeys.isNotEmpty()) {
+                Vpn5gRealPing.addRealPingKeys(probe.verifiedKeys)
+            }
+            probe.realDelays.forEach { (guid, delay) ->
+                MmkvManager.encodeServerTestDelayMillis(guid, delay)
+            }
+            probe.failedGuids.forEach { guid ->
+                MmkvManager.encodeServerTestDelayMillis(guid, -1L)
+            }
+            probe.verifiedKeys.size
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Vpn5gSync: stored probe failed", e)
+            0
         }
     }
 

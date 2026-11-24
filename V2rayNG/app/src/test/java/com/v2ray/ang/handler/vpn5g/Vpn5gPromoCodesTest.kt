@@ -302,4 +302,72 @@ class Vpn5gPromoCodesTest {
             )
         )
     }
+
+    // v1.1.16: gift codes and purchased subscription codes have
+    // SEPARATE sections — the kind decides which box a code belongs in.
+    @Test
+    fun test_code_kind_gift_hours_is_gift() {
+        assertEquals(
+            Vpn5gPromoCodes.CodeKind.GIFT,
+            Vpn5gPromoCodes.codeKind(
+                PromoCodeRemote(code = "G1", type = "gift", gift_hours = 24)
+            ),
+        )
+        assertEquals(
+            Vpn5gPromoCodes.CodeKind.GIFT,
+            Vpn5gPromoCodes.codeKind(
+                PromoCodeRemote(code = "G2", type = "gift", gift_days = 7)
+            ),
+        )
+    }
+
+    @Test
+    fun test_code_kind_plan_grant_is_subscription() {
+        // Live codes 584285 / 446843 / 867110 / 328441 / 352755 all
+        // grant a full plan — they belong in the subscription section.
+        assertEquals(
+            Vpn5gPromoCodes.CodeKind.SUBSCRIPTION,
+            Vpn5gPromoCodes.codeKind(
+                PromoCodeRemote(code = "584285", type = "gift", plan = "sub_12", gift_hours = 24)
+            ),
+        )
+        assertEquals(
+            Vpn5gPromoCodes.CodeKind.SUBSCRIPTION,
+            Vpn5gPromoCodes.codeKind(
+                PromoCodeRemote(code = "446843", type = "gift", tier = "sub_1", gift_hours = 24)
+            ),
+        )
+    }
+
+    @Test
+    fun test_code_kind_discount_and_unknown() {
+        assertEquals(
+            Vpn5gPromoCodes.CodeKind.DISCOUNT,
+            Vpn5gPromoCodes.codeKind(
+                PromoCodeRemote(code = "SAVE20", type = "discount", discount_percent = 20)
+            ),
+        )
+        // A gift with no duration grants nothing — unknown section.
+        assertEquals(
+            Vpn5gPromoCodes.CodeKind.UNKNOWN,
+            Vpn5gPromoCodes.codeKind(
+                PromoCodeRemote(code = "BROKEN", type = "gift")
+            ),
+        )
+        assertEquals(
+            Vpn5gPromoCodes.CodeKind.UNKNOWN,
+            Vpn5gPromoCodes.codeKind(PromoCodeRemote(code = "X")),
+        )
+    }
+
+    @Test
+    fun test_find_code_is_case_insensitive_and_trimmed() {
+        val codes = listOf(
+            PromoCodeRemote(code = "AbC123", type = "gift", gift_hours = 5),
+        )
+        assertEquals("AbC123", Vpn5gPromoCodes.findCode("  abc123 ", codes)?.code)
+        assertNull(Vpn5gPromoCodes.findCode("nope", codes))
+        assertNull(Vpn5gPromoCodes.findCode("", codes))
+        assertNull(Vpn5gPromoCodes.findCode("AbC123", null))
+    }
 }

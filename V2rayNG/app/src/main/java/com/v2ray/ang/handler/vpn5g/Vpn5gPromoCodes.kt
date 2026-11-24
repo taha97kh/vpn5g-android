@@ -131,6 +131,57 @@ object Vpn5gPromoCodes {
     }
 
     /**
+     * Which Premium section a code belongs in (v1.1.16): gift codes and
+     * purchased subscription codes have SEPARATE sections with their
+     * own entry boxes, so a code typed in the wrong section is refused
+     * with WRONG_SECTION instead of silently redeeming in the wrong
+     * place. Pure, JVM-tested.
+     *
+     * - GIFT: type "gift" with no plan id and no plan tier — it grants
+     *   the middle GIFT tier (hours, top-50 pool).
+     * - SUBSCRIPTION: type "gift" whose `plan` or `tier` names a full
+     *   plan (sub_1 / sub_3 / sub_6 / sub_12) — a purchased code.
+     * - DISCOUNT: type "discount" — goes through the bot, never a
+     *   section redeem.
+     * - UNKNOWN: anything else (missing type, no usable benefit).
+     */
+    enum class CodeKind { GIFT, SUBSCRIPTION, DISCOUNT, UNKNOWN }
+
+    fun codeKind(entry: PromoCodeRemote): CodeKind {
+        return when (entry.type?.trim()?.lowercase()) {
+            "discount" -> CodeKind.DISCOUNT
+            "gift" -> {
+                val plan = entry.plan?.trim().orEmpty()
+                val tier = entry.tier?.trim().orEmpty()
+                if (plan.startsWith("sub_") || tier.startsWith("sub_")) {
+                    CodeKind.SUBSCRIPTION
+                } else if (giftDurationSeconds(entry) != null) {
+                    CodeKind.GIFT
+                } else {
+                    CodeKind.UNKNOWN
+                }
+            }
+            else -> CodeKind.UNKNOWN
+        }
+    }
+
+    /**
+     * Finds [rawInput] in the fetched code list (case-insensitive,
+     * trimmed), or null. Pure lookup — the kind pre-check in the
+     * ViewModel uses this BEFORE the server RPC, so a code typed in
+     * the wrong section is refused without ever marking it used
+     * server-side.
+     */
+    fun findCode(
+        rawInput: String,
+        codes: List<PromoCodeRemote>?,
+    ): PromoCodeRemote? {
+        val input = rawInput.trim().uppercase()
+        if (input.isEmpty() || codes.isNullOrEmpty()) return null
+        return codes.firstOrNull { it.code?.trim()?.uppercase() == input }
+    }
+
+    /**
      * Full redeem decision for one matched entry (v1.1.12): the old
      * checks plus sign-in, per-email ownership and expiry. Pure except
      * for the expiry parse (no I/O); covered by JVM unit tests.
