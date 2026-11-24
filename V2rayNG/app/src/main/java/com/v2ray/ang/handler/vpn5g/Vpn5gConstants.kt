@@ -105,6 +105,18 @@ object Vpn5gConstants {
      */
     const val SUPPORT_BOT_URL = "https://t.me/VPN5G_IRBot?start=support"
 
+    /**
+     * Buy deep link for a plan (v1.1.15, unique-amount contract): the
+     * app passes the selected plan id to the bot
+     * (`start=buy_sub_1` … `start=buy_sub_12`); the bot generates the
+     * UNIQUE payable amount for that order (non-round: base price +
+     * unique suffix) and tells the user — the app never shows a round
+     * plan price as the amount to pay in a payment context, and never
+     * generates a unique amount itself (uniqueness must be
+     * coordinated by the bot to avoid collisions).
+     */
+    fun buyUrl(planId: String): String = "$BOT_URL?start=buy_${planId.trim()}"
+
     const val SUBSCRIPTION_REMARKS = "VPN5G IRBOT"
 
     /** Free tier: this many fastest-pinging configs are free (v1.1.2). */
@@ -264,6 +276,24 @@ object Vpn5gConstants {
 
     /** Dismiss key of the app announcement the user closed (\"\" = none). */
     const val KEY_ANNOUNCEMENT_DISMISSED = "vpn5g_announcement_dismissed"
+
+    /**
+     * Live tunnel speeds, published once a second by the :daemon
+     * notification job (v1.1.15, speeds root-cause fix): the UI process
+     * cannot query the core itself (different process), so the daemon
+     * — the single querier — publishes the rates here and the home
+     * screen reads them. [KEY_SPEED_UPDATED_AT_MS] is the publish time
+     * (epoch millis); a value older than 3 s means the tunnel is gone.
+     */
+    const val KEY_SPEED_DOWN_BPS = "vpn5g_speed_down_bps"
+    const val KEY_SPEED_UP_BPS = "vpn5g_speed_up_bps"
+    const val KEY_SPEED_UPDATED_AT_MS = "vpn5g_speed_updated_at_ms"
+
+    /** Expanded locked-country groups in Premium, persisted (v1.1.15). */
+    const val KEY_EXPANDED_COUNTRY_KEYS = "vpn5g_expanded_country_keys"
+
+    /** Per-ad impression counters, JSON {adId: {total, day, today}} (v1.1.15). */
+    const val KEY_AD_IMPRESSIONS_JSON = "vpn5g_ad_impressions_json"
 
     /** Unique WorkManager name for the 30-minute disconnect work. */
     const val DISCONNECT_WORK_NAME = "vpn5g_30min_disconnect"

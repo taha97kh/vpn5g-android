@@ -371,6 +371,183 @@ object Vpn5gAuthService {
     }
 
     /**
+     * Result of a server-side code validation (v1.1.15, RPC
+     * `validate_and_redeem_code`). The server checks existence,
+     * already-used, expiry and remaining_uses and marks the code used
+     * ATOMICALLY — a single-use code can never be reused, even from
+     * two devices at once.
+     */
+    sealed interface CodeServerResult {
+        /** Server validated + marked the code used. [plan]/[expiresAt] are the grant (gifts). */
+        data class Validated(val plan: String?, val expiresAtEpochSeconds: Long?) : CodeServerResult
+        /** Server definitively rejected the code ("unknown" | "already_used" | "expired" | "exhausted" | "not_yours"). */
+        data class Rejected(val status: String) : CodeServerResult
+        /** RPC missing / offline / unparsable — the caller falls back to the config-list check. */
+        data object Unavailable : CodeServerResult
+    }
+
+    /**
+     * Validates + redeems a subscription/gift code SERVER-side
+     * (PostgREST RPC `validate_and_redeem_code`, v1.1.15). Never
+     * throws. The bot side implements the function (see
+     * docs/app_config.md); until it exists every call returns
+     * [CodeServerResult.Unavailable] and the app falls back to the
+     * published config list — the fallback is documented, never
+     * silent.
+     */
+    suspend fun validateAndRedeemCode(code: String, email: String): CodeServerResult {
+        val result = postRaw(
+            path = "/rest/v1/rpc/validate_and_redeem_code",
+            body = """{"p_code":"${jsonEscape(code.trim().uppercase())}","p_email":"${jsonEscape(email.trim())}"}""",
+        ) ?: return CodeServerResult.Unavailable
+        if (result.first !in 200..299) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gAuthService: validate_and_redeem_code HTTP ${result.first}",
+            )
+            return CodeServerResult.Unavailable
+        }
+        return parseCodeServerResult(result.second)
+    }
+
+    /**
+     * Parses a `validate_and_redeem_code` response:
+     * `{"status":"ok","plan":"sub_12","expires_at":"2027-11-18T00:00:00+00:00"}`
+     * or `{"status":"already_used"}` (and the other reject statuses).
+     * Pure, JVM-tested. An unrecognised body is [CodeServerResult.Unavailable]
+     * (fallback), never a false success.
+     */
+    internal fun parseCodeServerResult(body: String): CodeServerResult {
+        val status = Regex("\"status\"\\s*:\\s*\"([^\"]*)\"")
+            .find(body)?.groupValues?.get(1)?.trim()?.lowercase()
+        return when (status) {
+            "ok", "valid", "validated" -> {
+                val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
+                    .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+                val expiresRaw = Regex("\"expires_at\"\\s*:\\s*\"([^\"]+)\"")
+                    .find(body)?.groupValues?.get(1)
+                val expiresAt = expiresRaw?.let { Vpn5gSubscriptionStatus.parseIsoToEpoch(it) }
+                CodeServerResult.Validated(plan, expiresAt)
+            }
+            "unknown", "already_used", "expired", "exhausted", "not_yours" ->
+                CodeServerResult.Rejected(status)
+            else -> CodeServerResult.Unavailable
+        }
+    }
+
+    /**
+     * Records a fully-viewed interstitial ad SERVER-side (PostgREST
+     * RPC `record_ad_view`, v1.1.15). True when the server stored the
+     * view; false on any failure — INCLUDING when the RPC does not
+     * exist yet (the bot side creates the table/RPC; the app must
+     * never fail, hang or block a connect over it). Best effort by
+     * design: a failed record never stops the countdown completion
+     * or the connect. Never throws.
+     */
+    suspend fun recordAdView(adId: String, email: String?): Boolean {
+        val result = postRaw(
+            path = "/rest/v1/rpc/record_ad_view",
+            body = """{"p_ad_id":"${jsonEscape(adId)}","p_email":"${jsonEscape(email.orEmpty())}"}""",
+        ) ?: return false
+        if (result.first !in 200..299) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gAuthService: record_ad_view HTTP ${result.first}",
+            )
+            return false
+        }
+        val body = result.second.trim()
+        return body == "true" || Regex("\"verified\"\\s*:\\s*true").containsMatchIn(body)
+    }
+
+    /**
+     * Records an ad-link tap SERVER-side (PostgREST RPC
+     * `record_ad_click`, v1.1.15). Same best-effort contract as
+     * [recordAdView]: a failure never blocks opening the link.
+     * Never throws.
+     */
+    suspend fun recordAdClick(adId: String, email: String?): Boolean {
+        val result = postRaw(
+            path = "/rest/v1/rpc/record_ad_click",
+            body = """{"p_ad_id":"${jsonEscape(adId)}","p_email":"${jsonEscape(email.orEmpty())}"}""",
+        ) ?: return false
+        if (result.first !in 200..299) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gAuthService: record_ad_click HTTP ${result.first}",
+            )
+            return false
+        }
+        val body = result.second.trim()
+        return body == "true" || Regex("\"verified\"\\s*:\\s*true").containsMatchIn(body)
+    }
+
+    /** Result of the server subscription lookup (v1.1.15). */
+    sealed interface ServerSubscriptionResult {
+        /** The server knows a grant for this email (plan + expiry). */
+        data class Found(val subscription: Vpn5gSubscriptionStatus.Vpn5gUserSubscription) : ServerSubscriptionResult
+        /** The server answered definitively: no grant for this email. */
+        data object None : ServerSubscriptionResult
+        /** RPC missing / offline / unparsable — the caller keeps its cache. */
+        data object Unavailable : ServerSubscriptionResult
+    }
+
+    /**
+     * Fetches the bot's subscription truth for [email] (PostgREST RPC
+     * `get_subscription_status`, v1.1.15): bot-activated plans AND
+     * redeemed gifts, as the bot recorded them centrally. Never
+     * throws. Until the bot implements the function every call
+     * returns [ServerSubscriptionResult.Unavailable] and the app
+     * keeps its existing caches.
+     */
+    suspend fun fetchServerSubscription(email: String): ServerSubscriptionResult {
+        val result = postRaw(
+            path = "/rest/v1/rpc/get_subscription_status",
+            body = """{"p_email":"${jsonEscape(email.trim())}"}""",
+        ) ?: return ServerSubscriptionResult.Unavailable
+        if (result.first !in 200..299) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gAuthService: get_subscription_status HTTP ${result.first}",
+            )
+            return ServerSubscriptionResult.Unavailable
+        }
+        return parseServerSubscription(result.second)
+    }
+
+    /**
+     * Parses a `get_subscription_status` response:
+     * `{"status":"active","plan":"sub_12","expires_at":"2027-11-18T00:00:00+00:00"}`
+     * or `{"status":"none"}`. Pure, JVM-tested. An unrecognised body
+     * is [ServerSubscriptionResult.Unavailable] (keep the cache),
+     * never a false grant or a false denial.
+     */
+    internal fun parseServerSubscription(body: String): ServerSubscriptionResult {
+        val trimmed = body.trim()
+        if (trimmed.isEmpty() || trimmed == "[]" || trimmed == "null") {
+            return ServerSubscriptionResult.None
+        }
+        val status = Regex("\"status\"\\s*:\\s*\"([^\"]*)\"")
+            .find(trimmed)?.groupValues?.get(1)?.trim()?.lowercase()
+            ?: return ServerSubscriptionResult.Unavailable
+        if (status == "none" || status == "inactive" || status == "cancelled") {
+            return ServerSubscriptionResult.None
+        }
+        val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
+            .find(trimmed)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+        val expiresRaw = Regex("\"expires_at\"\\s*:\\s*\"([^\"]+)\"")
+            .find(trimmed)?.groupValues?.get(1)
+        val expiresAt = expiresRaw?.let { Vpn5gSubscriptionStatus.parseIsoToEpoch(it) }
+        return ServerSubscriptionResult.Found(
+            Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
+                status = status,
+                expiresAtEpochSeconds = expiresAt,
+                plan = plan,
+            )
+        )
+    }
+
+    /**
      * Records the (email, ip) pair after a successful signup
      * (PostgREST RPC `register_account`). True when the server
      * stored the row; false on any failure — the caller still treats

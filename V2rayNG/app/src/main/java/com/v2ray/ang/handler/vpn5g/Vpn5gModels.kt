@@ -44,6 +44,8 @@ data class AppConfigRemote(
     val trial_hours: Int? = null,
     /** Admin-published app announcement (v1.1.5): null = none published. */
     val announcement: AnnouncementRemote? = null,
+    /** Ads: interstitial + user-submitted ads + pricing (v1.1.15). Null = no ads. */
+    val ads: AdsRemote? = null,
 )
 
 /**
@@ -63,6 +65,11 @@ data class AnnouncementRemote(
     val image_url: String? = null,
     /** Stable id for one announcement version (dismiss tracking). */
     val id: String? = null,
+    /**
+     * Optional link (v1.1.15): tapping the announcement text/image
+     * opens this URL. Null/blank = the card is not tappable.
+     */
+    val link_url: String? = null,
 )
 
 /**
@@ -85,6 +92,95 @@ object Vpn5gAnnouncement {
         return announcement.text?.trim().orEmpty()
     }
 }
+
+/**
+ * Ads, from app_config.json (v1.1.15). Everything commercial comes
+ * from here — ad content, link, duration, schedule and prices. The
+ * app never hardcodes ad content or prices: when the bot publishes
+ * no ads, no ad is shown. All fields nullable so older published
+ * configs without them still parse.
+ */
+data class AdsRemote(
+    /** Admin interstitial shown on reconnect (null = none). */
+    val interstitial: InterstitialAdRemote? = null,
+    /** User-submitted ads, approved by the admin (null = none). */
+    val user_ads: List<UserAdRemote>? = null,
+    /** Prices per ad model, set by the admin (null = not published). */
+    val pricing: AdPricingRemote? = null,
+)
+
+/**
+ * Admin interstitial ad (v1.1.15): a full-screen ad on reconnect.
+ * [duration_seconds] is admin-set, allowed range 1–20 (clamped by
+ * [Vpn5gAds.clampDuration]); [show_from_connect_number] tunes the
+ * frequency (default 2 = from the second connect in an app session);
+ * [applies_to_free_only] false includes subscribers (default true =
+ * free tier only).
+ */
+data class InterstitialAdRemote(
+    /** True when the interstitial is live. */
+    val enabled: Boolean? = null,
+    /** Countdown seconds, 1–20. Null = the 10 s default. */
+    val duration_seconds: Int? = null,
+    /** First connect number that may show it (default 2). */
+    val show_from_connect_number: Int? = null,
+    /** True = free tier only (default); false = subscribers too. */
+    val applies_to_free_only: Boolean? = null,
+    /** Ad text (Persian). Blank + no image = nothing to show. */
+    val text: String? = null,
+    /** Optional public image URL; null/blank = text only. */
+    val image_url: String? = null,
+    /** Optional link: tapping the ad opens this URL. */
+    val link_url: String? = null,
+    /** Stable id for one ad version (view/click tracking). */
+    val id: String? = null,
+)
+
+/**
+ * One user-submitted ad (v1.1.15): submitted from the bot's user
+ * panel with a preset payment, shown only after admin approval.
+ * [model] is one of "once" (1 display), "ten_times" (10 displays at
+ * different times), "hourly" (shown in set hour windows) or
+ * "monthly_daily" (monthly, 5 displays per day). The caps ARE the
+ * purchased amounts — the app never shows more impressions than
+ * purchased. [hour_windows] are [start, end) local-hour pairs.
+ */
+data class UserAdRemote(
+    /** Stable id (view/click tracking). */
+    val id: String? = null,
+    /** Ad text (Persian). */
+    val text: String? = null,
+    /** Optional public image URL. */
+    val image_url: String? = null,
+    /** Optional link: tapping the ad opens this URL. */
+    val link_url: String? = null,
+    /** "once" | "ten_times" | "hourly" | "monthly_daily". */
+    val model: String? = null,
+    /** Total displays purchased (null = unlimited). */
+    val max_impressions: Int? = null,
+    /** Displays per day purchased (null = unlimited). */
+    val impressions_per_day: Int? = null,
+    /** Hour windows as [start, end] pairs, local hours, end-exclusive. */
+    val hour_windows: List<List<Int>>? = null,
+    /** Price paid for this ad, in Toman (informational). */
+    val price_toman: Long? = null,
+    /** True when the ad is live (admin-controlled). */
+    val enabled: Boolean? = null,
+    /** True when the admin approved the ad. */
+    val approved: Boolean? = null,
+)
+
+/** Ad-model prices, set by the admin in the bot panel (v1.1.15). */
+data class AdPricingRemote(
+    /** Price of one display, in Toman. */
+    val once_toman: Long? = null,
+    /** Price of 10 displays at different times, in Toman. */
+    val ten_times_toman: Long? = null,
+    /** Price of hourly displays in set windows, in Toman. */
+    val hourly_toman: Long? = null,
+    /** Price of a monthly ad (5 displays per day), in Toman. */
+    val monthly_daily_toman: Long? = null,
+)
 
 /**
  * One subscription plan, published by the bot side in app_config.json.

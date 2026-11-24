@@ -13,6 +13,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
@@ -84,6 +85,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -108,6 +110,7 @@ import com.v2ray.ang.extension.toSpeedString
 import com.v2ray.ang.extension.toast
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
+import com.v2ray.ang.handler.vpn5g.AdsRemote
 import com.v2ray.ang.handler.vpn5g.AnnouncementRemote
 import com.v2ray.ang.handler.vpn5g.AppConfigRemote
 import com.v2ray.ang.handler.vpn5g.GithubReleaseAsset
@@ -115,6 +118,7 @@ import com.v2ray.ang.handler.vpn5g.PaymentGatewayRemote
 import com.v2ray.ang.handler.vpn5g.PromoCodeRemote
 import com.v2ray.ang.handler.vpn5g.SubscriptionPlanRemote
 import com.v2ray.ang.handler.vpn5g.SubscriptionStatusRemote
+import com.v2ray.ang.handler.vpn5g.Vpn5gAds
 import com.v2ray.ang.handler.vpn5g.Vpn5gAnnouncement
 import com.v2ray.ang.handler.vpn5g.Vpn5gAppUpdate
 import com.v2ray.ang.handler.vpn5g.Vpn5gAuthService
@@ -149,6 +153,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gSpeedMonitor
 import com.v2ray.ang.handler.vpn5g.Vpn5gStartupProgress
 import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
 import com.v2ray.ang.handler.vpn5g.Vpn5gSync
+import com.v2ray.ang.handler.vpn5g.Vpn5gTamperCheck
 import com.v2ray.ang.handler.vpn5g.Vpn5gTimer
 import com.v2ray.ang.handler.vpn5g.Vpn5gTunnelCheck
 import com.v2ray.ang.helper.MessageHelper
@@ -157,6 +162,7 @@ import com.v2ray.ang.ui.compose.colorPing
 import com.v2ray.ang.ui.compose.colorPingRed
 import com.v2ray.ang.ui.perappproxy.PerAppProxyActivity
 import com.v2ray.ang.util.HttpUtil
+import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.Dispatchers
@@ -172,6 +178,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 enum class Vpn5gDestination {
@@ -271,6 +278,16 @@ data class Vpn5gHomeUiState(
     val updateDownloading: Boolean = false,
     /** Download progress 0..1 while downloading. */
     val updateDownloadProgress: Float = 0f,
+    /** Remote ad config (v1.1.15): null = no ad config published, no ad. */
+    val ads: AdsRemote? = null,
+    /** Interstitial ad currently on screen, or null (v1.1.15). */
+    val interstitialAd: Vpn5gAds.InterstitialAdUi? = null,
+    /** Expanded locked-country group keys in Premium (v1.1.15); persisted. */
+    val expandedCountryKeys: Set<String> = emptySet(),
+    /** True when the startup signature check failed (v1.1.15, H3): the
+     * build is treated as tampered — premium features are refused and
+     * the free tier is shown, never a crash. */
+    val tamperDetected: Boolean = false,
 )
 
 /**
@@ -366,6 +383,25 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     private var dismissedAnnouncementKey: String? = null
 
     /**
+     * True when the startup signature check failed (v1.1.15, H3). The
+     * field is the authority; [Vpn5gHomeUiState.tamperDetected] mirrors
+     * it for the UI. A tampered build gets the free tier everywhere.
+     */
+    private var tamperDetected = false
+
+    /**
+     * User connects STARTED this app session (v1.1.15): connect #1 has
+     * no forced ad; connects #2 and later (each after a disconnect)
+     * show the interstitial first. Counts user-initiated attempts only
+     * ([beginConnect] with userInitiated) — auto-reconnects and
+     * failover restarts never count and never show an ad.
+     */
+    private var completedSessions = 0
+
+    /** Local ad-impression ledger (v1.1.15): ad id -> counters, persisted. */
+    private var adImpressions: Vpn5gAds.AdImpressionStore = Vpn5gAds.AdImpressionStore()
+
+    /**
      * The announcement to show from a fetched remote config, or null
      * when there is none, it is disabled, its text is blank, or the
      * user already dismissed this version of it.
@@ -376,6 +412,89 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             announcement
         } else {
             null
+        }
+    }
+
+    /**
+     * Runtime tamper check (v1.1.15, H3): verifies the app's own
+     * signing certificate against the NEW fixed key. Runs once, before
+     * the startup sync publishes any premium state. A mismatch refuses
+     * privileged features and falls back to the free tier — the user is
+     * warned, the app never crashes. Root/emulator detection is a SOFT
+     * signal only: logged, never blocking. Never throws.
+     */
+    private fun performTamperCheck() {
+        val app = getApplication<Application>()
+        val signatureOk = runCatching { Vpn5gTamperCheck.checkSignature(app) }
+            .getOrDefault(true)
+        val emulator = Vpn5gTamperCheck.isEmulator()
+        val rooted = runCatching { Vpn5gTamperCheck.isRooted() }.getOrDefault(false)
+        if (emulator || rooted) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gHomeViewModel: emulator=$emulator rooted=$rooted (soft signal only)",
+            )
+        }
+        if (!signatureOk) {
+            tamperDetected = true
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gHomeViewModel: signature mismatch — tampered build, free tier only",
+            )
+            _uiState.update {
+                it.copy(
+                    tamperDetected = true,
+                    errorMessage = app.getString(R.string.vpn5g_tamper_warning),
+                )
+            }
+        }
+    }
+
+    /** Loads the persisted ad-impression ledger (v1.1.15). */
+    private fun loadAdImpressions() {
+        val json = MmkvManager.decodeSettingsString(Vpn5gConstants.KEY_AD_IMPRESSIONS_JSON)
+        if (json.isNullOrBlank()) return
+        adImpressions = runCatching {
+            JsonUtil.fromJsonSafe(json, Vpn5gAds.AdImpressionStore::class.java)
+        }.getOrNull() ?: Vpn5gAds.AdImpressionStore()
+    }
+
+    /** Persists the ad-impression ledger (v1.1.15). */
+    private fun saveAdImpressions() {
+        runCatching {
+            MmkvManager.encodeSettings(
+                Vpn5gConstants.KEY_AD_IMPRESSIONS_JSON,
+                JsonUtil.toJson(adImpressions),
+            )
+        }.onFailure {
+            LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: save ad impressions failed", it)
+        }
+    }
+
+    /** Loads the persisted expanded-country keys (v1.1.15). */
+    private fun loadExpandedCountryKeys() {
+        val keys = MmkvManager.decodeSettingsStringSet(Vpn5gConstants.KEY_EXPANDED_COUNTRY_KEYS)
+        if (!keys.isNullOrEmpty()) {
+            _uiState.update { it.copy(expandedCountryKeys = keys.toSet()) }
+        }
+    }
+
+    /**
+     * Toggles a locked-country group in Premium (v1.1.15). The state
+     * lives in the ViewModel (durable, persisted) — the composable
+     * only reads it. Groups start closed; the open/closed state is
+     * preserved across uses.
+     */
+    fun toggleCountryExpanded(key: String) {
+        val current = _uiState.value.expandedCountryKeys.toMutableSet()
+        if (!current.add(key)) current.remove(key)
+        val updated = current.toSet()
+        _uiState.update { it.copy(expandedCountryKeys = updated) }
+        viewModelScope.launch(Dispatchers.IO) {
+            MmkvManager.encodeSettings(
+                Vpn5gConstants.KEY_EXPANDED_COUNTRY_KEYS,
+                updated.toMutableSet(),
+            )
         }
     }
 
@@ -423,13 +542,35 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             Vpn5gConstants.KEY_ANNOUNCEMENT_DISMISSED
         )
 
-        // Startup sync (v1.1.14): show the last stored list immediately,
-        // then run the live refresh with REAL 0→100% progress; the home
-        // screen opens only when the sync finishes with at least one
-        // server (otherwise a retry state — never a hang at 100% and
-        // never home with an empty pool). The bundled snapshot fills a
-        // first launch so the list is never empty on entry.
-        runStartupSync()
+        // v1.1.15 (anti-tamper H3 + speeds root-cause fix): BEFORE any
+        // premium state is published, verify our own signing
+        // certificate on a background thread; then turn the core stats
+        // setting on once — the running core only gets a `stats` block
+        // when PREF_SPEED_ENABLED is true, and that setting defaults to
+        // false with nothing in the VPN5G flow ever setting it, so the
+        // core ran with NO stats and every speed read 0 (the 1.1.14
+        // bug). The legacy settings UI is unreachable in this app, so
+        // nothing can turn it back off. Only then does the startup sync
+        // run (its cached publish already forces the free tier when the
+        // build is tampered).
+        viewModelScope.launch(Dispatchers.IO) {
+            performTamperCheck()
+            if (!MmkvManager.decodeSettingsBool(AppConfig.PREF_SPEED_ENABLED, false)) {
+                MmkvManager.encodeSettings(AppConfig.PREF_SPEED_ENABLED, true)
+            }
+            loadAdImpressions()
+            loadExpandedCountryKeys()
+            // Startup sync (v1.1.14): show the last stored list
+            // immediately, then run the live refresh with REAL 0→100%
+            // progress; the home screen opens only when the sync
+            // finishes with at least one server (otherwise a retry
+            // state — never a hang at 100% and never home with an empty
+            // pool). The bundled snapshot fills a first launch so the
+            // list is never empty on entry. v1.1.15: with a cached list
+            // the home opens fast and the refresh runs in the
+            // background instead of blocking entry.
+            runStartupSync()
+        }
 
         // Restore the manual server pick (v1.1.5 §3): the choice survives
         // restarts; the pick is re-validated on every connect, so a stale
@@ -601,7 +742,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 val changed = operator.key != Vpn5gOperator.currentKey()
                 Vpn5gOperator.storeCurrentKey(operator.key)
                 if (changed) {
-                    val countries = runCatching { Vpn5gSync.loadGroupedServers() }
+                    val countries = runCatching { Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected) }
                         .getOrElse { emptyList() }
                     _uiState.update {
                         it.copy(operatorLabel = operator.labelFa, countries = countries)
@@ -626,7 +767,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 val operator = Vpn5gOperator.detect(getApplication())
                 Vpn5gOperator.storeCurrentKey(operator.key)
-                val countries = runCatching { Vpn5gSync.loadGroupedServers() }
+                val countries = runCatching { Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected) }
                     .getOrElse { _uiState.value.countries }
                 _uiState.update {
                     it.copy(operatorLabel = operator.labelFa, countries = countries)
@@ -657,7 +798,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             val cached = Vpn5gRemoteConfig.cached()
             // A failure to read the stored list must never leave the
             // home screen stuck on "loading": fall back to an empty list.
-            var countries = runCatching { Vpn5gSync.loadGroupedServers() }.getOrElse {
+            var countries = runCatching { Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected) }.getOrElse {
                 LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: load failed", it)
                 emptyList()
             }
@@ -665,7 +806,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             if (countries.isEmpty()) {
                 val imported = Vpn5gSync.loadBundledFallback(getApplication())
                 if (imported > 0) {
-                    countries = runCatching { Vpn5gSync.loadGroupedServers() }.getOrElse { emptyList() }
+                    countries = runCatching { Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected) }.getOrElse { emptyList() }
                     usedFallback = true
                 }
             }
@@ -673,6 +814,24 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             Vpn5gOperator.storeCurrentKey(operator.key)
             val nowSeconds = System.currentTimeMillis() / 1000
             val effective = Vpn5gSubscriptionStatus.loadEffective(nowSeconds)
+            // v1.1.15 (anti-tamper, H3): a tampered build never publishes
+            // a cached premium tier — the local cache is only a display
+            // hint, never the authority.
+            val subscriber = if (tamperDetected) {
+                false
+            } else {
+                Vpn5gSubscriptionStatus.isSubscriber(effective, nowSeconds)
+            }
+            val gift = if (tamperDetected) {
+                false
+            } else {
+                Vpn5gSubscriptionStatus.isGiftTier(effective, nowSeconds)
+            }
+            val giftHours = if (tamperDetected) {
+                0L
+            } else {
+                Vpn5gSubscriptionStatus.giftRemainingHours(effective, nowSeconds)
+            }
             _uiState.update {
                 it.copy(
                     isLoading = false,
@@ -680,6 +839,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     subscriptionStatus = cached.subscription_status,
                     notice = cached.notice,
                     announcement = visibleAnnouncement(cached),
+                    ads = cached.ads,
                     promoCodes = cached.codes,
                     plans = cached.plans,
                     paymentGateway = cached.payment_gateway,
@@ -687,11 +847,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     trialHours = cached.trial_hours ?: 24,
                     signedInEmail = Vpn5gAuthService.currentSession()?.email,
                     userSubscription = effective,
-                    isSubscriber = Vpn5gSubscriptionStatus.isSubscriber(effective, nowSeconds),
-                    isGift = Vpn5gSubscriptionStatus.isGiftTier(effective, nowSeconds),
-                    giftRemainingHours = Vpn5gSubscriptionStatus.giftRemainingHours(
-                        effective, nowSeconds
-                    ),
+                    isSubscriber = subscriber,
+                    isGift = gift,
+                    giftRemainingHours = giftHours,
+                    tamperDetected = tamperDetected,
                     operatorLabel = operator.labelFa,
                     offline = usedFallback,
                     startupProgress = Vpn5gStartupProgress.fraction(
@@ -701,6 +860,19 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
             refreshSelection()
             enrichCountries()
+            // v1.1.15 (fast startup, D): with a cached list the home is
+            // ready NOW — enter immediately and run the heavy refresh in
+            // the background; never block entry on a full re-ping. 100%
+            // only when the home is truly ready (the cached list is
+            // shown). With no cached list the blocking path below still
+            // applies, so a first launch never opens an empty home.
+            if (countries.isNotEmpty()) {
+                _uiState.update {
+                    it.copy(startupProgress = 1f, startupDone = true)
+                }
+                refreshInternal(onProgress = null, finishStartup = false)
+                return@launch
+            }
             refreshInternal(
                 onProgress = { stage, within ->
                     _uiState.update {
@@ -735,6 +907,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             _uiState.update {
                 it.copy(
                     announcement = visibleAnnouncement(fresh),
+                    ads = fresh.ads,
                     promoCodes = fresh.codes,
                     plans = fresh.plans,
                     paymentGateway = fresh.payment_gateway,
@@ -781,7 +954,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 val nowSeconds = System.currentTimeMillis() / 1000
                 val subscriber = Vpn5gSubscriptionStatus.isSubscriber(subscription, nowSeconds)
                 val gift = Vpn5gSubscriptionStatus.isGiftTier(subscription, nowSeconds)
-                val countries = Vpn5gSync.loadGroupedServers()
+                val countries = Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
                 _uiState.update {
                     it.copy(
                         isRefreshing = false,
@@ -789,13 +962,21 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         offline = result.offline,
                         notice = result.notice ?: cached.notice,
                         announcement = visibleAnnouncement(cached),
+                        ads = cached.ads,
                         countries = countries,
                         userSubscription = subscription,
-                        isSubscriber = subscriber,
-                        isGift = gift,
-                        giftRemainingHours = Vpn5gSubscriptionStatus.giftRemainingHours(
-                            subscription, nowSeconds
-                        ),
+                        // v1.1.15 (anti-tamper, H3): a tampered build never
+                        // publishes a premium tier from the cache.
+                        isSubscriber = if (tamperDetected) false else subscriber,
+                        isGift = if (tamperDetected) false else gift,
+                        giftRemainingHours = if (tamperDetected) {
+                            0L
+                        } else {
+                            Vpn5gSubscriptionStatus.giftRemainingHours(
+                                subscription, nowSeconds
+                            )
+                        },
+                        tamperDetected = tamperDetected,
                         subscriptionStatus = cached.subscription_status,
                         promoCodes = cached.codes,
                         plans = cached.plans,
@@ -844,15 +1025,22 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             _uiState.update {
                 it.copy(
                     userSubscription = subscription,
-                    isSubscriber = subscriber,
-                    isGift = gift,
-                    giftRemainingHours = Vpn5gSubscriptionStatus.giftRemainingHours(
-                        subscription, nowSeconds
-                    ),
+                    // v1.1.15 (anti-tamper, H3): a tampered build never
+                    // publishes a premium tier from the cache.
+                    isSubscriber = if (tamperDetected) false else subscriber,
+                    isGift = if (tamperDetected) false else gift,
+                    giftRemainingHours = if (tamperDetected) {
+                        0L
+                    } else {
+                        Vpn5gSubscriptionStatus.giftRemainingHours(
+                            subscription, nowSeconds
+                        )
+                    },
+                    tamperDetected = tamperDetected,
                 )
             }
             if (subscriber != wasSubscriber || gift != wasGift) {
-                val countries = runCatching { Vpn5gSync.loadGroupedServers() }
+                val countries = runCatching { Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected) }
                     .getOrElse { emptyList() }
                 _uiState.update { it.copy(countries = countries) }
                 refreshSelection()
@@ -1005,14 +1193,44 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      * a short Persian message, never a technical error. Only one chain
      * runs at a time; a new tap cancels the previous one.
      */
-    fun beginConnect() {
+    fun beginConnect(userInitiated: Boolean = false) {
+        // v1.1.15 (forced-ad rule): count user-initiated connects only.
+        if (userInitiated) completedSessions += 1
         connectChainJob?.cancel()
         connectChainJob = viewModelScope.launch {
             userStopRequested = false
-            // v1.1.11: re-check the subscription in the background —
-            // the chain never waits for it, but the pool and the timer
-            // follow the fresh status as soon as it lands.
-            refreshSubscriptionInBackground()
+            // v1.1.15 (anti-tamper, H1): a premium tier is never trusted
+            // from the local cache alone — when the cached tier is not
+            // FREE, re-check the server state before connecting, bounded
+            // to 3 s. A failed or timed-out check keeps the cached tier
+            // (offline cannot verify); the local cache is only a display
+            // hint, never the authority. A free tier keeps the old
+            // background refresh — the chain never waits for it.
+            if (_uiState.value.isSubscriber || _uiState.value.isGift) {
+                val fresh = withTimeoutOrNull(3_000L) {
+                    withContext(Dispatchers.IO) {
+                        Vpn5gSubscriptionStatus.refresh(
+                            Vpn5gAuthService.currentSession()
+                        )
+                    }
+                }
+                if (fresh != null) {
+                    val nowSeconds = System.currentTimeMillis() / 1000
+                    _uiState.update {
+                        it.copy(
+                            userSubscription = fresh,
+                            isSubscriber = Vpn5gSubscriptionStatus.isSubscriber(
+                                fresh, nowSeconds
+                            ),
+                            isGift = Vpn5gSubscriptionStatus.isGiftTier(fresh, nowSeconds),
+                            giftRemainingHours = Vpn5gSubscriptionStatus
+                                .giftRemainingHours(fresh, nowSeconds),
+                        )
+                    }
+                }
+            } else {
+                refreshSubscriptionInBackground()
+            }
             _uiState.update {
                 it.copy(
                     connectState = Vpn5gAutoConnect.transition(
@@ -1422,22 +1640,95 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Redeems the entered code (v1.1.12): the latest code list is
-     * fetched first, then a GIFT code activates the subscription
-     * immediately — no admin approval, no second confirm screen. The
-     * UI reflects the new subscription at once (state + full server
-     * pool). A DISCOUNT code still goes through the bot (VALID +
-     * deep link). Never throws; a fetch failure falls back to the
-     * last cached list.
+     * Redeems the entered code (v1.1.12; server-first v1.1.15): the
+     * server RPC `validate_and_redeem_code` is the authority — it
+     * checks existence / already-used / expiry / remaining_uses and
+     * marks the code used atomically, so a single-use code can never
+     * be reused. The config-list check is ONLY the fallback when the
+     * RPC is unavailable. A GIFT code activates immediately and the
+     * countries unlock at once (the list is rebuilt); a DISCOUNT code
+     * still goes through the bot (VALID + deep link). Never throws.
      */
     fun redeemPromo() {
         val input = _uiState.value.promoInput
         val email = _uiState.value.signedInEmail
+        // A tampered build never redeems (H3): the server would refuse
+        // the grant anyway, so fail fast with the tamper warning.
+        if (tamperDetected) {
+            _uiState.update {
+                it.copy(
+                    promoStatus = Vpn5gPromoStatus.INVALID,
+                    errorMessage = getApplication<Application>()
+                        .getString(R.string.vpn5g_tamper_warning),
+                )
+            }
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
+            val nowSeconds = System.currentTimeMillis() / 1000
+            // Server first (v1.1.15): the RPC is the authority.
+            val server = runCatching {
+                Vpn5gAuthService.validateAndRedeemCode(input, email.orEmpty())
+            }.getOrNull()
+            when (server) {
+                is Vpn5gAuthService.CodeServerResult.Validated -> {
+                    val subscription = Vpn5gPromoCodes.activateServerGift(
+                        input, server.plan, server.expiresAtEpochSeconds,
+                        email.orEmpty(), nowSeconds,
+                    )
+                    if (subscription != null) {
+                        val tier = Vpn5gSubscriptionStatus.tierOf(subscription, nowSeconds)
+                        val countries = runCatching {
+                            Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
+                        }.getOrElse { emptyList() }
+                        _uiState.update {
+                            it.copy(
+                                promoStatus = Vpn5gPromoStatus.REDEEMED,
+                                promoBotLink = Vpn5gPromoCodes.redeemLink(input),
+                                userSubscription = subscription,
+                                isSubscriber = tier ==
+                                    Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
+                                isGift = tier ==
+                                    Vpn5gSubscriptionStatus.Vpn5gTier.GIFT,
+                                giftRemainingHours = Vpn5gSubscriptionStatus
+                                    .giftRemainingHours(subscription, nowSeconds),
+                                countries = countries,
+                            )
+                        }
+                        refreshSelection()
+                    } else {
+                        // Server-validated but no usable grant (e.g. a
+                        // discount code): the bot applies it — the old
+                        // VALID + deep-link path.
+                        val link = Vpn5gPromoCodes.redeemLink(input)
+                        _uiState.update {
+                            it.copy(promoStatus = Vpn5gPromoStatus.VALID, promoBotLink = link)
+                        }
+                    }
+                    return@launch
+                }
+                is Vpn5gAuthService.CodeServerResult.Rejected -> {
+                    val status = when (server.status) {
+                        "unknown" -> Vpn5gPromoStatus.UNKNOWN_CODE
+                        "already_used" -> Vpn5gPromoStatus.ALREADY_REDEEMED
+                        "expired" -> Vpn5gPromoStatus.EXPIRED
+                        "exhausted" -> Vpn5gPromoStatus.EXHAUSTED
+                        "not_yours" -> Vpn5gPromoStatus.NOT_YOURS
+                        else -> Vpn5gPromoStatus.INVALID
+                    }
+                    _uiState.update { it.copy(promoStatus = status) }
+                    return@launch
+                }
+                else -> {
+                    // Unavailable (or the call threw): fall through to
+                    // the config-list fallback below — the RPC being
+                    // down must never block a redeem.
+                }
+            }
+            // Fallback: the config-list check (v1.1.12), unchanged.
             runCatching { Vpn5gRemoteConfig.fetch() }.onSuccess { fresh ->
                 _uiState.update { it.copy(promoCodes = fresh.codes) }
             }
-            val nowSeconds = System.currentTimeMillis() / 1000
             when (val result = Vpn5gPromoCodes.validateForRedeem(
                 input, _uiState.value.promoCodes, nowSeconds, email
             )) {
@@ -1462,7 +1753,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                             }
                         }
                         val countries = runCatching {
-                            Vpn5gSync.loadGroupedServers()
+                            Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
                         }.getOrElse { emptyList() }
                         _uiState.update {
                             it.copy(
@@ -1518,6 +1809,84 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     fun clearPromo() {
         _uiState.update {
             it.copy(promoStatus = Vpn5gPromoStatus.IDLE, promoBotLink = null, promoInput = "")
+        }
+    }
+
+    /**
+     * Whether the forced interstitial applies to the NEXT user connect
+     * (v1.1.15, master rule): connect #1 never shows an ad; connects
+     * #2 and later do, free tier only unless the config says otherwise.
+     */
+    fun shouldShowInterstitialAd(): Boolean {
+        val state = _uiState.value
+        return Vpn5gAds.shouldShowInterstitial(
+            ads = state.ads,
+            completedSessions = completedSessions,
+            isSubscriber = state.isSubscriber,
+            isGift = state.isGift,
+        )
+    }
+
+    /**
+     * Puts the interstitial on screen for the next user connect;
+     * returns false when no ad applies, so the connect proceeds with
+     * no ad. The Activity holds the pending connect action and runs it
+     * only after [completeInterstitialAd].
+     */
+    fun prepareInterstitialAd(): Boolean {
+        if (!shouldShowInterstitialAd()) return false
+        val ad = pickInterstitialAd() ?: return false
+        _uiState.update { it.copy(interstitialAd = ad) }
+        return true
+    }
+
+    /** Picks the ad for the next user connect, or null (v1.1.15). */
+    private fun pickInterstitialAd(): Vpn5gAds.InterstitialAdUi? {
+        val ads = _uiState.value.ads ?: return null
+        val hour = java.util.Calendar.getInstance()
+            .get(java.util.Calendar.HOUR_OF_DAY)
+        return Vpn5gAds.pickInterstitial(ads, adImpressions.entries, hour)
+    }
+
+    /**
+     * The ad was FULLY viewed (v1.1.15): record the impression locally
+     * (so the caps are enforced) and verify the view server-side,
+     * best-effort. If the ad server is off, the local countdown
+     * completion still stands — the VPN starts anyway, never hangs,
+     * never crashes. The Activity runs the pending connect after this.
+     */
+    fun completeInterstitialAd() {
+        val ad = _uiState.value.interstitialAd ?: return
+        val today = java.time.LocalDate.now().toString()
+        adImpressions = Vpn5gAds.recordImpression(adImpressions, ad.id, today)
+        saveAdImpressions()
+        _uiState.update { it.copy(interstitialAd = null) }
+        val email = _uiState.value.signedInEmail
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { Vpn5gAuthService.recordAdView(ad.id, email) }
+        }
+    }
+
+    /**
+     * The ad was closed early (v1.1.15): the view is INCOMPLETE and
+     * the connection must NOT start. The Activity drops the pending
+     * connect action.
+     */
+    fun cancelInterstitialAd() {
+        _uiState.update { it.copy(interstitialAd = null) }
+    }
+
+    /**
+     * The ad content was tapped (v1.1.15): record the click
+     * server-side, best-effort. The Activity opens the link; the tap
+     * never ends the countdown.
+     */
+    fun clickInterstitialAd(url: String) {
+        val ad = _uiState.value.interstitialAd ?: return
+        if (ad.linkUrl.isNullOrBlank() || ad.linkUrl != url) return
+        val email = _uiState.value.signedInEmail
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { Vpn5gAuthService.recordAdClick(ad.id, email) }
         }
     }
 
@@ -1862,7 +2231,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     Vpn5gSync.refresh(getApplication<Application>(), skipRealProbe = false)
                 }
                 if (!isActive || userStopRequested || suppressAutoFailover) return@launch
-                val countries = Vpn5gSync.loadGroupedServers()
+                val countries = Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
                 _uiState.update { it.copy(countries = countries) }
                 if (!isActive || userStopRequested || suppressAutoFailover) return@launch
                 attemptAutoFailover()
@@ -2072,7 +2441,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                                     )
                                 }
                                 _uiState.update {
-                                    it.copy(countries = Vpn5gSync.loadGroupedServers())
+                                    it.copy(countries = Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected))
                                 }
                                 next = nextBestServer(
                                     excluding = triedGuids,
@@ -2308,6 +2677,14 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
 
     private var pendingGuid: String? = null
 
+    /**
+     * Connect action waiting for the interstitial to finish (v1.1.15):
+     * set by [requestUserConnect] when the forced ad shows; run only
+     * after the full view ([Vpn5gHomeViewModel.completeInterstitialAd]),
+     * dropped on an incomplete view.
+     */
+    private var pendingConnectAction: (() -> Unit)? = null
+
     /** APK waiting for the "install unknown apps" grant (Android 8+). */
     private var pendingInstallFile: File? = null
 
@@ -2341,6 +2718,24 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         super.onCreate(savedInstanceState)
         checkAndRequestPermission(PermissionType.POST_NOTIFICATIONS) {}
         handleDeepLink(intent)
+        // v1.1.15 (forced ad): closing the interstitial early is an
+        // INCOMPLETE view — the connection must NOT start. The system
+        // Back press while an ad is on screen cancels the ad (and the
+        // pending connect) instead of leaving the app.
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (viewModel.uiState.value.interstitialAd != null) {
+                        pendingConnectAction = null
+                        viewModel.cancelInterstitialAd()
+                    } else {
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                    }
+                }
+            },
+        )
     }
 
     override fun onResume() {
@@ -2390,6 +2785,10 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         val uiState by viewModel.uiState.collectAsStateWithLifecycle()
         var destination by remember { mutableStateOf(Vpn5gDestination.HOME) }
         var lockedCountry by remember { mutableStateOf<String?>(null) }
+        // Gift-code deep entry (v1.1.15, C): the ALL-tab gift button
+        // bumps this counter and opens Premium; Premium expands its
+        // gift section when the counter changes.
+        var giftCodeRequest by remember { mutableStateOf(0) }
 
         // Password-recovery deep link (v1.1.8): when the user returns
         // from the emailed link, open the auth screen; the screen
@@ -2474,6 +2873,30 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             return
         }
 
+        // Forced interstitial (v1.1.15): the full-screen ad replaces the
+        // home until the countdown completes; the pending connect runs
+        // only after the full view, never on an early close.
+        uiState.interstitialAd?.let { ad ->
+            Vpn5gInterstitialAdScreen(
+                ad = ad,
+                onAdClick = { url ->
+                    viewModel.clickInterstitialAd(url)
+                    Utils.openUri(this@Vpn5gMainActivity, url)
+                },
+                onComplete = {
+                    val action = pendingConnectAction
+                    pendingConnectAction = null
+                    viewModel.completeInterstitialAd()
+                    action?.invoke()
+                },
+                onIncomplete = {
+                    pendingConnectAction = null
+                    viewModel.cancelInterstitialAd()
+                },
+            )
+            return
+        }
+
         Vpn5gAnimatedBackground {
             Scaffold(
                 containerColor = Color.Transparent,
@@ -2505,10 +2928,18 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onSelectManualServer = { guid -> viewModel.selectManualServer(guid) },
                             onSelectAutoMode = { viewModel.selectAutoMode() },
                             onClearManualFailure = { viewModel.clearManualFailure() },
-                            onRetryConnect = { viewModel.beginConnect() },
+                            onRetryConnect = {
+                                requestUserConnect {
+                                    viewModel.beginConnect(userInitiated = true)
+                                }
+                            },
                             onLockedCountryTap = { lockedCountry = it },
-                            onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
                             onOpenPremium = { destination = Vpn5gDestination.PREMIUM },
+                            onOpenGiftCode = {
+                                giftCodeRequest++
+                                destination = Vpn5gDestination.PREMIUM
+                            },
+                            onOpenUrl = { url -> Utils.openUri(this@Vpn5gMainActivity, url) },
                             onConsumeAutoFailoverNotice = { viewModel.consumeAutoFailoverNotice() },
                             onUpdateDownload = { viewModel.startUpdateDownload() },
                             onDismissUpdate = { viewModel.dismissUpdate() },
@@ -2518,6 +2949,14 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             state = uiState,
                             onBack = { destination = Vpn5gDestination.HOME },
                             onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
+                            onOpenBuyBot = { planId ->
+                                Utils.openUri(
+                                    this@Vpn5gMainActivity,
+                                    Vpn5gConstants.buyUrl(planId),
+                                )
+                            },
+                            giftCodeRequest = giftCodeRequest,
+                            onToggleCountryExpanded = { viewModel.toggleCountryExpanded(it) },
                             onOpenAuth = { destination = Vpn5gDestination.AUTH },
                             onSignOut = { viewModel.signOut() },
                             onOpenUrl = { url -> Utils.openUri(this@Vpn5gMainActivity, url) },
@@ -2682,6 +3121,22 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         }
     }
 
+    /**
+     * User-initiated connect (v1.1.15, forced-ad rule): connect #1 has
+     * no ad; connects #2 and later show the full-screen interstitial
+     * FIRST, and the VPN starts only after the full view. Auto-reconnects
+     * and failover restarts never go through here and never show an ad.
+     * If no ad applies, the connect starts at once.
+     */
+    private fun requestUserConnect(connectAction: () -> Unit) {
+        if (viewModel.uiState.value.isRunning) return
+        if (viewModel.prepareInterstitialAd()) {
+            pendingConnectAction = connectAction
+            return
+        }
+        connectAction()
+    }
+
     private fun toggleConnect() {
         val state = viewModel.uiState.value
         if (state.isRunning) {
@@ -2692,7 +3147,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         // One-button connect (v1.1.5 §2–§3): the ViewModel runs the
         // internet check and resolves the server from the current mode
         // (manual pick or auto), then hands the GUID back on connectEvent.
-        viewModel.beginConnect()
+        requestUserConnect { viewModel.beginConnect(userInitiated = true) }
     }
 
     private fun connectBestServer() {
@@ -2700,8 +3155,10 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         if (state.isRunning) return
         // The "Auto" row always means automatic selection (v1.1.5 §3):
         // picking auto again clears any manual pick.
-        viewModel.selectAutoMode()
-        viewModel.beginConnect()
+        requestUserConnect {
+            viewModel.selectAutoMode()
+            viewModel.beginConnect(userInitiated = true)
+        }
     }
 
     private fun onServerTap(guid: String) {
@@ -2725,8 +3182,10 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         }
         // A tap while disconnected picks the server by hand, then the
         // one-button chain validates and connects to it (v1.1.5 §3).
-        viewModel.selectManualServer(guid)
-        viewModel.beginConnect()
+        requestUserConnect {
+            viewModel.selectManualServer(guid)
+            viewModel.beginConnect(userInitiated = true)
+        }
     }
 
     /**
@@ -2937,8 +3396,9 @@ fun Vpn5gHomeScreen(
     onClearManualFailure: () -> Unit,
     onRetryConnect: () -> Unit,
     onLockedCountryTap: (String) -> Unit,
-    onOpenBot: () -> Unit,
     onOpenPremium: () -> Unit,
+    onOpenGiftCode: () -> Unit,
+    onOpenUrl: (String) -> Unit,
     onConsumeAutoFailoverNotice: () -> Unit,
     onUpdateDownload: () -> Unit,
     onDismissUpdate: () -> Unit,
@@ -3389,6 +3849,7 @@ fun Vpn5gHomeScreen(
                     Vpn5gAnnouncementCard(
                         announcement = announcement,
                         onDismiss = onDismissAnnouncement,
+                        onOpenUrl = onOpenUrl,
                     )
                 }
             }
@@ -3937,6 +4398,44 @@ fun Vpn5gHomeScreen(
                     }
                 }
             }
+            // Gift-code button (v1.1.15, C): GIFT codes live in Premium
+            // — this button opens Premium straight at the gift-code
+            // section. It is NOT a buy button; no purchase lives in
+            // All Locations.
+            if (serverTab == Vpn5gServerTab.ALL) {
+                item(key = "all_gift_code") {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Vpn5gGold.copy(alpha = 0.15f))
+                            .border(
+                                width = 1.dp,
+                                color = Vpn5gGold,
+                                shape = RoundedCornerShape(20.dp),
+                            )
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = stringResource(R.string.vpn5g_gift_code_button),
+                            ) { onOpenGiftCode() }
+                            .padding(vertical = 10.dp),
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Vpn5gGiftIcon(color = Vpn5gGold, size = 20.dp)
+                            Text(
+                                text = stringResource(R.string.vpn5g_gift_code_button),
+                                color = Vpn5gGold,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+            }
             val ordered = when (serverTab) {
                 Vpn5gServerTab.FREE -> emptyList()
                 Vpn5gServerTab.ALL -> when (allFilter) {
@@ -3951,7 +4450,7 @@ fun Vpn5gHomeScreen(
             ordered.forEach { (country, locked) ->
                 if (serverTab == Vpn5gServerTab.ALL && locked && !promoShown) {
                     item(key = "bot_promo") {
-                        Vpn5gBotPromoCard(onOpenBot = onOpenBot)
+                        Vpn5gBotPromoCard(onOpenPremium = onOpenPremium)
                     }
                     promoShown = true
                 }
@@ -4013,26 +4512,52 @@ fun Vpn5gHomeScreen(
 private fun Vpn5gAnnouncementCard(
     announcement: AnnouncementRemote,
     onDismiss: () -> Unit,
+    onOpenUrl: (String) -> Unit,
 ) {
     var showImage by remember { mutableStateOf(!announcement.image_url.isNullOrBlank()) }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Vpn5gAccent.copy(alpha = 0.25f))
-            .padding(12.dp),
-    ) {
+    // v1.1.15: glass card; the text + image are ONE focusable node that
+    // opens the optional link (F), while dismiss stays a separate action.
+    val link = announcement.link_url
+    Vpn5gGlassCard(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = announcement.text.orEmpty(),
-                color = Vpn5gOnDark,
-                fontSize = 14.sp,
-                modifier = Modifier.weight(1f),
-            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .then(
+                        if (!link.isNullOrBlank()) {
+                            Modifier
+                                .semantics(mergeDescendants = true) {}
+                                .clickable(
+                                    onClickLabel = stringResource(R.string.vpn5g_open_link),
+                                ) { onOpenUrl(link) }
+                        } else {
+                            Modifier
+                        }
+                    ),
+            ) {
+                Text(
+                    text = announcement.text.orEmpty(),
+                    color = Vpn5gOnDark,
+                    fontSize = 14.sp,
+                )
+                if (showImage) {
+                    Spacer(Modifier.height(8.dp))
+                    AsyncImage(
+                        model = announcement.image_url.orEmpty(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        onError = { showImage = false },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                    )
+                }
+            }
             TextButton(onClick = onDismiss) {
                 Text(
                     text = stringResource(R.string.vpn5g_close),
@@ -4040,19 +4565,6 @@ private fun Vpn5gAnnouncementCard(
                     fontSize = 13.sp,
                 )
             }
-        }
-        if (showImage) {
-            Spacer(Modifier.height(8.dp))
-            AsyncImage(
-                model = announcement.image_url.orEmpty(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                onError = { showImage = false },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(180.dp)
-                    .clip(RoundedCornerShape(8.dp)),
-            )
         }
     }
 }
@@ -4464,14 +4976,19 @@ private fun vpn5gSearchFieldColors() = OutlinedTextFieldDefaults.colors(
 )
 
 @Composable
-private fun Vpn5gBotPromoCard(onOpenBot: () -> Unit) {
+private fun Vpn5gBotPromoCard(onOpenPremium: () -> Unit) {
+    // v1.1.15: the ALL-tab promo card opens Premium (no buy button in
+    // All Locations); buying stays inside Premium.
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(Vpn5gAccent.copy(alpha = 0.3f))
-            .clickable(role = Role.Button, onClickLabel = stringResource(R.string.vpn5g_open_bot)) {
-                onOpenBot()
+            .clickable(
+                role = Role.Button,
+                onClickLabel = stringResource(R.string.vpn5g_premium_banner_button),
+            ) {
+                onOpenPremium()
             }
             .padding(16.dp)
     ) {
@@ -4488,7 +5005,7 @@ private fun Vpn5gBotPromoCard(onOpenBot: () -> Unit) {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = stringResource(R.string.vpn5g_open_bot),
+            text = stringResource(R.string.vpn5g_premium_banner_button),
             color = Color.White,
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,

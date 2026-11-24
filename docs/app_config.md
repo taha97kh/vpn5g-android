@@ -1,4 +1,4 @@
-# app_config.json — remote configuration contract (VPN5G IRBOT v1.1)
+# app_config.json — remote configuration contract (VPN5G IRBOT v1.1.15)
 
 The app fetches this file on every sync (5-minute home-screen refresh and
 every app launch) from:
@@ -42,6 +42,7 @@ valid JSON; the app ignores unknown fields.
 | `payment_gateway` | object \| null | no | `null` | Direct bank payment gateway settings. `null` or absent means the gateway row is shown as coming soon and routes to the bot. See below. |
 | `trial_enabled` | boolean \| null | no | `false` | Whether the 24h free trial is offered on the plans. |
 | `trial_hours` | integer \| null | no | `24` | Free-trial length in hours (24 per the product rule). |
+| `ads` | object \| null | no | `null` | **(v1.1.15)** Interstitial + user-submitted ads: admin interstitial, user ads with schedule/caps, and per-model prices. `null` or absent means NO ad is ever shown. See below. |
 
 ### `subscription_status`
 
@@ -64,11 +65,14 @@ v2 backend.)
 | `text` | string \| null | Announcement text (Persian). Blank hides the card. |
 | `image_url` | string \| null | Optional public image URL; null/blank = text only. |
 | `id` | string \| null | Stable id for one announcement version; the bot regenerates it whenever the text or image changes, so an edited announcement is shown again even to users who dismissed the previous one. |
+| `link_url` | string \| null | **(v1.1.15)** Optional link: tapping the announcement text or image opens this URL in the browser. Null/blank = no link (the card is not tappable). |
 
 The app shows the card only when `enabled` is true and `text` is
 non-blank, and only until the user dismisses it (the dismissal is stored
 locally by id, or by text when no id is published). The image is loaded
 with Coil; a failed image hides the image slot and the text still shows.
+When `link_url` is set, the text + image area is one tappable node that
+opens the link; the dismiss button stays a separate action.
 The admin sets/clears the announcement from the Telegram bot (admin
 panel → 📢 تبلیغات و اطلاع‌رسانی → 📣 اطلاعیه اپ VPN5G) and publishes
 it to this file; the app picks it up on the next refresh (≤ 5 minutes)
@@ -76,10 +80,14 @@ with no app update.
 
 ### `codes` — discount / gift codes
 
-Created and updated by the ADMIN through the Telegram bot. The app
-validates an entered code against this list (case-insensitive, trimmed)
-and records the redemption locally; the BOT is the authority — it applies
-the benefit centrally and decrements `remaining_uses`.
+Created and updated by the ADMIN through the Telegram bot.
+**(v1.1.15) The app validates an entered code SERVER-side first** (RPC
+`validate_and_redeem_code` — see "Server-side RPCs" below): the server
+checks existence / already-used / expiry / remaining_uses and marks the
+code used atomically. The list below is ONLY the fallback when the RPC
+is unreachable — the app then validates against it (case-insensitive,
+trimmed) and records the redemption locally. The BOT is the authority —
+it applies the benefit centrally and decrements `remaining_uses`.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -132,6 +140,96 @@ bot owns the rest of the flow.
 trial — granting it is bot-side (the bot must offer 24h free on membership,
 the same as in the app). The app cannot mint a subscription by itself.
 
+### `ads` — interstitial + user-submitted ads (v1.1.15)
+
+Everything commercial comes from here — the app never invents ad content
+or prices. When `ads` is absent or `null`, NO ad is ever shown. The admin
+sets everything in the bot panel; the app reads it on every app start and
+on every Premium entry (the config is re-fetched there).
+
+**Forced-ad rule (exact):** the FIRST connection in an app session has NO
+forced ad. After the user disconnects and connects for the SECOND time,
+the full-screen interstitial shows BEFORE the VPN starts, and the VPN
+starts ONLY after the ad is fully viewed (countdown completes). Closing
+the ad early is an INCOMPLETE view and the connection does NOT start. The
+countdown runs on the monotonic clock (`elapsedRealtime`), so changing the
+phone's time cannot shorten it. Subscribers skip the forced ad unless
+`applies_to_free_only` is `false`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `interstitial.enabled` | boolean \| null | True when the admin interstitial is live. |
+| `interstitial.duration_seconds` | integer \| null | Countdown in seconds, **1–20**. The app clamps any value into 1..20; absent = 10. Set by the admin in the bot panel. |
+| `interstitial.show_from_connect_number` | integer \| null | First connect number that may show a forced ad. Default `2` (connect #1 never shows one). The admin tunes the frequency with this flag. |
+| `interstitial.applies_to_free_only` | boolean \| null | Default `true` = free tier only (subscribers and gift tier skip the ad). `false` = the ad applies to everyone. |
+| `interstitial.text` | string \| null | Ad text (Persian). |
+| `interstitial.image_url` | string \| null | Optional public image URL; null/blank = text only. |
+| `interstitial.link_url` | string \| null | Optional link: tapping the ad text or image opens this URL (the tap never ends the countdown). |
+| `interstitial.id` | string \| null | Stable id for this ad (used for the impression ledger and the server-side view record). Absent = `"admin-interstitial"`. |
+| `user_ads` | array of objects \| null | User-submitted ads (after admin approval). Each entry is shown per its schedule and caps — never more impressions than purchased. See below. |
+| `pricing` | object \| null | Per-model prices (Toman), set by the admin in the bot panel. The app only DISPLAYS them; payment is bot-side. |
+
+**`user_ads[]` entry:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | Stable id (used for the impression ledger and the server-side view/click records). |
+| `text` | string \| null | Ad text (Persian). |
+| `image_url` | string \| null | Optional public image URL. |
+| `link_url` | string \| null | Optional link (tap opens it; the tap never ends the countdown). |
+| `model` | string | Display model: `"once"` (1× display), `"ten_times"` (up to 10× at different hours), `"hourly"` (hourly in set windows), `"monthly_daily"` (monthly, 5×/day). The app enforces the model through the caps + windows below; the model name itself is informational. |
+| `max_impressions` | integer \| null | Total impressions purchased (the cap). Null = unlimited. The app never shows more than this. |
+| `impressions_per_day` | integer \| null | Impressions per day purchased (the per-day cap). Null = unlimited. `5` for the monthly model. |
+| `hour_windows` | array of `[start, end]` pairs \| null | Local hours the ad may show, e.g. `[[9, 12], [18, 21]]`. Each window is `[start, end)` — start inclusive, end exclusive — so `[9, 12]` means 09:00–11:59. Absent/empty = any hour. |
+| `price_toman` | integer \| null | Final price the user paid (Toman), for the order history. |
+| `enabled` | boolean \| null | True when the ad is live. |
+| `approved` | boolean \| null | True only after admin approval. Unapproved ads are never shown. |
+
+**Impression accounting:** the app keeps a local ledger (ad id → total +
+per-day counts, persisted) so the caps hold even offline, and records
+every completed view (`record_ad_view`) and click (`record_ad_click`)
+server-side. A due user ad is picked before the admin interstitial. User
+ads use the same admin-set interstitial duration (1–20 s).
+
+### Buy deep link + unique payment amounts (v1.1.15, G)
+
+The buy-subscription flow passes the selected plan to the bot via deep
+link so the bot can generate the UNIQUE payable amount for that order:
+
+```
+https://t.me/VPN5G_IRBot?start=buy_<plan_id>
+```
+
+Plan ids: `sub_1` / `sub_3` / `sub_6` / `sub_12` (see `plans`). The
+payable amount comes FROM THE BOT, unique per order (non-round, e.g. base
+price + unique suffix), and the app must never show a round plan price as
+the amount to pay in a payment context — the user pays the bot-provided
+unique amount. The app does NOT generate unique amounts (uniqueness must
+be coordinated by the bot to avoid collisions). Bot side: generate the
+unique amount per pending order, watch Pasargad 6276 deposits, auto-match
+by unique amount, auto-activate without admin (see "What the bot side
+still needs", item 11).
+
+### Server-side RPCs (v1.1.15)
+
+The app calls these PostgREST RPCs on the NEW Supabase project
+(`atvcpfnnmwguhjvhbbfj`); the bot side implements them. Every call is
+best-effort from the app: when an RPC is missing or unreachable, the app
+falls back to its local behavior (config list / local countdown) and never
+hangs or crashes. The app sends only the code / ad id / email — no secrets.
+
+| RPC | Request body | Response | App behavior |
+|---|---|---|---|
+| `validate_and_redeem_code` | `{"p_code": "<CODE>", "p_email": "<email>"}` | `{"status": "ok" \| "unknown" \| "already_used" \| "expired" \| "exhausted" \| "not_yours", "plan": "<plan_id>" \| null, "expires_at": "<ISO-8601>" \| null}` | The server checks existence / already-used / expiry / remaining_uses and marks the code used ATOMICALLY. `ok` + a usable grant activates the gift immediately and unlocks the countries; `ok` without a grant (discount code) shows VALID + the bot deep link. A rejection maps to the exact error message (unknown / already used / expired / exhausted / not yours). Anything else = `Unavailable` → config-list fallback. |
+| `record_ad_view` | `{"p_ad_id": "<id>", "p_email": "<email>"}` | `true` or `{"verified": true}` | Called on countdown completion, to record/verify the view server-side. If the server is unreachable, the local countdown completion still stands — the VPN starts anyway. |
+| `record_ad_click` | `{"p_ad_id": "<id>", "p_email": "<email>"}` | `true` or `{"verified": true}` | Called when the user taps ad content (best-effort). The tap never ends the countdown. |
+| `get_subscription_status` | `{"p_email": "<email>"}` | `{"status": "active" \| "none" \| "inactive" \| "cancelled", "plan": "<plan_id>" \| null, "expires_at": "<ISO-8601>" \| null}` | The server is the authority for the subscription: the app re-checks it before connecting when the cached tier is premium (bounded to 3 s) and merges it with the cached row on every refresh. A failed/timed-out check keeps the cached tier. |
+
+Bot-side tables: `vpn5g_ad_events` (ad_id, email, event `view`/`click`,
+created_at) for the ad records; `vpn5g_code_redemptions` (see item 8)
+for code redemptions. The RPCs are `SECURITY DEFINER` with `GRANT
+EXECUTE` to anon, like `record_code_redemption`.
+
 ## Built-in default config sources
 
 When `config_sources` is absent, the app fetches these eight sources:
@@ -161,7 +259,24 @@ configs (TCP connect fails) are dropped and never stored.
     "enabled": true,
     "text": "اشتراک ویژه با ۲۰٪ تخفیف — فقط تا آخر هفته",
     "image_url": null,
+    "link_url": "https://t.me/VPN5G_IRBot?start=buy_sub_1",
     "id": "ann-1790000000"
+  },
+  "ads": {
+    "interstitial": {
+      "enabled": true,
+      "duration_seconds": 10,
+      "show_from_connect_number": 2,
+      "applies_to_free_only": true,
+      "text": "اشتراک ویژه VPN 5G — همه کشورها، بدون محدودیت",
+      "image_url": null,
+      "link_url": "https://t.me/VPN5G_IRBot?start=buy_sub_1",
+      "id": "ad-welcome"
+    },
+    "user_ads": [
+      { "id": "ad-user-1", "text": "تبلیغ کاربر", "image_url": null, "link_url": null, "model": "ten_times", "max_impressions": 10, "impressions_per_day": null, "hour_windows": [[9, 12], [18, 21]], "price_toman": 50000, "enabled": true, "approved": true }
+    ],
+    "pricing": { "once_toman": 20000, "ten_times_toman": 150000, "hourly_toman": 100000, "monthly_daily_toman": 900000 }
   },
   "config_sources": [
     "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs.txt",
@@ -212,7 +327,8 @@ the bot; the app never ships with prices.)
   "plans": null,
   "payment_gateway": null,
   "trial_enabled": false,
-  "trial_hours": 24
+  "trial_hours": 24,
+  "ads": null
 }
 ```
 
@@ -237,10 +353,17 @@ commerce works end to end:
    `max_uses` / `remaining_uses`; the bot must decrement `remaining_uses`
    on publish (it checks the `vpn5g_code_redemptions` table — see item 8)
    and set it to `0` once the people-limit is reached.
-3. **Redeem handler**: a `/start=redeem_<CODE>` deep-link handler that
-   validates the code again server-side, applies the discount/gift, and
-   decrements `remaining_uses` (the app only validates locally and links
-   the user to the bot).
+3. **(v1.1.15) Server-side code validation**: implement the
+   `validate_and_redeem_code(p_code, p_email)` RPC (see "Server-side
+   RPCs"): it checks existence / already-used / expiry /
+   remaining_uses and marks the code used ATOMICALLY, returning
+   `{"status": "ok" | "unknown" | "already_used" | "expired" |
+   "exhausted" | "not_yours", "plan"?, "expires_at"?}`. The app calls
+   it BEFORE the config-list check; until it exists, every call
+   returns `Unavailable` and the app falls back to the list. Keep the
+   `/start=redeem_<CODE>` deep-link handler too: it validates the code
+   again server-side, applies the discount/gift, and decrements
+   `remaining_uses`.
 4. **Admin commands for plans**: add / edit / remove entries in the `plans`
    array (id, **days**, Persian name, price in Toman). **(v1.1.14)** Plans
    are now the bot's `sub_1` / `sub_3` / `sub_6` / `sub_12` ids with
@@ -270,3 +393,35 @@ commerce works end to end:
    bot — the app's "پشتیبانی آنلاین" button now opens
    `https://t.me/VPN5G_IRBot?start=support` (the bot handles membership
    and routes the user to its support section).
+10. **(v1.1.15) Ad system — bot panel**: publish the `ads` object (admin
+    interstitial + user ads + pricing) in `app_config.json`; admin
+    controls the interstitial duration (1–20 s), the
+    `show_from_connect_number` frequency flag, `applies_to_free_only`,
+    content, link, and the per-model prices (`pricing`:
+    `once_toman` / `ten_times_toman` / `hourly_toman` /
+    `monthly_daily_toman`). User-submitted ads: the bot user panel
+    lets a user submit text/image/link + display type + count, shows
+    the final price preview, takes payment, and tracks order
+    status/history; the admin approves/rejects each request, and only
+    approved ads are published (with their `model`, `max_impressions`,
+    `impressions_per_day`, `hour_windows`, `price_toman`). Never
+    publish more impressions than purchased.
+11. **(v1.1.15) Unique payment amounts — auto-confirmation**: the buy
+    deep link now carries the plan
+    (`https://t.me/VPN5G_IRBot?start=buy_<plan_id>`, plan ids
+    `sub_1` / `sub_3` / `sub_6` / `sub_12`). For every pending order
+    the bot generates a UNIQUE payable amount (non-round, e.g. base
+    price + unique suffix), watches Pasargad 6276 deposits, auto-matches
+    by the unique amount, and auto-activates the subscription without
+    admin — so a payment confirms even when the admin is unavailable.
+12. **(v1.1.15) Ad view/click RPCs**: implement `record_ad_view(p_ad_id,
+    p_email)` and `record_ad_click(p_ad_id, p_email)` (returning `true`
+    or `{"verified": true}`) + table `vpn5g_ad_events` (ad_id, email,
+    event `view`/`click`, created_at). The app calls them best-effort;
+    a missing RPC never blocks the connect.
+13. **(v1.1.15) Subscription-status RPC**: implement
+    `get_subscription_status(p_email)` returning `{"status": "active" |
+    "none" | ..., "plan"?, "expires_at"?}`. The app re-checks it before
+    connecting when the cached tier is premium (3 s bound) and merges it
+    with the cached row on every refresh — it is the server-side
+    authority for VIP access (the local cache is only a display hint).

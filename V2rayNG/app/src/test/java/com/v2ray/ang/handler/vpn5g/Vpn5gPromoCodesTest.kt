@@ -265,4 +265,41 @@ class Vpn5gPromoCodesTest {
             )
         )
     }
+
+    @Test
+    fun test_redeem_link_builds_bot_deep_link() {
+        // v1.1.15: the redeem deep link is normalized (trimmed +
+        // uppercased) — the same link the app and the bot both use.
+        assertEquals(
+            "https://t.me/VPN5G_IRBot?start=redeem_GIFT5H",
+            Vpn5gPromoCodes.redeemLink("gift5h"),
+        )
+        assertEquals(
+            "https://t.me/VPN5G_IRBot?start=redeem_GIFT5H",
+            Vpn5gPromoCodes.redeemLink("  GIFT5H  "),
+        )
+    }
+
+    @Test
+    fun test_activate_server_gift_rejects_unusable_grants() {
+        // v1.1.15: a server grant with no expiry, or an expiry already
+        // past, activates nothing. These are the only activateServerGift
+        // branches that are JVM-testable: a usable grant saves the
+        // subscription to MMKV, which is a device concern (Not run here).
+        assertNull(
+            Vpn5gPromoCodes.activateServerGift(
+                "GIFT5H", "gift", null, "a@b.c", 1_700_000_000L
+            )
+        )
+        assertNull(
+            Vpn5gPromoCodes.activateServerGift(
+                "GIFT5H", "gift", 1_700_000_000L, "a@b.c", 1_700_000_000L
+            )
+        )
+        assertNull(
+            Vpn5gPromoCodes.activateServerGift(
+                "GIFT5H", "sub_12", 1_699_000_000L, "a@b.c", 1_700_000_000L
+            )
+        )
+    }
 }

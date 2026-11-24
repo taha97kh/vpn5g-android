@@ -242,6 +242,59 @@ object Vpn5gPromoCodes {
         return subscription to link
     }
 
+    /**
+     * Bot deep link for a code (v1.1.15): the user opens it so the bot
+     * can confirm/apply the code centrally. Pure.
+     */
+    fun redeemLink(code: String): String {
+        return "https://t.me/VPN5G_IRBot?start=redeem_${code.trim().uppercase()}"
+    }
+
+    /**
+     * Activates a gift the SERVER validated (v1.1.15): the grant (plan
+     * + expiry) comes from the `validate_and_redeem_code` RPC, not
+     * from the published config list — the server already marked the
+     * code used, so no reuse is possible. Records the redemption
+     * locally (so this device cannot re-redeem) and saves the granted
+     * subscription. Returns null when the server grant carries no
+     * usable expiry (then the caller falls back to the bot-link path).
+     * Never throws.
+     */
+    fun activateServerGift(
+        code: String,
+        plan: String?,
+        expiresAtEpochSeconds: Long?,
+        email: String,
+        nowEpochSeconds: Long,
+    ): Vpn5gSubscriptionStatus.Vpn5gUserSubscription? {
+        val expiresAt = expiresAtEpochSeconds ?: return null
+        if (expiresAt <= nowEpochSeconds) return null
+        val grantedPlan = plan?.takeIf { it.isNotBlank() }
+            ?: Vpn5gConstants.GIFT_TIER_PLAN_ID
+        val subscription = Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
+            status = "active",
+            expiresAtEpochSeconds = expiresAt,
+            plan = grantedPlan,
+        )
+        Vpn5gSubscriptionStatus.saveRedeemed(subscription)
+        val normalized = code.trim().uppercase()
+        val stored = redeemedLocally().toMutableList()
+        if (stored.none { it.code == normalized }) {
+            stored.add(
+                Redemption(
+                    code = normalized,
+                    type = "gift",
+                    redeemedAtEpochMillis = System.currentTimeMillis(),
+                    email = email.takeIf { it.isNotBlank() },
+                    plan = grantedPlan,
+                    expiresAtEpochSeconds = expiresAt,
+                )
+            )
+            saveRedeemed(stored)
+        }
+        return subscription
+    }
+
     /** Records a redemption locally and returns the bot deep link to confirm it. */
     fun redeem(
         code: PromoCodeRemote,
@@ -264,7 +317,7 @@ object Vpn5gPromoCodes {
             saveRedeemed(stored)
         }
         // The bot applies the benefit and decrements remaining_uses.
-        return "https://t.me/VPN5G_IRBot?start=redeem_$normalized"
+        return redeemLink(normalized)
     }
 
     fun isRedeemedLocally(rawInput: String): Boolean {

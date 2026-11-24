@@ -253,3 +253,92 @@ fun Vpn5gSearchIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifie
         )
     }
 }
+
+/** Padlock for locked countries (v1.1.15): shackle arc + body + keyhole. */
+@Composable
+fun Vpn5gLockIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.10f
+        // Shackle: open-bottom arc above the body.
+        drawArc(
+            color = color,
+            startAngle = 180f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(w * 0.28f, h * 0.06f),
+            size = androidx.compose.ui.geometry.Size(w * 0.44f, h * 0.44f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+        // Body: rounded rect.
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.16f, h * 0.44f),
+            size = androidx.compose.ui.geometry.Size(w * 0.68f, h * 0.48f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.08f, w * 0.08f),
+        )
+        // Keyhole: small circle + slot, cut in the background color.
+        drawCircle(
+            color = Color.Black,
+            radius = w * 0.07f,
+            center = Offset(w * 0.5f, h * 0.62f),
+        )
+        drawLine(
+            color = Color.Black,
+            start = Offset(w * 0.5f, h * 0.66f),
+            end = Offset(w * 0.5f, h * 0.80f),
+            strokeWidth = stroke * 0.8f,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+/** Gift box for the gift-code button (v1.1.15): box + lid + ribbon + bow. */
+@Composable
+fun Vpn5gGiftIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.09f
+        // Box body.
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.14f, h * 0.42f),
+            size = androidx.compose.ui.geometry.Size(w * 0.72f, h * 0.50f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.06f, w * 0.06f),
+        )
+        // Lid.
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.10f, h * 0.30f),
+            size = androidx.compose.ui.geometry.Size(w * 0.80f, h * 0.14f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.05f, w * 0.05f),
+        )
+        // Ribbon: vertical band through box + lid.
+        drawRect(
+            color = Color.Black,
+            topLeft = Offset(w * 0.45f, h * 0.30f),
+            size = androidx.compose.ui.geometry.Size(w * 0.10f, h * 0.62f),
+        )
+        // Bow: two loops above the lid.
+        drawArc(
+            color = color,
+            startAngle = 90f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(w * 0.22f, h * 0.04f),
+            size = androidx.compose.ui.geometry.Size(w * 0.24f, h * 0.28f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+        drawArc(
+            color = color,
+            startAngle = 270f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(w * 0.54f, h * 0.04f),
+            size = androidx.compose.ui.geometry.Size(w * 0.24f, h * 0.28f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+    }
+}

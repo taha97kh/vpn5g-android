@@ -436,8 +436,15 @@ object Vpn5gSync {
      * servers ([selectFreeGuids], v1.1.7); a section is "free" when it holds
      * at least one free server. v1.1.11: a subscriber (cached subscription
      * active) gets the whole real-pinged pool instead — see [freeGuidsFor].
+     *
+     * v1.1.15 (anti-tamper, H1): [forceFreeTier] forces the FREE pool
+     * even when the cached subscription says otherwise. The ViewModel
+     * passes true when the startup signature check failed — a tampered
+     * build gets the free tier on screen, never a cached premium one.
+     * The cached tier is only a display hint anyway: every privileged
+     * action re-checks the server state before it runs.
      */
-    fun loadGroupedServers(): List<Vpn5gCountryUi> {
+    fun loadGroupedServers(forceFreeTier: Boolean = false): List<Vpn5gCountryUi> {
         val subId = MmkvManager.decodeSubscriptions()
             .firstOrNull { it.subscription.url == LIVE_JSON }?.guid
             ?: return emptyList()
@@ -488,7 +495,11 @@ object Vpn5gSync {
         // v1.1.14: the GIFT tier gets the top 50 instead. Servers that
         // verified on the CURRENT operator are marked (own history
         // only) so the auto pick can prefer them.
-        val tier = Vpn5gSubscriptionStatus.cachedTier()
+        val tier = if (forceFreeTier) {
+            Vpn5gTier.FREE
+        } else {
+            Vpn5gSubscriptionStatus.cachedTier()
+        }
         val freeGuids = freeGuidsFor(byCountry.values.flatten(), tier)
         val sections = byCountry.map { (key, servers) ->
             val marked = servers

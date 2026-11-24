@@ -15,11 +15,13 @@ class Vpn5gAnnouncementTest {
         text: String? = "تخفیف ویژه",
         imageUrl: String? = null,
         id: String? = "ann-1",
+        linkUrl: String? = null,
     ) = AnnouncementRemote(
         enabled = enabled,
         text = text,
         image_url = imageUrl,
         id = id,
+        link_url = linkUrl,
     )
 
     @Test
@@ -44,6 +46,24 @@ class Vpn5gAnnouncementTest {
         assertFalse(Vpn5gAnnouncement.shouldShow(first, "ann-1"))
         // A republished version (new id) is shown again.
         assertTrue(Vpn5gAnnouncement.shouldShow(announcement(id = "ann-2"), "ann-1"))
+    }
+
+    @Test
+    fun test_link_url_does_not_change_visibility() {
+        // v1.1.15: the optional link only makes the card tappable — it
+        // never hides or shows the announcement on its own.
+        assertTrue(Vpn5gAnnouncement.shouldShow(announcement(linkUrl = "https://t.me/x"), null))
+        assertTrue(Vpn5gAnnouncement.shouldShow(announcement(linkUrl = null), null))
+        assertTrue(Vpn5gAnnouncement.shouldShow(announcement(linkUrl = ""), null))
+        assertFalse(
+            Vpn5gAnnouncement.shouldShow(announcement(linkUrl = "https://t.me/x"), "ann-1")
+        )
+        // The dismiss key ignores the link: same id + text, different
+        // link = the same announcement version.
+        assertEquals(
+            Vpn5gAnnouncement.dismissKey(announcement(linkUrl = "https://t.me/a")),
+            Vpn5gAnnouncement.dismissKey(announcement(linkUrl = "https://t.me/b")),
+        )
     }
 
     @Test

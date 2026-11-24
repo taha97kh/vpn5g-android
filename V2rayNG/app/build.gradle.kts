@@ -13,8 +13,8 @@ android {
         applicationId = "com.taha97kh.vpn5g"
         minSdk = 24
         targetSdk = 37
-        versionCode = 16
-        versionName = "1.1.14"
+        versionCode = 17
+        versionName = "1.1.15"
 
         // Build date stamped into BuildConfig.BUILD_TIME (VPN 5G About screen).
         buildConfigField("String", "BUILD_TIME", "\"2026-11-24\"")
@@ -87,7 +87,12 @@ android {
         release {
             isDebuggable = false
             signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = false
+            // v1.1.15 (anti-tamper, H2): R8 obfuscation + resource
+            // shrinking for the release build. Keep rules are in
+            // proguard-rules.pro; CI is the check — if the release
+            // build breaks, revert this one line first.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

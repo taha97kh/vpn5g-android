@@ -16,6 +16,7 @@ import com.v2ray.ang.core.CoreServiceManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.extension.delay
 import com.v2ray.ang.extension.toSpeedString
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.helper.NotificationHelper
 import com.v2ray.ang.ui.vpn5g.Vpn5gMainActivity
 import com.v2ray.ang.util.LogUtil
@@ -261,6 +262,20 @@ object NotificationManager {
         val proxyTotal = proxyUplink + proxyDownlink
         val directTotal = directUplink + directDownlink
         val zeroSpeed = proxyTotal + directTotal == 0L
+        // v1.1.15 (speeds root-cause fix): publish the tunnel-only
+        // rates for the home screen. The UI process cannot query the
+        // core itself (different process — the :daemon service owns
+        // the core), so this job, in the daemon, is the SINGLE querier
+        // and MMKV (multi-process) carries the rates across. The
+        // native counters reset on every query, so value/elapsed IS
+        // the interval rate. Published every round — including zero
+        // rounds — so the home screen can tell "no data" (stale) from
+        // "no traffic".
+        val downBps = (proxyDownlink / sinceLastQueryInSeconds).toLong().coerceAtLeast(0L)
+        val upBps = (proxyUplink / sinceLastQueryInSeconds).toLong().coerceAtLeast(0L)
+        MmkvManager.encodeSettings(Vpn5gConstants.KEY_SPEED_DOWN_BPS, downBps)
+        MmkvManager.encodeSettings(Vpn5gConstants.KEY_SPEED_UP_BPS, upBps)
+        MmkvManager.encodeSettings(Vpn5gConstants.KEY_SPEED_UPDATED_AT_MS, queryTime)
         if (!zeroSpeed || !lastZeroSpeed) {
             // v1.1.14: TUNNEL-ONLY speeds with Persian labels — the
             // bypassed (direct) traffic is never shown, and nothing is
@@ -269,13 +284,13 @@ object NotificationManager {
             val service = getService()
             val text = if (service != null) {
                 service.getString(R.string.vpn5g_speed_download) + " " +
-                    (proxyDownlink / sinceLastQueryInSeconds).toLong().toSpeedString() +
+                    downBps.toSpeedString() +
                     "  •  " +
                     service.getString(R.string.vpn5g_speed_upload) + " " +
-                    (proxyUplink / sinceLastQueryInSeconds).toLong().toSpeedString()
+                    upBps.toSpeedString()
             } else {
-                "proxy •  ${(proxyUplink / sinceLastQueryInSeconds).toLong().toSpeedString()}↑  " +
-                    "${(proxyDownlink / sinceLastQueryInSeconds).toLong().toSpeedString()}↓"
+                "proxy •  ${upBps.toSpeedString()}↑  " +
+                    "${downBps.toSpeedString()}↓"
             }
             updateNotification(text, proxyTotal, directTotal)
         }

@@ -296,18 +296,36 @@ object Vpn5gSubscriptionStatus {
     suspend fun refresh(session: Vpn5gAuthService.Vpn5gAuthSession?): Vpn5gUserSubscription? {
         if (session == null) return null
         val nowSeconds = System.currentTimeMillis() / 1000
-        return when (val result = fetchOwnRow(session)) {
+        val rowCandidate = when (val result = fetchOwnRow(session)) {
             is FetchResult.Found -> {
                 saveCached(result.subscription)
-                effectiveSubscription(result.subscription, loadRedeemed(), nowSeconds)
+                result.subscription
             }
             FetchResult.NoRow -> {
                 val none = Vpn5gUserSubscription(status = "none")
                 saveCached(none)
-                effectiveSubscription(none, loadRedeemed(), nowSeconds)
+                none
             }
-            FetchResult.Failed -> effectiveSubscription(loadCached(), loadRedeemed(), nowSeconds)
+            FetchResult.Failed -> loadCached()
         }
+        // v1.1.15 (server-side enforcement): the bot's subscription
+        // lookup is the authority for redeemed gifts too — a local
+        // gift the server does not know is not trusted. The RPC does
+        // not exist yet on the bot side: then the lookup returns
+        // Unavailable and the local caches stand (current behavior).
+        // Only a DEFINITIVE server answer changes anything: Found
+        // merges in as server truth; None drops the local gift.
+        val serverResult = session.email?.takeIf { it.isNotBlank() }?.let { email ->
+            runCatching { Vpn5gAuthService.fetchServerSubscription(email) }.getOrNull()
+        } ?: Vpn5gAuthService.ServerSubscriptionResult.Unavailable
+        val serverSub = (serverResult as? Vpn5gAuthService.ServerSubscriptionResult.Found)
+            ?.subscription
+        val trustedRedeemed = when (serverResult) {
+            is Vpn5gAuthService.ServerSubscriptionResult.None -> null
+            else -> loadRedeemed()
+        }
+        val merged = effectiveSubscription(rowCandidate, serverSub, nowSeconds)
+        return effectiveSubscription(merged, trustedRedeemed, nowSeconds)
     }
 
     /** The cached subscription, or null when nothing was ever cached. */

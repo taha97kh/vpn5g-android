@@ -71,6 +71,19 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
  * gift_days, no admin approval, no second confirm screen); the bot
  * deep link stays only as an optional step so the bot can decrement
  * remaining_uses server-side. Discount codes still go through the bot.
+ * v1.1.15: codes are validated SERVER-side first
+ * (`validate_and_redeem_code`); the config list is only the fallback
+ * when the RPC is unreachable.
+ *
+ * v1.1.15 layout (master order): title → benefits description →
+ * REGISTER-CODE button (top) → gift-code section → locked countries
+ * (collapsible tree, closed by default) → subscription status
+ * (remaining time inside it) → plans → payment → buy-code →
+ * comparison → account → back-home. ALL sections start closed.
+ * Buying stays inside Premium; the buy deep link carries the selected
+ * plan id (`start=buy_<plan_id>`) so the bot can generate the UNIQUE
+ * payable amount for that order — the app never shows a round plan
+ * price as the amount to pay.
  */
 @Composable
 fun Vpn5gSubscriptionScreen(
@@ -87,19 +100,35 @@ fun Vpn5gSubscriptionScreen(
     onCountryServerTap: (String) -> Unit,
     /** Locked country tapped: shows the subscription dialog. */
     onLockedCountryTap: (String) -> Unit,
+    /** Buy via bot with the selected plan id (v1.1.15, G): the deep
+     * link is t.me/VPN5G_IRBot?start=buy_<plan_id> so the bot can
+     * generate the unique payable amount for that order. */
+    onOpenBuyBot: (String) -> Unit,
+    /** Gift-code deep entry counter (v1.1.15, C): when it changes, the
+     * gift section opens directly. */
+    giftCodeRequest: Int = 0,
+    /** Toggles a locked-country group (v1.1.15): state lives in the
+     * ViewModel and is persisted. */
+    onToggleCountryExpanded: (String) -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
     // Section expansion is transient presentation state only (v1.1.5
-    // §4). All sections start open, as before, except the long
-    // comparison table, which starts closed.
-    var statusExpanded by remember { mutableStateOf(true) }
+    // §4). v1.1.15: ALL sections start CLOSED — the user opens them.
+    // (Before: all open except the comparison table.)
+    var statusExpanded by remember { mutableStateOf(false) }
     var comparisonExpanded by remember { mutableStateOf(false) }
-    var plansExpanded by remember { mutableStateOf(true) }
-    var paymentExpanded by remember { mutableStateOf(true) }
-    var promoExpanded by remember { mutableStateOf(true) }
-    var buyCodeExpanded by remember { mutableStateOf(true) }
-    var countriesExpanded by remember { mutableStateOf(true) }
+    var plansExpanded by remember { mutableStateOf(false) }
+    var paymentExpanded by remember { mutableStateOf(false) }
+    var promoExpanded by remember { mutableStateOf(false) }
+    var buyCodeExpanded by remember { mutableStateOf(false) }
+    var countriesExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { entered = true }
+    // v1.1.15: a gift-code deep entry (ALL-tab button) opens the gift
+    // section directly — no scroll hack, the section sits right below
+    // the register button at the top.
+    LaunchedEffect(giftCodeRequest) {
+        if (giftCodeRequest > 0) promoExpanded = true
+    }
 
     // Plans as published by the bot (valid entries only: id + price +
     // a known duration — sub_1/sub_3/sub_6/sub_12 or an explicit days
@@ -115,7 +144,7 @@ fun Vpn5gSubscriptionScreen(
     // only — no cities exist anywhere, so no city names are shown.
     val countryGroups = Vpn5gCountryGroups.groupByCountry(state.countries)
     var showPayment by rememberSaveable { mutableStateOf(false) }
-    var accountExpanded by remember { mutableStateOf(true) }
+    var accountExpanded by remember { mutableStateOf(false) }
     val gateway = state.paymentGateway
     val gatewayReady = gateway?.enabled == true && !gateway.url.isNullOrBlank()
     // v1.1.11: the signed-in user's own subscription (from their
@@ -153,351 +182,35 @@ fun Vpn5gSubscriptionScreen(
             )
         }
 
-        val status = state.subscriptionStatus
-        // v1.1.11: the signed-in user's own subscription (from their
-        // vpn5g_registrations row) wins over the bot-published global
-        // status: it is the only per-user truth. An "active" row that
-        // already expired shows the expired line, not plan days.
+        // v1.1.15: short benefits description, right under the title.
         Vpn5gStaggeredItem(index = 1, visible = entered) {
-            Vpn5gExpandableSection(
-                title = stringResource(R.string.vpn5g_subscription_title),
-                expanded = statusExpanded,
-                onToggleExpand = { statusExpanded = !statusExpanded },
-            ) {
-                if (ownSubscription != null && state.isSubscriber) {
-                    // v1.1.12: premium look — gold pill + the remaining
-                    // days prominent (bold, larger) for subscribers.
-                    Vpn5gPremiumPill()
-                    Spacer(Modifier.height(8.dp))
-                    ownPlanName?.let { plan ->
-                        Text(
-                            text = stringResource(R.string.vpn5g_subscription_plan, plan),
-                            color = Vpn5gOnDark,
-                            fontSize = 15.sp,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                    }
-                    Text(
-                        text = stringResource(
-                            R.string.vpn5g_subscription_days,
-                            Vpn5gSubscriptionStatus.remainingDays(
-                                ownSubscription,
-                                System.currentTimeMillis() / 1000,
-                            ),
-                        ),
-                        color = Vpn5gOnDark,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                } else if (ownSubscription != null && state.isGift) {
-                    // v1.1.14: the GIFT tier — middle tier, top-50
-                    // servers, no 30-minute cutoff while it lasts.
-                    // Remaining time is shown in hours, never days.
-                    Text(
-                        text = stringResource(R.string.vpn5g_gift_title),
-                        color = Vpn5gGold,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = stringResource(
-                            R.string.vpn5g_gift_remaining_hours,
-                            state.giftRemainingHours,
-                        ),
-                        color = Vpn5gOnDark,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                } else if (ownSubscription?.status == "active") {
-                    Text(
-                        text = stringResource(R.string.vpn5g_subscription_expired),
-                        color = Vpn5gOnDark,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.vpn5g_subscription_none_body),
-                        color = Vpn5gOnDarkMuted,
-                        fontSize = 14.sp,
-                    )
-                } else if (status == null) {
-                    Text(
-                        text = stringResource(R.string.vpn5g_subscription_none),
-                        color = Vpn5gOnDark,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.vpn5g_subscription_none_body),
-                        color = Vpn5gOnDarkMuted,
-                        fontSize = 14.sp,
-                    )
-                } else {
-                    status.plan_name?.let { plan ->
-                        Text(
-                            text = stringResource(R.string.vpn5g_subscription_plan, plan),
-                            color = Vpn5gOnDark,
-                            fontSize = 15.sp,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                    }
-                    status.remaining_days?.let { days ->
-                        Text(
-                            text = stringResource(R.string.vpn5g_subscription_days, days),
-                            color = Vpn5gOnDark,
-                            fontSize = 15.sp,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        // Days bar vs a 30-day cycle (labelled; the day count
-                        // itself comes from the server, never invented).
-                        LinearProgressIndicator(
-                            progress = { (days / 30f).coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth(),
-                            color = Vpn5gAccentLight,
-                            trackColor = Vpn5gOnDarkMuted.copy(alpha = 0.3f),
-                        )
-                        Spacer(Modifier.height(8.dp))
-                    }
-                    status.remaining_volume_gb?.let { volume ->
-                        Text(
-                            text = stringResource(R.string.vpn5g_subscription_volume, volume),
-                            color = Vpn5gOnDark,
-                            fontSize = 15.sp,
-                        )
-                    }
-                }
-            }
+            Text(
+                text = stringResource(R.string.vpn5g_subscription_benefits_desc),
+                color = Vpn5gOnDarkMuted,
+                fontSize = 14.sp,
+            )
         }
 
-        // Free vs Premium comparison (counts come from the live list).
+        // v1.1.15: the register-code button at the TOP of Premium —
+        // it expands the gift-code section directly below it; redeeming
+        // never navigates anywhere.
         Vpn5gStaggeredItem(index = 2, visible = entered) {
-            Vpn5gExpandableSection(
-                title = stringResource(R.string.vpn5g_premium_title),
-                expanded = comparisonExpanded,
-                onToggleExpand = { comparisonExpanded = !comparisonExpanded },
+            Button(
+                onClick = { promoExpanded = true },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Vpn5gGold,
+                    contentColor = Color.Black,
+                ),
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Vpn5gCompareRow(
-                    feature = "",
-                    free = stringResource(R.string.vpn5g_premium_free),
-                    premium = stringResource(R.string.vpn5g_premium_name),
-                    header = true,
-                )
-                Vpn5gCompareRow(
-                    feature = stringResource(R.string.vpn5g_premium_speed),
-                    free = stringResource(R.string.vpn5g_premium_speed_free),
-                    premium = stringResource(R.string.vpn5g_premium_speed_premium),
-                )
-                Vpn5gCompareRow(
-                    feature = stringResource(R.string.vpn5g_premium_locations),
-                    free = stringResource(
-                        R.string.vpn5g_premium_locations_free, freeCountryCount
-                    ),
-                    premium = stringResource(
-                        R.string.vpn5g_premium_locations_premium, totalCountryCount
-                    ),
-                )
-                Vpn5gCompareRow(
-                    feature = stringResource(R.string.vpn5g_premium_servers),
-                    free = stringResource(
-                        R.string.vpn5g_premium_servers_free, freeServerCount
-                    ),
-                    premium = stringResource(
-                        R.string.vpn5g_premium_servers_premium, totalServerCount
-                    ),
-                )
-                Vpn5gCompareRow(
-                    feature = stringResource(R.string.vpn5g_premium_no_ads),
-                    free = "✗",
-                    premium = "✓",
-                )
-                Vpn5gCompareRow(
-                    feature = stringResource(R.string.vpn5g_premium_support),
-                    free = "✗",
-                    premium = "✓",
-                )
-            }
-        }
-
-        // Plans from remote config (never hardcoded). No plans published
-        // means no cards — the user buys through the bot instead.
-        Vpn5gStaggeredItem(index = 3, visible = entered) {
-            Vpn5gExpandableSection(
-                title = stringResource(R.string.vpn5g_premium_plans_title),
-                expanded = plansExpanded,
-                onToggleExpand = { plansExpanded = !plansExpanded },
-            ) {
-                if (plans.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.vpn5g_premium_plans_none),
-                        color = Vpn5gOnDarkMuted,
-                        fontSize = 14.sp,
-                    )
-                } else {
-                    plans.forEach { plan ->
-                        Vpn5gPlanCard(
-                            plan = plan,
-                            selected = plan.id == selectedPlan?.id,
-                            trialEnabled = state.trialEnabled,
-                            trialHours = state.trialHours,
-                            onSelect = { selectedPlanId = plan.id },
-                        )
-                        Spacer(Modifier.height(8.dp))
-                    }
-                    if (state.trialEnabled) {
-                        Text(
-                            text = stringResource(R.string.vpn5g_premium_trial_note),
-                            color = Vpn5gOnDarkMuted,
-                            fontSize = 13.sp,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                    }
-                    Button(
-                        onClick = { showPayment = true },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Vpn5gCyan,
-                            contentColor = Color.White,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(text = stringResource(R.string.vpn5g_premium_continue), fontSize = 16.sp)
-                    }
-                }
-            }
-        }
-
-        // Payment methods for the selected plan.
-        if (showPayment && plans.isNotEmpty()) {
-            Vpn5gStaggeredItem(index = 4, visible = entered) {
-                Vpn5gExpandableSection(
-                    title = stringResource(R.string.vpn5g_premium_payment_title),
-                    expanded = paymentExpanded,
-                    onToggleExpand = { paymentExpanded = !paymentExpanded },
-                ) {
-                    // Direct bank gateway (config-driven). While it is not
-                    // configured the row is shown as coming soon and routes
-                    // to the bot to complete the purchase manually.
-                    Vpn5gPaymentRow(
-                        title = gateway?.name_fa
-                            ?: stringResource(R.string.vpn5g_premium_pay_gateway),
-                        body = stringResource(R.string.vpn5g_premium_pay_gateway_body),
-                        badge = if (gatewayReady) {
-                            null
-                        } else {
-                            stringResource(R.string.vpn5g_premium_coming_soon)
-                        },
-                        onClick = {
-                            val url = gateway?.url
-                            if (gatewayReady && !url.isNullOrBlank()) {
-                                onOpenUrl(url)
-                            } else {
-                                onOpenBot()
-                            }
-                        },
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Vpn5gPaymentRow(
-                        title = stringResource(R.string.vpn5g_premium_pay_bot),
-                        body = stringResource(R.string.vpn5g_premium_pay_bot_body),
-                        badge = null,
-                        onClick = onOpenBot,
-                    )
-                }
-            }
-        }
-
-        // Countries (v1.1.14): up to 100 countries with their servers,
-        // from the live pool. Locked for non-subscribers — only
-        // subscription buyers can open/use them; subscribers tap a
-        // country to connect to its fastest server (auto-connect
-        // includes them — the full pool). The gift tier opens the
-        // countries its top-50 servers belong to. A locked tap prompts
-        // subscription. No city data exists in the pool, so each server
-        // row is one location inside its country.
-        Vpn5gStaggeredItem(index = 5, visible = entered) {
-            Vpn5gExpandableSection(
-                title = stringResource(R.string.vpn5g_premium_countries_title),
-                expanded = countriesExpanded,
-                onToggleExpand = { countriesExpanded = !countriesExpanded },
-            ) {
-                if (countryGroups.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.vpn5g_premium_countries_none),
-                        color = Vpn5gOnDarkMuted,
-                        fontSize = 14.sp,
-                    )
-                } else {
-                    Text(
-                        text = stringResource(
-                            R.string.vpn5g_premium_countries_count,
-                            countryGroups.size,
-                        ),
-                        color = Vpn5gOnDarkMuted,
-                        fontSize = 13.sp,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    countryGroups.forEach { group ->
-                        val unlocked = state.isSubscriber || group.hasFreeServer
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Vpn5gOnDark.copy(alpha = 0.06f))
-                                .clickable(
-                                    role = Role.Button,
-                                    onClickLabel = group.nameFa,
-                                ) {
-                                    if (unlocked) {
-                                        group.fastestGuid?.let { onCountryServerTap(it) }
-                                    } else {
-                                        onLockedCountryTap(group.nameFa)
-                                    }
-                                }
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                        ) {
-                            Text(
-                                text = group.flag,
-                                fontSize = 20.sp,
-                                modifier = Modifier.padding(end = 8.dp),
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = group.nameFa,
-                                    color = Vpn5gOnDark,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                                Text(
-                                    text = stringResource(
-                                        R.string.vpn5g_servers_count,
-                                        group.servers.size,
-                                    ),
-                                    color = Vpn5gOnDarkMuted,
-                                    fontSize = 13.sp,
-                                )
-                            }
-                            if (!unlocked) {
-                                Text(
-                                    text = stringResource(R.string.vpn5g_needs_subscription),
-                                    color = Vpn5gAccentLight,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(6.dp))
-                    }
-                }
+                Text(text = stringResource(R.string.vpn5g_register_code_top), fontSize = 16.sp)
             }
         }
 
         // Gift code (v1.1.14): its OWN section, separate from buying a
         // subscription code. The code input + submit are RIGHT HERE
         // inline — redeeming never navigates to another page.
-        Vpn5gStaggeredItem(index = 6, visible = entered) {
+        Vpn5gStaggeredItem(index = 3, visible = entered) {
             Vpn5gExpandableSection(
                 title = stringResource(R.string.vpn5g_gift_title),
                 expanded = promoExpanded,
@@ -696,10 +409,346 @@ fun Vpn5gSubscriptionScreen(
             }
         }
 
+        // Countries (v1.1.14; tree v1.1.15): up to 100 countries with
+        // their servers, as a collapsible tree, closed by default.
+        // from the live pool. Locked for non-subscribers — only
+        // subscription buyers can open/use them; subscribers tap a
+        // country to connect to its fastest server (auto-connect
+        // includes them — the full pool). The gift tier opens the
+        // countries its top-50 servers belong to. A locked tap prompts
+        // subscription. No city data exists in the pool, so each server
+        // row is one location inside its country.
+        Vpn5gStaggeredItem(index = 4, visible = entered) {
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_premium_countries_title),
+                expanded = countriesExpanded,
+                onToggleExpand = { countriesExpanded = !countriesExpanded },
+            ) {
+                if (countryGroups.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_premium_countries_none),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
+                    )
+                } else {
+                    Text(
+                        text = stringResource(
+                            R.string.vpn5g_premium_countries_count,
+                            countryGroups.size,
+                        ),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    countryGroups.forEach { group ->
+                        val groupKey = group.code.ifBlank { group.nameFa }
+                        val unlocked = state.isSubscriber || group.hasFreeServer
+                        // v1.1.15: nested collapsible group — closed by
+                        // default, lock badge when locked, open/closed
+                        // state persisted in the ViewModel.
+                        Vpn5gExpandableSection(
+                            title = group.nameFa,
+                            subtitle = stringResource(
+                                R.string.vpn5g_servers_count,
+                                group.servers.size,
+                            ),
+                            badge = if (unlocked) null else "\uD83D\uDD12",
+                            leading = {
+                                Text(
+                                    text = group.flag,
+                                    fontSize = 20.sp,
+                                )
+                            },
+                            expanded = groupKey in state.expandedCountryKeys,
+                            onToggleExpand = { onToggleCountryExpanded(groupKey) },
+                        ) {
+                            group.servers.forEach { server ->
+                                // Per-server gate (v1.1.14 pool): isFree
+                                // already reflects the tier — top 20 for
+                                // free, top 50 for gift, all for
+                                // subscribers — so one rule covers all.
+                                val serverUnlocked = state.isSubscriber || server.isFree
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Vpn5gOnDark.copy(alpha = 0.06f))
+                                        .clickable(
+                                            role = Role.Button,
+                                            onClickLabel = group.nameFa +
+                                                " " + server.protocol.uppercase(),
+                                        ) {
+                                            if (serverUnlocked) {
+                                                onCountryServerTap(server.guid)
+                                            } else {
+                                                onLockedCountryTap(group.nameFa)
+                                            }
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        // The config remark is never
+                                        // displayed anywhere: a server row
+                                        // shows its protocol + ping only.
+                                        Text(
+                                            text = server.protocol.uppercase(),
+                                            color = Vpn5gOnDark,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                        Text(
+                                            text = if (server.pingMillis > 0L) {
+                                                "${server.pingMillis} ms"
+                                            } else {
+                                                "\u2014"
+                                            },
+                                            color = Vpn5gOnDarkMuted,
+                                            fontSize = 13.sp,
+                                        )
+                                    }
+                                    if (!serverUnlocked) {
+                                        Vpn5gLockIcon(color = Vpn5gGold, size = 18.dp)
+                                    }
+                                }
+                                Spacer(Modifier.height(6.dp))
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                }
+            }
+        }
+
+        val status = state.subscriptionStatus
+        // v1.1.11: the signed-in user's own subscription (from their
+        // vpn5g_registrations row) wins over the bot-published global
+        // status: it is the only per-user truth. An "active" row that
+        // already expired shows the expired line, not plan days.
+        Vpn5gStaggeredItem(index = 5, visible = entered) {
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_subscription_title),
+                expanded = statusExpanded,
+                onToggleExpand = { statusExpanded = !statusExpanded },
+            ) {
+                if (ownSubscription != null && state.isSubscriber) {
+                    // v1.1.12: premium look — gold pill + the remaining
+                    // days prominent (bold, larger) for subscribers.
+                    Vpn5gPremiumPill()
+                    Spacer(Modifier.height(8.dp))
+                    ownPlanName?.let { plan ->
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_plan, plan),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    Text(
+                        text = stringResource(
+                            R.string.vpn5g_subscription_days,
+                            Vpn5gSubscriptionStatus.remainingDays(
+                                ownSubscription,
+                                System.currentTimeMillis() / 1000,
+                            ),
+                        ),
+                        color = Vpn5gOnDark,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                } else if (ownSubscription != null && state.isGift) {
+                    // v1.1.14: the GIFT tier — middle tier, top-50
+                    // servers, no 30-minute cutoff while it lasts.
+                    // Remaining time is shown in hours, never days.
+                    Text(
+                        text = stringResource(R.string.vpn5g_gift_title),
+                        color = Vpn5gGold,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(
+                            R.string.vpn5g_gift_remaining_hours,
+                            state.giftRemainingHours,
+                        ),
+                        color = Vpn5gOnDark,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                } else if (ownSubscription?.status == "active") {
+                    Text(
+                        text = stringResource(R.string.vpn5g_subscription_expired),
+                        color = Vpn5gOnDark,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.vpn5g_subscription_none_body),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
+                    )
+                } else if (status == null) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_subscription_none),
+                        color = Vpn5gOnDark,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.vpn5g_subscription_none_body),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
+                    )
+                } else {
+                    status.plan_name?.let { plan ->
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_plan, plan),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    status.remaining_days?.let { days ->
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_days, days),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        // Days bar vs a 30-day cycle (labelled; the day count
+                        // itself comes from the server, never invented).
+                        LinearProgressIndicator(
+                            progress = { (days / 30f).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Vpn5gAccentLight,
+                            trackColor = Vpn5gOnDarkMuted.copy(alpha = 0.3f),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    status.remaining_volume_gb?.let { volume ->
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_volume, volume),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                        )
+                    }
+                }
+            }
+        }
+
+        // Plans from remote config (never hardcoded). No plans published
+        // means no cards — the user buys through the bot instead.
+        Vpn5gStaggeredItem(index = 6, visible = entered) {
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_premium_plans_title),
+                expanded = plansExpanded,
+                onToggleExpand = { plansExpanded = !plansExpanded },
+            ) {
+                if (plans.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_premium_plans_none),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
+                    )
+                } else {
+                    plans.forEach { plan ->
+                        Vpn5gPlanCard(
+                            plan = plan,
+                            selected = plan.id == selectedPlan?.id,
+                            trialEnabled = state.trialEnabled,
+                            trialHours = state.trialHours,
+                            onSelect = { selectedPlanId = plan.id },
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    if (state.trialEnabled) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_premium_trial_note),
+                            color = Vpn5gOnDarkMuted,
+                            fontSize = 13.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    Button(
+                        onClick = { showPayment = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Vpn5gCyan,
+                            contentColor = Color.White,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(text = stringResource(R.string.vpn5g_premium_continue), fontSize = 16.sp)
+                    }
+                }
+            }
+        }
+
+        // Payment methods for the selected plan.
+        if (showPayment && plans.isNotEmpty()) {
+            Vpn5gStaggeredItem(index = 7, visible = entered) {
+                Vpn5gExpandableSection(
+                    title = stringResource(R.string.vpn5g_premium_payment_title),
+                    expanded = paymentExpanded,
+                    onToggleExpand = { paymentExpanded = !paymentExpanded },
+                ) {
+                    // Direct bank gateway (config-driven). While it is not
+                    // configured the row is shown as coming soon and routes
+                    // to the bot to complete the purchase manually.
+                    Vpn5gPaymentRow(
+                        title = gateway?.name_fa
+                            ?: stringResource(R.string.vpn5g_premium_pay_gateway),
+                        body = stringResource(R.string.vpn5g_premium_pay_gateway_body),
+                        badge = if (gatewayReady) {
+                            null
+                        } else {
+                            stringResource(R.string.vpn5g_premium_coming_soon)
+                        },
+                        onClick = {
+                            val url = gateway?.url
+                            if (gatewayReady && !url.isNullOrBlank()) {
+                                onOpenUrl(url)
+                            } else if (selectedPlan != null) {
+                                // v1.1.15 (unique payments, G): the buy
+                                // deep link carries the selected plan so
+                                // the bot can generate the UNIQUE payable
+                                // amount for that order.
+                                onOpenBuyBot(selectedPlan.id)
+                            } else {
+                                onOpenBot()
+                            }
+                        },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Vpn5gPaymentRow(
+                        title = stringResource(R.string.vpn5g_premium_pay_bot),
+                        body = stringResource(R.string.vpn5g_premium_pay_bot_body),
+                        badge = null,
+                        onClick = {
+                            val plan = selectedPlan
+                            if (plan != null) onOpenBuyBot(plan.id) else onOpenBot()
+                        },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    // v1.1.15 (unique payments, G): the payable amount
+                    // comes FROM THE BOT, unique per order — the app
+                    // never shows a round plan price as the amount to
+                    // pay in a payment context.
+                    Text(
+                        text = stringResource(R.string.vpn5g_premium_pay_unique_note),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+        }
+
         // Buy a subscription code (v1.1.14): a SEPARATE section from the
         // gift-code section above — buying happens through the bot; the
         // app never sells a code itself.
-        Vpn5gStaggeredItem(index = 7, visible = entered) {
+        Vpn5gStaggeredItem(index = 8, visible = entered) {
             Vpn5gExpandableSection(
                 title = stringResource(R.string.vpn5g_buy_code_title),
                 expanded = buyCodeExpanded,
@@ -724,24 +773,61 @@ fun Vpn5gSubscriptionScreen(
             }
         }
 
-        Vpn5gStaggeredItem(index = 8, visible = entered) {
-            Button(
-                onClick = onOpenBot,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Vpn5gAccent,
-                    contentColor = Color.White,
-                ),
-                modifier = Modifier.fillMaxWidth(),
+        // Free vs Premium comparison (counts come from the live list).
+        Vpn5gStaggeredItem(index = 9, visible = entered) {
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_premium_title),
+                expanded = comparisonExpanded,
+                onToggleExpand = { comparisonExpanded = !comparisonExpanded },
             ) {
-                Text(text = stringResource(R.string.vpn5g_open_bot), fontSize = 16.sp)
+                Vpn5gCompareRow(
+                    feature = "",
+                    free = stringResource(R.string.vpn5g_premium_free),
+                    premium = stringResource(R.string.vpn5g_premium_name),
+                    header = true,
+                )
+                Vpn5gCompareRow(
+                    feature = stringResource(R.string.vpn5g_premium_speed),
+                    free = stringResource(R.string.vpn5g_premium_speed_free),
+                    premium = stringResource(R.string.vpn5g_premium_speed_premium),
+                )
+                Vpn5gCompareRow(
+                    feature = stringResource(R.string.vpn5g_premium_locations),
+                    free = stringResource(
+                        R.string.vpn5g_premium_locations_free, freeCountryCount
+                    ),
+                    premium = stringResource(
+                        R.string.vpn5g_premium_locations_premium, totalCountryCount
+                    ),
+                )
+                Vpn5gCompareRow(
+                    feature = stringResource(R.string.vpn5g_premium_servers),
+                    free = stringResource(
+                        R.string.vpn5g_premium_servers_free, freeServerCount
+                    ),
+                    premium = stringResource(
+                        R.string.vpn5g_premium_servers_premium, totalServerCount
+                    ),
+                )
+                Vpn5gCompareRow(
+                    feature = stringResource(R.string.vpn5g_premium_no_ads),
+                    free = "✗",
+                    premium = "✓",
+                )
+                Vpn5gCompareRow(
+                    feature = stringResource(R.string.vpn5g_premium_support),
+                    free = "✗",
+                    premium = "✓",
+                )
             }
         }
+
         // v1.1.11 (refinement, Aref 2026-11-23 21:20): the email
         // sign-in option appears ONLY while signed out. A signed-in
         // user sees their account here instead — email, remaining
         // credit, and sign-out — and never a second sign-in button.
         // Sign-out is direct, same as the Me screen (no confirmation).
-        Vpn5gStaggeredItem(index = 9, visible = entered) {
+        Vpn5gStaggeredItem(index = 10, visible = entered) {
             if (state.signedInEmail.isNullOrBlank()) {
                 TextButton(onClick = onOpenAuth, modifier = Modifier.fillMaxWidth()) {
                     Text(
@@ -820,7 +906,7 @@ fun Vpn5gSubscriptionScreen(
                 }
             }
         }
-        Vpn5gStaggeredItem(index = 10, visible = entered) {
+        Vpn5gStaggeredItem(index = 11, visible = entered) {
             TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = stringResource(R.string.vpn5g_nav_home),

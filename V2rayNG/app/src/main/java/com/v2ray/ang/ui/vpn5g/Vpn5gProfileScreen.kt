@@ -62,11 +62,10 @@ fun Vpn5gProfileScreen(
 ) {
     var entered by remember { mutableStateOf(false) }
     // Section expansion is transient presentation state only (v1.1.5
-    // §4). Both sections start open, as before; the user can collapse
-    // either one.
-    var accountExpanded by remember { mutableStateOf(true) }
-    var subscriptionExpanded by remember { mutableStateOf(true) }
-    var perAppExpanded by remember { mutableStateOf(true) }
+    // §4). v1.1.15: all sections start CLOSED — the user opens them.
+    var accountExpanded by remember { mutableStateOf(false) }
+    var subscriptionExpanded by remember { mutableStateOf(false) }
+    var perAppExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { entered = true }
 
     Column(
