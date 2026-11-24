@@ -89,4 +89,38 @@ class Vpn5gTopFreeTest {
         val servers = (1..10).map { server("g$it", it * 10L) }
         assertEquals(setOf("g1", "g2", "g3"), Vpn5gSync.selectFreeGuids(servers, count = 3))
     }
+
+    // -- Standby pool (v1.1.17): servers waiting to switch must ALWAYS -----
+    // be more than 10 — the free tier's real-verified pool, topped up
+    // by extra probe batches until it reaches STANDBY_POOL_MIN.
+
+    @Test
+    fun test_standby_pool_min_is_more_than_10() {
+        assertEquals(11, Vpn5gConstants.STANDBY_POOL_MIN)
+        assertTrue(Vpn5gConstants.STANDBY_POOL_MIN > 10)
+    }
+
+    @Test
+    fun test_free_pool_exceeds_standby_min_when_servers_verify() {
+        // 20 verified servers: the free pool is 20 — well above the
+        // 11-server standby minimum.
+        val servers = (1..20).map { server("g$it", it * 10L) }
+        val free = Vpn5gSync.freeGuidsFor(
+            servers, Vpn5gSubscriptionStatus.Vpn5gTier.FREE
+        )
+        assertEquals(20, free.size)
+        assertTrue(free.size >= Vpn5gConstants.STANDBY_POOL_MIN)
+    }
+
+    @Test
+    fun test_free_pool_below_standby_min_when_few_verify() {
+        // Only 5 verified servers: the pool is 5 — the top-up must
+        // keep probing (see Vpn5gSync.standbyTopUpBatch).
+        val servers = (1..5).map { server("g$it", it * 10L) }
+        val free = Vpn5gSync.freeGuidsFor(
+            servers, Vpn5gSubscriptionStatus.Vpn5gTier.FREE
+        )
+        assertEquals(5, free.size)
+        assertTrue(free.size < Vpn5gConstants.STANDBY_POOL_MIN)
+    }
 }

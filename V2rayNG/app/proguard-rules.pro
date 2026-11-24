@@ -52,6 +52,23 @@
 -keep class com.v2ray.ang.handler.vpn5g.Vpn5gAds$* { *; }
 -keep class com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus$Vpn5gUserSubscription { *; }
 -keep class com.v2ray.ang.handler.vpn5g.Vpn5gPromoCodes$Redemption { *; }
+# v1.1.17 (connect crash): the JNI contract. hev-socks5-tunnel's
+# JNI_OnLoad (hev-socks5-tunnel/src/hev-jni.c) does
+# FindClass("com/v2ray/ang/service/TProxyService") and RegisterNatives
+# for TProxyStartService / TProxyStopService / TProxyIsRunning /
+# TProxyGetStats — the class and method names live in C strings the
+# shrinker cannot see. With R8 on (1.1.15/1.1.16) the class was
+# renamed, FindClass returned NULL and JNI_OnLoad returned JNI_ERR,
+# crashing EVERY connect (UnsatisfiedLinkError, 1.1.16 crash report).
+# These keeps are documentation + insurance for any future re-enable;
+# the 1.1.17 fix itself is minification OFF (build.gradle.kts). Never
+# rename TProxyService or its native methods without rebuilding the
+# .so with the same PKGNAME/CLSNAME.
+-keep class com.v2ray.ang.service.TProxyService { *; }
+-keep class com.v2ray.ang.service.CoreVpnService { *; }
+-keep class com.v2ray.ang.service.CoreProxyOnlyService { *; }
+-keep class com.v2ray.ang.service.CoreRootService { *; }
+-keep class com.v2ray.ang.service.CoreTestService { *; }
 -keep class com.v2ray.ang.dto.** { *; }
 -keep class libv2ray.** { *; }
 -keep class go.** { *; }

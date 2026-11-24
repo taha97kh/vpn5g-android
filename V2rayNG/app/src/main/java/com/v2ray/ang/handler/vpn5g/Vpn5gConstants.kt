@@ -123,6 +123,17 @@ object Vpn5gConstants {
     const val FREE_SERVER_COUNT = 20
 
     /**
+     * Standby pool (v1.1.17): servers waiting to switch must ALWAYS
+     * be more than 10 — the free tier's real-verified pool is topped
+     * up (extra probe batches) until at least this many servers are
+     * verified and ready, whenever the sources can supply them.
+     */
+    const val STANDBY_POOL_MIN = 11
+
+    /** Extra probe batches the standby top-up runs at most (v1.1.17). */
+    const val MAX_STANDBY_TOPUP_BATCHES = 2
+
+    /**
      * GIFT tier (v1.1.14): a redeemed gift code grants this many
      * fastest-pinging configs — more than the 20 free ones, not the
      * full VIP pool — plus the countries those servers belong to, and

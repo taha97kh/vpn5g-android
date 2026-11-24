@@ -123,6 +123,15 @@ object Vpn5gRealPing {
                         if (event.delayMillis > 0) {
                             verified.add(key)
                             delays[event.guid] = event.delayMillis
+                            // v1.1.17: commit each verification
+                            // immediately. A batch cancelled mid-flight
+                            // (e.g. the 20 s first-screen deadline
+                            // cutting the quick probe) used to lose
+                            // every partial result — the final
+                            // addRealPingKeys call never ran — so a
+                            // slow connection verified nothing at all.
+                            // The final merge below stays (idempotent).
+                            addRealPingKeys(setOf(key))
                         } else {
                             failed.add(event.guid)
                         }

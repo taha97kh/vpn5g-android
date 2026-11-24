@@ -394,6 +394,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     // without a tunnel-verification failure, the app reconnects to the
     // best server in another country (bounded attempts) and shows a notice.
     private var userStopRequested = false
+    /**
+     * v1.1.17: the one startup auto-connect has fired (or was
+     * disarmed by a manual connect/disconnect). See
+     * [maybeStartupAutoConnect].
+     */
+    private var startupAutoConnectDone = false
     private var suppressAutoFailover = false
     private var sessionActive = false
     private var sessionStartedAtMs = 0L
@@ -898,6 +904,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 _uiState.update {
                     it.copy(startupProgress = 1f, startupDone = true)
                 }
+                // v1.1.17: a cached list means a pickable server may
+                // already exist — connect to the best one now.
+                maybeStartupAutoConnect()
                 refreshInternal(onProgress = null, finishStartup = false)
                 return@launch
             }
@@ -937,6 +946,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
             refreshSelection()
             enrichCountries()
+            // v1.1.17: whatever the quick refresh verified may
+            // already be pickable — connect to the best server now.
+            maybeStartupAutoConnect()
             // The full refresh still runs in the background so the rest
             // of the pool (all 8 sources) arrives without another tap.
             refreshInternal(onProgress = null, finishStartup = false)
@@ -1063,6 +1075,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 refreshSelection()
                 enrichCountries()
+                // v1.1.17: a refresh that finally populates the list
+                // (the background full refresh after an empty quick
+                // path) must connect to the best server now — the
+                // 1.1.16 app waited for a tap that never came.
+                maybeStartupAutoConnect()
             } catch (e: Exception) {
                 LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: refresh failed", e)
                 _uiState.update {
@@ -1266,6 +1283,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      * runs at a time; a new tap cancels the previous one.
      */
     fun beginConnect(userInitiated: Boolean = false) {
+        // v1.1.17: any connect (auto or manual) disarms the one
+        // startup auto-connect — it must never fire twice.
+        startupAutoConnectDone = true
         // v1.1.15 (forced-ad rule): count user-initiated connects only.
         if (userInitiated) completedSessions += 1
         connectChainJob?.cancel()
@@ -1674,6 +1694,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     /** Manual disconnect from the power button: never auto-fail over. */
     fun userDisconnect() {
         userStopRequested = true
+        // v1.1.17: a manual disconnect must never be followed by an
+        // auto re-connect (the 5-minute ticker refresh calls
+        // maybeStartupAutoConnect too).
+        startupAutoConnectDone = true
         connectChainJob?.cancel()
         connectChainJob = null
         autoFailoverJob?.cancel()
@@ -1820,17 +1844,107 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
+     * v1.1.17: fires the one startup auto-connect when a pickable
+     * free server exists (see
+     * [Vpn5gAutoConnect.shouldStartupAutoConnect]). Called after
+     * every list rebuild that can make a server pickable — the
+     * cached startup list, the quick refresh, and each background
+     * refresh — so the app connects to the best server as soon as
+     * one exists, like 1.1.14 felt, instead of waiting for a tap
+     * after the list lands. The connect is userInitiated = false,
+     * so the forced-ad rule never shows an interstitial for it.
+     */
+    private fun maybeStartupAutoConnect() {
+        if (!Vpn5gAutoConnect.shouldStartupAutoConnect(
+                startupAutoConnectDone = startupAutoConnectDone,
+                isRunning = _uiState.value.isRunning,
+                userStopRequested = userStopRequested,
+                connectState = _uiState.value.connectState,
+                hasPickableServer = Vpn5gAutoConnect.pickBestServer(
+                    _uiState.value.countries
+                ) != null,
+            )
+        ) return
+        startupAutoConnectDone = true
+        beginConnect(userInitiated = false)
+    }
+
+    /**
+     * Publishes a redeemed grant to the home state (v1.1.17): the
+     * plan + remaining time in the status section, the country list
+     * rebuilt so the unlocked servers show, and the selection
+     * refreshed. Shared by the server path, the config-list
+     * fallback and the recovery path so a grant can never be saved
+     * without being shown.
+     */
+    private fun publishRedeemed(
+        subscription: Vpn5gSubscriptionStatus.Vpn5gUserSubscription,
+        link: String?,
+        nowSeconds: Long,
+    ) {
+        val tier = Vpn5gSubscriptionStatus.tierOf(subscription, nowSeconds)
+        val countries = runCatching {
+            Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
+        }.getOrElse { emptyList() }
+        _uiState.update {
+            it.copy(
+                promoBotLink = link,
+                userSubscription = subscription,
+                isSubscriber = tier ==
+                    Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
+                isGift = tier ==
+                    Vpn5gSubscriptionStatus.Vpn5gTier.GIFT,
+                giftRemainingHours = Vpn5gSubscriptionStatus
+                    .giftRemainingHours(subscription, nowSeconds),
+                countries = countries,
+            )
+        }
+        refreshSelection()
+    }
+
+    /**
+     * v1.1.17 (redeem recovery): the code was consumed somewhere —
+     * the server said already_used, or the published list shows
+     * remaining_uses 0 — but this device holds no grant for it.
+     * Re-derives the grant from the entry and activates it locally:
+     * re-entering a consumed-but-ungranted code grants the plan
+     * instead of saying invalid. Returns true when a grant was
+     * activated and published. An entry whose own expiry has passed
+     * is not recovered (the code is dead; the bot must re-issue).
+     */
+    private fun tryRecoverGrant(
+        entry: PromoCodeRemote?,
+        email: String,
+        nowSeconds: Long,
+        setStatus: (Vpn5gPromoStatus) -> Unit,
+    ): Boolean {
+        if (entry == null) return false
+        val expiresRaw = entry.expires_at?.takeIf { it.isNotBlank() }
+        if (expiresRaw != null) {
+            val expiresAt = Vpn5gSubscriptionStatus.parseIsoToEpoch(expiresRaw)
+            if (expiresAt == null || expiresAt <= nowSeconds) return false
+        }
+        val activated = Vpn5gPromoCodes.activateGift(entry, email, nowSeconds)
+            ?: return false
+        val (subscription, link) = activated
+        publishRedeemed(subscription, link, nowSeconds)
+        setStatus(Vpn5gPromoStatus.REDEEMED)
+        return true
+    }
+
+    /**
      * Redeems the entered code (v1.1.12; server-first v1.1.15; separate
-     * gift/subscription sections v1.1.16): the server RPC
-     * `validate_and_redeem_code` is the authority — it checks
+     * gift/subscription sections v1.1.16; recovery v1.1.17): the server
+     * RPC `validate_and_redeem_code` is the authority — it checks
      * existence / already-used / expiry / remaining_uses and marks the
      * code used atomically, so a single-use code can never be reused.
      * The config-list check is ONLY the fallback when the RPC is
      * unavailable. A GIFT code activates immediately and the countries
      * unlock at once (the list is rebuilt); a DISCOUNT code still goes
-     * through the bot (VALID + deep link). [setStatus] reports the
-     * outcome to the section that asked (gift or subscription). Never
-     * throws.
+     * through the bot (VALID + deep link). A code the server already
+     * counts as used is re-granted locally instead of saying invalid
+     * (see [tryRecoverGrant]). [setStatus] reports the outcome to the
+     * section that asked (gift or subscription). Never throws.
      */
     private fun redeemCode(
         kind: Vpn5gPromoCodes.CodeKind,
@@ -1883,25 +1997,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         email.orEmpty(), nowSeconds,
                     )
                     if (subscription != null) {
-                        val tier = Vpn5gSubscriptionStatus.tierOf(subscription, nowSeconds)
-                        val countries = runCatching {
-                            Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
-                        }.getOrElse { emptyList() }
-                        _uiState.update {
-                            it.copy(
-                                promoBotLink = Vpn5gPromoCodes.redeemLink(input),
-                                userSubscription = subscription,
-                                isSubscriber = tier ==
-                                    Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
-                                isGift = tier ==
-                                    Vpn5gSubscriptionStatus.Vpn5gTier.GIFT,
-                                giftRemainingHours = Vpn5gSubscriptionStatus
-                                    .giftRemainingHours(subscription, nowSeconds),
-                                countries = countries,
-                            )
-                        }
+                        publishRedeemed(
+                            subscription,
+                            Vpn5gPromoCodes.redeemLink(input),
+                            nowSeconds,
+                        )
                         setStatus(Vpn5gPromoStatus.REDEEMED)
-                        refreshSelection()
                     } else {
                         // Server-validated but no usable grant (e.g. a
                         // discount code): the bot applies it — the old
@@ -1913,6 +2014,22 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     return@launch
                 }
                 is Vpn5gAuthService.CodeServerResult.Rejected -> {
+                    // v1.1.17 (recovery): the server consumed this
+                    // code for this email already — re-derive the
+                    // grant from the published entry and activate it
+                    // locally instead of reporting it used forever.
+                    // The server verified ownership by email (the
+                    // RPC took p_email), so no local record is
+                    // needed here.
+                    if (server.status == "already_used") {
+                        val entry = Vpn5gPromoCodes.findCode(
+                            input, _uiState.value.promoCodes
+                        )
+                        if (tryRecoverGrant(
+                                entry, email.orEmpty(), nowSeconds, setStatus
+                            )
+                        ) return@launch
+                    }
                     val status = when (server.status) {
                         "unknown" -> Vpn5gPromoStatus.UNKNOWN_CODE
                         "already_used" -> Vpn5gPromoStatus.ALREADY_REDEEMED
@@ -1944,12 +2061,13 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                     if (activated != null) {
                         val (subscription, link) = activated
-                        val tier = Vpn5gSubscriptionStatus.tierOf(subscription, nowSeconds)
                         // v1.1.14: report the redemption server-side so
                         // the bot can enforce the people-limit
                         // (remaining_uses) when it republishes the code
                         // list. Best effort — a missing RPC never fails
-                        // or blocks the redeem.
+                        // or blocks the redeem. Only AFTER the grant
+                        // is saved locally (atomicity: never report a
+                        // code used before the grant exists).
                         viewModelScope.launch(Dispatchers.IO) {
                             runCatching {
                                 Vpn5gAuthService.recordCodeRedemption(
@@ -1957,34 +2075,27 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                                 )
                             }
                         }
-                        val countries = runCatching {
-                            Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
-                        }.getOrElse { emptyList() }
-                        _uiState.update {
-                            it.copy(
-                                promoBotLink = link,
-                                userSubscription = subscription,
-                                isSubscriber = tier ==
-                                    Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
-                                isGift = tier ==
-                                    Vpn5gSubscriptionStatus.Vpn5gTier.GIFT,
-                                giftRemainingHours = Vpn5gSubscriptionStatus
-                                    .giftRemainingHours(subscription, nowSeconds),
-                                countries = countries,
-                            )
-                        }
+                        publishRedeemed(subscription, link, nowSeconds)
                         setStatus(Vpn5gPromoStatus.REDEEMED)
-                        refreshSelection()
                     } else {
                         // Discount code (or a gift without days): the bot
                         // applies it — the old VALID + deep-link path.
-                        // The redemption is still reported best-effort
-                        // so the bot can decrement remaining_uses.
-                        viewModelScope.launch(Dispatchers.IO) {
-                            runCatching {
-                                Vpn5gAuthService.recordCodeRedemption(
-                                    entry.code.orEmpty(), email.orEmpty()
-                                )
+                        // v1.1.17 (atomicity): the redemption is
+                        // reported server-side ONLY for a discount
+                        // code. Reporting a gift that failed to
+                        // activate used to mark the code used on the
+                        // server while this device held no grant —
+                        // consumed with no plan, no unlocks, and a
+                        // later re-entry said ALREADY_REDEEMED
+                        // forever. A gift that cannot activate is
+                        // never reported as redeemed.
+                        if (entry.type?.trim()?.lowercase() == "discount") {
+                            viewModelScope.launch(Dispatchers.IO) {
+                                runCatching {
+                                    Vpn5gAuthService.recordCodeRedemption(
+                                        entry.code.orEmpty(), email.orEmpty()
+                                    )
+                                }
                             }
                         }
                         val link = Vpn5gPromoCodes.redeem(entry, email = email)
@@ -1994,10 +2105,38 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 Vpn5gPromoCodes.Validation.UnknownCode ->
                     setStatus(Vpn5gPromoStatus.UNKNOWN_CODE)
-                Vpn5gPromoCodes.Validation.Exhausted ->
-                    setStatus(Vpn5gPromoStatus.EXHAUSTED)
-                Vpn5gPromoCodes.Validation.AlreadyRedeemed ->
-                    setStatus(Vpn5gPromoStatus.ALREADY_REDEEMED)
+                Vpn5gPromoCodes.Validation.Exhausted,
+                Vpn5gPromoCodes.Validation.AlreadyRedeemed -> {
+                    // v1.1.17 (recovery): the list says this code is
+                    // used up, but the grant may never have landed
+                    // on this device (the 1.1.15/1.1.16
+                    // consume-without-grant hole — the server
+                    // consumed it while the app fell through to the
+                    // fallback and saw remaining_uses 0). Re-derive
+                    // the grant from the entry. The server branch
+                    // above is the normal path and verifies ownership
+                    // by email; this fallback runs only when the RPC
+                    // was unreachable, and the user only ever types
+                    // codes the bot gave him — the bot's server-side
+                    // state is unchanged by a local recovery, and
+                    // the grant is re-derived from the published
+                    // entry only.
+                    val entry = Vpn5gPromoCodes.findCode(
+                        input, _uiState.value.promoCodes
+                    )
+                    val recovered = tryRecoverGrant(
+                        entry, email.orEmpty(), nowSeconds, setStatus
+                    )
+                    if (!recovered) {
+                        setStatus(
+                            if (result == Vpn5gPromoCodes.Validation.Exhausted) {
+                                Vpn5gPromoStatus.EXHAUSTED
+                            } else {
+                                Vpn5gPromoStatus.ALREADY_REDEEMED
+                            }
+                        )
+                    }
+                }
                 Vpn5gPromoCodes.Validation.InvalidEntry ->
                     setStatus(Vpn5gPromoStatus.INVALID)
                 Vpn5gPromoCodes.Validation.Expired ->

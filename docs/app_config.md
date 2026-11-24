@@ -220,7 +220,7 @@ hangs or crashes. The app sends only the code / ad id / email — no secrets.
 
 | RPC | Request body | Response | App behavior |
 |---|---|---|---|
-| `validate_and_redeem_code` | `{"p_code": "<CODE>", "p_email": "<email>"}` | `{"status": "ok" \| "unknown" \| "already_used" \| "expired" \| "exhausted" \| "not_yours", "plan": "<plan_id>" \| null, "expires_at": "<ISO-8601>" \| null}` | The server checks existence / already-used / expiry / remaining_uses and marks the code used ATOMICALLY. `ok` + a usable grant activates the gift immediately and unlocks the countries; `ok` without a grant (discount code) shows VALID + the bot deep link. A rejection maps to the exact error message (unknown / already used / expired / exhausted / not yours). Anything else = `Unavailable` → config-list fallback. |
+| `validate_and_redeem_code` | `{"p_code": "<CODE>", "p_email": "<email>"}` | `{"ok": true, "plan": "<plan_id>" \| null, "expires_at": "<ISO-8601>" \| null}` or `{"ok": false, "reason": "not_found" \| "already_used" \| "expired" \| "exhausted" \| "not_yours"}` — the app ALSO accepts the older `{"status": "ok" \| "unknown" \| "already_used" \| "expired" \| "exhausted" \| "not_yours", ...}` shape. (v1.1.17: the real server returns the `{"ok":...}` shape — the 1.1.15/1.1.16 app only parsed `{"status":...}`, so every real answer fell through to the fallback while the server had already marked the code used.) | The server checks existence / already-used / expiry / remaining_uses and marks the code used ATOMICALLY. `ok` + a usable grant activates the gift immediately and unlocks the countries; `ok` without a grant (discount code) shows VALID + the bot deep link. A rejection maps to the exact error message (unknown / already used / expired / exhausted / not yours). `already_used` for this email re-derives the grant from the published entry instead of saying invalid (v1.1.17 recovery). Anything else = `Unavailable` → config-list fallback. |
 | `record_ad_view` | `{"p_ad_id": "<id>", "p_email": "<email>"}` | `true` or `{"verified": true}` | Called on countdown completion, to record/verify the view server-side. If the server is unreachable, the local countdown completion still stands — the VPN starts anyway. |
 | `record_ad_click` | `{"p_ad_id": "<id>", "p_email": "<email>"}` | `true` or `{"verified": true}` | Called when the user taps ad content (best-effort). The tap never ends the countdown. |
 | `get_subscription_status` | `{"p_email": "<email>"}` | `{"status": "active" \| "none" \| "inactive" \| "cancelled", "plan": "<plan_id>" \| null, "expires_at": "<ISO-8601>" \| null}` | The server is the authority for the subscription: the app re-checks it before connecting when the cached tier is premium (bounded to 3 s) and merges it with the cached row on every refresh. A failed/timed-out check keeps the cached tier. |
@@ -357,13 +357,14 @@ commerce works end to end:
    `validate_and_redeem_code(p_code, p_email)` RPC (see "Server-side
    RPCs"): it checks existence / already-used / expiry /
    remaining_uses and marks the code used ATOMICALLY, returning
-   `{"status": "ok" | "unknown" | "already_used" | "expired" |
-   "exhausted" | "not_yours", "plan"?, "expires_at"?}`. The app calls
-   it BEFORE the config-list check; until it exists, every call
-   returns `Unavailable` and the app falls back to the list. Keep the
-   `/start=redeem_<CODE>` deep-link handler too: it validates the code
-   again server-side, applies the discount/gift, and decrements
-   `remaining_uses`.
+   `{"ok": true, "plan"?, "expires_at"?}` or `{"ok": false,
+   "reason": "not_found" | "already_used" | "expired" |
+   "exhausted" | "not_yours"}` (the older `{"status": ...}` shape
+   is also accepted). The app calls it BEFORE the config-list
+   check; until it exists, every call returns `Unavailable` and the
+   app falls back to the list. Keep the `/start=redeem_<CODE>`
+   deep-link handler too: it validates the code again server-side,
+   applies the discount/gift, and decrements `remaining_uses`.
 4. **Admin commands for plans**: add / edit / remove entries in the `plans`
    array (id, **days**, Persian name, price in Toman). **(v1.1.14)** Plans
    are now the bot's `sub_1` / `sub_3` / `sub_6` / `sub_12` ids with

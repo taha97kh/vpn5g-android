@@ -13,8 +13,8 @@ android {
         applicationId = "com.taha97kh.vpn5g"
         minSdk = 24
         targetSdk = 37
-        versionCode = 18
-        versionName = "1.1.16"
+        versionCode = 19
+        versionName = "1.1.17"
 
         // Build date stamped into BuildConfig.BUILD_TIME (VPN 5G About screen).
         buildConfigField("String", "BUILD_TIME", "\"2026-11-24\"")
@@ -87,12 +87,30 @@ android {
         release {
             isDebuggable = false
             signingConfig = signingConfigs.getByName("release")
-            // v1.1.15 (anti-tamper, H2): R8 obfuscation + resource
-            // shrinking for the release build. Keep rules are in
-            // proguard-rules.pro; CI is the check — if the release
-            // build breaks, revert this one line first.
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // v1.1.17 (connect crash, 1.1.15/1.1.16): R8 minification is
+            // OFF again — exactly like 1.1.14, which connected fine.
+            // The native JNI contract lives in C strings R8 cannot
+            // see: hev-jni.c JNI_OnLoad does
+            // FindClass("com/v2ray/ang/service/TProxyService") and
+            // RegisterNatives for TProxyStartService/StopService/
+            // IsRunning/GetStats. With R8 on, the class was renamed,
+            // FindClass returned NULL, JNI_OnLoad returned JNI_ERR
+            // and System.loadLibrary threw UnsatisfiedLinkError on
+            // the main thread inside CoreVpnService.onStartCommand
+            // (crash report 2026-11-24 02:59:43Z, 1.1.16) — a
+            // deterministic crash on EVERY connect, uncatchable from
+            // the Activity because the throw is service-side. The
+            // 1.1.15 R8 experiment also broke Gson parsing (1.1.16
+            // keeps). Keep rules for the JNI classes stay in
+            // proguard-rules.pro as documentation and insurance for
+            // any future re-enable, but they are NOT the fix: the
+            // fix is minification OFF. The real anti-crack protection
+            // is server-side enforcement (H1/H2), never obfuscation.
+            // Side effect: the 1.1.16 -assumenosideeffects log
+            // stripping only applies under minification, so it stops
+            // applying here; LogUtil's default is already warning.
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

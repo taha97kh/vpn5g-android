@@ -149,7 +149,10 @@ class CoreVpnService : VpnService(), ServiceControl {
             return false
         }
 
-        runTun2socks()
+        if (!runTun2socks()) {
+            LogUtil.e(AppConfig.TAG, "StartCore-VPN: tun2socks setup failed")
+            return false
+        }
         return true
     }
 
@@ -299,22 +302,48 @@ class CoreVpnService : VpnService(), ServiceControl {
     }
 
     /**
-     * Runs the tun2socks process.
-     * Starts the tun2socks process with the appropriate parameters.
+     * Runs the tun2socks process. Returns false when the native
+     * tun2socks library cannot even be loaded (v1.1.17): the
+     * TProxyService class initializer calls System.loadLibrary for
+     * libhev-socks5-tunnel.so, whose JNI_OnLoad returns JNI_ERR when
+     * the native code cannot find the class (the 1.1.15/1.1.16 R8
+     * crash — UnsatisfiedLinkError on the main thread, uncatchable
+     * from the Activity because the throw is service-side). Catching
+     * Throwable here (an Error, not an Exception) turns that
+     * whole-app crash into a clean setup failure: setupVpnService
+     * returns false and onStartCommand stops the service, so the
+     * connect chain reports SERVICE_FAILED with a Persian message
+     * instead of the "this app has a bug" dialog.
      */
-    private fun runTun2socks() {
-        if (SettingsManager.isUsingHevTun()) {
+    private fun runTun2socks(): Boolean {
+        if (!SettingsManager.isUsingHevTun()) {
+            tun2SocksService = null
+            return true
+        }
+        return try {
             tun2SocksService = TProxyService(
                 context = applicationContext,
                 vpnInterface = mInterface,
                 isRunningProvider = { isRunning },
                 restartCallback = { runTun2socks() }
             )
-        } else {
+            tun2SocksService?.startTun2Socks()
+            true
+        } catch (t: Throwable) {
+            // Run mode: VPN. Lifecycle phase: setup (onStartCommand →
+            // setupVpnService). Failed operation: tun2socks start
+            // (native library load / TProxyService init). The selected
+            // server GUID is the stable non-secret identifier.
+            LogUtil.e(
+                AppConfig.TAG,
+                "StartCore-VPN: tun2socks start failed " +
+                    "(mode=VPN phase=setup guid=" +
+                    "${MmkvManager.getSelectServer()})",
+                t,
+            )
             tun2SocksService = null
+            false
         }
-
-        tun2SocksService?.startTun2Socks()
     }
 
     private fun stopAllService(isForced: Boolean = true) {

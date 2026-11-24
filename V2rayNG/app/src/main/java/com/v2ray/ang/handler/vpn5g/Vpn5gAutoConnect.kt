@@ -193,6 +193,37 @@ object Vpn5gAutoConnect {
             .filter { it.isFree && it.hasRealPing && it.pingMillis > 0 && it.guid !in excluding }
             .minByOrNull { it.pingMillis }
     }
+
+    /**
+     * Startup auto-connect decision (pure, v1.1.17). 1.1.14 FELT
+     * automatic — the home appeared only after the full sync, so a
+     * tap connected to the best server at once — but nothing ever
+     * connected by itself, and 1.1.16's fast home opens empty: the
+     * background refresh eventually populates the list, yet no
+     * connect ever fires afterwards. This decision fires exactly
+     * once per launch ([startupAutoConnectDone]), only while nothing
+     * is running, the user has not asked to stop, the chain is IDLE
+     * (not already connecting/failed), and a pickable free server
+     * exists in the current list. The caller disarms it on any
+     * connect (auto or manual) and on a manual disconnect, so a
+     * 30-minute timer disconnect or a manual stop is never followed
+     * by an auto re-connect. The connect itself is userInitiated =
+     * false, so the forced-ad rule never shows an interstitial for
+     * it. Pure; covered by JVM unit tests.
+     */
+    fun shouldStartupAutoConnect(
+        startupAutoConnectDone: Boolean,
+        isRunning: Boolean,
+        userStopRequested: Boolean,
+        connectState: Vpn5gConnectState,
+        hasPickableServer: Boolean,
+    ): Boolean {
+        if (startupAutoConnectDone) return false
+        if (isRunning) return false
+        if (userStopRequested) return false
+        if (connectState != Vpn5gConnectState.IDLE) return false
+        return hasPickableServer
+    }
 }
 
 /**

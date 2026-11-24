@@ -108,8 +108,11 @@ object Vpn5gPromoCodes {
         val type = entry.type?.trim()?.lowercase()
         val usable = when (type) {
             "discount" -> (entry.discount_percent ?: 0) in 1..100
-            // v1.1.14: a gift grants hours (1/5/24/168) or days.
-            "gift" -> giftDurationSeconds(entry) != null
+            // v1.1.17: a gift is usable when it grants ANY duration
+            // — plan days (a full-plan code) or gift hours/days.
+            // A plan-only code (sub_* plan, no gift_hours/days)
+            // is usable too: it grants the plan's days.
+            "gift" -> grantDurationSeconds(entry) != null
             else -> false
         }
         if (!usable) return Validation.InvalidEntry
@@ -128,6 +131,24 @@ object Vpn5gPromoCodes {
         val days = entry.gift_days
         if (days != null && days > 0) return days * 86_400L
         return null
+    }
+
+    /**
+     * Duration a code grants, in seconds (v1.1.17): a full-plan code
+     * (plan/tier names a sub_* plan) grants that plan's DAYS — the
+     * plan is the authority, so a sub_1 code grants 30 days even
+     * when it also carries gift_hours 24 (the 1.1.15/1.1.16 bug: a
+     * purchased sub_1 code granted only 24 hours, and a sub_3 code
+     * only 24 hours instead of 90 days). A plain gift grants its
+     * gift hours/days. Null when the entry grants no duration.
+     * Pure, JVM-tested.
+     */
+    fun grantDurationSeconds(entry: PromoCodeRemote): Long? {
+        val planId = entry.plan?.trim()?.lowercase()
+            ?: entry.tier?.trim()?.lowercase()
+        val planDays = planId?.let { Vpn5gPlans.SUB_PLAN_DAYS[it] }
+        if (planDays != null && planDays > 0) return planDays * 86_400L
+        return giftDurationSeconds(entry)
     }
 
     /**
@@ -243,12 +264,13 @@ object Vpn5gPromoCodes {
 
     /**
      * Expiry a gift code grants (epoch seconds), or null when the entry
-     * is not a gift with a duration. Pure, JVM-tested. v1.1.14: hours
-     * (gift_hours) win over days (gift_days).
+     * is not a gift with a duration. Pure, JVM-tested. v1.1.17: the
+     * duration is [grantDurationSeconds] — a full-plan code grants
+     * the plan's days, not its gift_hours.
      */
     fun activationExpiry(entry: PromoCodeRemote, nowEpochSeconds: Long): Long? {
         if (entry.type?.trim()?.lowercase() != "gift") return null
-        val durationSeconds = giftDurationSeconds(entry) ?: return null
+        val durationSeconds = grantDurationSeconds(entry) ?: return null
         return nowEpochSeconds + durationSeconds
     }
 

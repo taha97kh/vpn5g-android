@@ -390,10 +390,12 @@ object Vpn5gAuthService {
      * Validates + redeems a subscription/gift code SERVER-side
      * (PostgREST RPC `validate_and_redeem_code`, v1.1.15). Never
      * throws. The bot side implements the function (see
-     * docs/app_config.md); until it exists every call returns
-     * [CodeServerResult.Unavailable] and the app falls back to the
-     * published config list — the fallback is documented, never
-     * silent.
+     * docs/app_config.md); the RPC EXISTS (live-probed 2026-11-24:
+     * a fake code returns {"ok": false, "reason": "not_found"}).
+     * When it is missing/offline/unparsable the call returns
+     * [CodeServerResult.Unavailable] and the caller falls back to
+     * the published config list — the fallback is documented,
+     * never silent.
      */
     suspend fun validateAndRedeemCode(code: String, email: String): CodeServerResult {
         val result = postRaw(
@@ -411,26 +413,60 @@ object Vpn5gAuthService {
     }
 
     /**
-     * Parses a `validate_and_redeem_code` response:
-     * `{"status":"ok","plan":"sub_12","expires_at":"2027-11-18T00:00:00+00:00"}`
-     * or `{"status":"already_used"}` (and the other reject statuses).
-     * Pure, JVM-tested. An unrecognised body is [CodeServerResult.Unavailable]
+     * Parses a `validate_and_redeem_code` response. TWO shapes are
+     * accepted (v1.1.17 — the documented shape was never the real
+     * one):
+     * - documented: `{"status":"ok","plan":"sub_12",
+     *   "expires_at":"2027-11-18T00:00:00+00:00"}` or
+     *   `{"status":"already_used"}` (and the other reject statuses);
+     * - real (live probe 2026-11-24): `{"ok":true,"plan":"sub_1",
+     *   "expires_at":"..."}` or `{"ok":false,"reason":"not_found"}`
+     *   (reasons: not_found | already_used | expired | exhausted |
+     *   not_yours). The 1.1.15/1.1.16 parser only understood the
+     *   documented shape, so EVERY real server answer parsed as
+     *   Unavailable: the server had already marked the code used
+     *   while the app fell through to the config-list fallback,
+     *   which then saw remaining_uses 0 and said EXHAUSTED — the
+     *   code was consumed with no grant in-app. Pure, JVM-tested.
+     * An unrecognised body is [CodeServerResult.Unavailable]
      * (fallback), never a false success.
      */
     internal fun parseCodeServerResult(body: String): CodeServerResult {
         val status = Regex("\"status\"\\s*:\\s*\"([^\"]*)\"")
             .find(body)?.groupValues?.get(1)?.trim()?.lowercase()
-        return when (status) {
-            "ok", "valid", "validated" -> {
-                val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
-                    .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
-                val expiresRaw = Regex("\"expires_at\"\\s*:\\s*\"([^\"]+)\"")
-                    .find(body)?.groupValues?.get(1)
-                val expiresAt = expiresRaw?.let { Vpn5gSubscriptionStatus.parseIsoToEpoch(it) }
-                CodeServerResult.Validated(plan, expiresAt)
+        if (status != null) {
+            return when (status) {
+                "ok", "valid", "validated" -> {
+                    val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
+                        .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+                    val expiresRaw = Regex("\"expires_at\"\\s*:\\s*\"([^\"]+)\"")
+                        .find(body)?.groupValues?.get(1)
+                    val expiresAt = expiresRaw?.let { Vpn5gSubscriptionStatus.parseIsoToEpoch(it) }
+                    CodeServerResult.Validated(plan, expiresAt)
+                }
+                "unknown", "already_used", "expired", "exhausted", "not_yours" ->
+                    CodeServerResult.Rejected(status)
+                else -> CodeServerResult.Unavailable
             }
-            "unknown", "already_used", "expired", "exhausted", "not_yours" ->
-                CodeServerResult.Rejected(status)
+        }
+        // The real server shape: {"ok": bool, "reason": ...}.
+        val ok = Regex("\"ok\"\\s*:\\s*(true|false)")
+            .find(body)?.groupValues?.get(1)?.lowercase()
+            ?: return CodeServerResult.Unavailable
+        if (ok == "true") {
+            val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
+                .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+            val expiresRaw = Regex("\"expires_at\"\\s*:\\s*\"([^\"]+)\"")
+                .find(body)?.groupValues?.get(1)
+            val expiresAt = expiresRaw?.let { Vpn5gSubscriptionStatus.parseIsoToEpoch(it) }
+            return CodeServerResult.Validated(plan, expiresAt)
+        }
+        val reason = Regex("\"reason\"\\s*:\\s*\"([^\"]*)\"")
+            .find(body)?.groupValues?.get(1)?.trim()?.lowercase()
+        return when (reason) {
+            "not_found" -> CodeServerResult.Rejected("unknown")
+            "already_used", "expired", "exhausted", "not_yours" ->
+                CodeServerResult.Rejected(reason)
             else -> CodeServerResult.Unavailable
         }
     }

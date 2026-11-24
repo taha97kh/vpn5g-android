@@ -13,7 +13,6 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.FREE_SERVER_COUNT
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.LIVE_JSON
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUBSCRIPTION_REMARKS
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUB_TXT
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.normalizeCountry
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
@@ -117,7 +116,7 @@ object Vpn5gSync {
      * Saves the TCP-live profiles, real-probes the fastest batch, and
      * returns (per-country counts, real-pinged count). Shared by both
      * refresh paths; [probeCount]/[probeBudgetMs] are the full-refresh
-     * values (24 / 45 s) or the quick values (12 / 8 s). The stored
+     * values (24 / 45 s) or the quick values (16 / 8 s). The stored
      * ping of a verified server becomes the REAL through-the-proxy
      * delay; a server that fails the real test has its ping withdrawn
      * so it is never free or auto-picked this round.
@@ -203,6 +202,13 @@ object Vpn5gSync {
                         "Vpn5gSync: real ping " +
                             "${probe.verifiedKeys.size}/${probe.tested} verified",
                     )
+                    // v1.1.17 (standby pool > 10): the first probe
+                    // batch may verify fewer than STANDBY_POOL_MIN
+                    // servers on a slow connection — keep probing
+                    // the next-fastest unproven candidates until
+                    // the real-verified pool reaches STANDBY_POOL_MIN
+                    // or the candidates run out.
+                    topUpStandbyPool(context, allCandidates, tcpDelays, probeBudgetMs)
                 }
             }
             val realKeys = Vpn5gRealPing.loadRealPingKeys()
@@ -347,16 +353,27 @@ object Vpn5gSync {
     // The full refresh fetches 8 sources SEQUENTIALLY (10 s timeout
     // each), TCP-pings everything and real-probes 24 candidates with a
     // 45 s budget — minutes on a fresh install, and the empty-cache
-    // path blocked entry on it. The quick path fetches ONLY the two
-    // small HF sources (live_configs.json + sub.txt) IN PARALLEL with
-    // 5 s timeouts, validates, TCP-pings, and real-probes just the
-    // fastest 12 with an 8 s budget, inside a 15 s total budget.
-    // Whatever verifies becomes the free list immediately; the full
-    // refresh still runs afterwards in the background and merges the
-    // rest. The ViewModel additionally bounds the whole first-screen
-    // wait at 20 s (STARTUP_DEADLINE_MS in Vpn5gMainActivity).
+    // path blocked entry on it. The quick path fetches the sources IN
+    // PARALLEL with 5 s timeouts, validates, TCP-pings a spread
+    // sample, and real-probes the fastest 16 with an 8 s budget,
+    // inside the ViewModel's 20 s first-screen deadline (see
+    // STARTUP_DEADLINE_MS in Vpn5gMainActivity). Whatever verifies
+    // becomes the free list immediately; the full refresh still runs
+    // afterwards in the background and merges the rest.
+    // v1.1.17: the quick path used to fetch ONLY the two small HF
+    // sources (live_configs.json + sub.txt) — on a slow/filtered
+    // connection those alone often yield too few candidates for the
+    // probe to verify anything, so the first paint was empty and the
+    // free list only arrived minutes later via the background
+    // refresh. Now it fetches ALL sources in parallel (the full
+    // refresh's source set), with a small per-source sample for the
+    // large GitHub files.
     private const val QUICK_FETCH_TIMEOUT_MS = 5_000
-    private const val QUICK_PROBE_CANDIDATES = 12
+    private const val QUICK_PROBE_CANDIDATES = 16
+    /** Large GitHub files: this many spread lines each, quick path. */
+    private const val QUICK_CAPPED_SOURCE_LINES = 40
+    /** Validated candidates TCP-pinged in the quick path, at most. */
+    private const val QUICK_CANDIDATE_CAP = 150
     private const val QUICK_PROBE_BUDGET_MS = 8_000L
     /** The whole quick path must finish inside this budget. */
     const val QUICK_TOTAL_BUDGET_MS = 15_000L
@@ -377,12 +394,85 @@ object Vpn5gSync {
     }
 
     /**
-     * Quick first-screen refresh (v1.1.16). Same contract as [refresh]
-     * but bounded: two small sources in parallel, a capped sub.txt
-     * sample, and a 12-candidate / 8 s real probe. When BOTH small
-     * sources fail, the STORED profiles (bundled fallback on a fresh
-     * install) are real-probed instead, so the free list can still
-     * verify without any fetch succeeding. Never throws.
+     * Evenly-spread sample of at most [cap] items (pure, v1.1.17):
+     * when the list is longer, keeps every Nth item so the sample
+     * covers the whole list instead of just its head — the quick
+     * path uses it to bound the TCP stage inside the 20 s
+     * first-screen deadline while still sampling every source.
+     * Covered by JVM unit tests.
+     */
+    internal fun <T> spreadSample(items: List<T>, cap: Int): List<T> {
+        if (items.size <= cap) return items
+        return List(cap) { i -> items[(i.toLong() * items.size / cap).toInt()] }
+    }
+
+    /**
+     * The standby top-up batch (pure, v1.1.17): when the
+     * real-verified pool already holds
+     * [Vpn5gConstants.STANDBY_POOL_MIN] or more servers, no batch is
+     * needed; otherwise the fastest unproven candidates, up to one
+     * probe batch. Covered by JVM unit tests.
+     */
+    fun standbyTopUpBatch(
+        candidates: List<Vpn5gRealPing.RealPingCandidate>,
+        tcpDelays: Map<String, Long>,
+        knownReal: Set<String>,
+        verifiedFreeCount: Int,
+        batchSize: Int = Vpn5gConstants.REAL_PING_CANDIDATES,
+    ): List<Vpn5gRealPing.RealPingCandidate> {
+        if (verifiedFreeCount >= Vpn5gConstants.STANDBY_POOL_MIN) return emptyList()
+        return Vpn5gRealPing.selectCandidates(candidates, tcpDelays, knownReal, batchSize)
+    }
+
+    /**
+     * Standby top-up (v1.1.17): probes further batches of the
+     * fastest unproven candidates until the real-verified pool
+     * reaches [Vpn5gConstants.STANDBY_POOL_MIN] or the candidates
+     * run out (at most [Vpn5gConstants.MAX_STANDBY_TOPUP_BATCHES]
+     * extra batches). The batch decision is the pure
+     * [standbyTopUpBatch]; this is the I/O driver. A batch that
+     * verifies nothing and fails nothing ends the loop (no point
+     * spinning on a dead pool). Never throws.
+     */
+    private suspend fun topUpStandbyPool(
+        context: Context,
+        candidates: List<Vpn5gRealPing.RealPingCandidate>,
+        tcpDelays: Map<String, Long>,
+        probeBudgetMs: Long,
+    ) {
+        repeat(Vpn5gConstants.MAX_STANDBY_TOPUP_BATCHES) {
+            val knownReal = Vpn5gRealPing.loadRealPingKeys()
+            val verifiedFree = candidates.count { it.dedupeKey in knownReal }
+            val batch = standbyTopUpBatch(candidates, tcpDelays, knownReal, verifiedFree)
+            if (batch.isEmpty()) return
+            val probe = Vpn5gRealPing.probeCandidates(context, batch, probeBudgetMs)
+            if (probe.verifiedKeys.isNotEmpty()) {
+                Vpn5gRealPing.addRealPingKeys(probe.verifiedKeys)
+            }
+            probe.realDelays.forEach { (guid, delay) ->
+                MmkvManager.encodeServerTestDelayMillis(guid, delay)
+            }
+            probe.failedGuids.forEach { guid ->
+                MmkvManager.encodeServerTestDelayMillis(guid, -1L)
+            }
+            LogUtil.i(
+                AppConfig.TAG,
+                "Vpn5gSync: standby top-up " +
+                    "${probe.verifiedKeys.size}/${probe.tested} verified",
+            )
+            if (probe.verifiedKeys.isEmpty() && probe.failedGuids.isEmpty()) return
+        }
+    }
+
+    /**
+     * Quick first-screen refresh (v1.1.16, widened v1.1.17). Same
+     * contract as [refresh] but bounded: ALL sources in parallel
+     * with 5 s timeouts, a spread sample of at most 150 validated
+     * candidates for the TCP stage, and a 16-candidate / 8 s real
+     * probe. When every source fails, the STORED profiles (bundled
+     * fallback on a fresh install) are real-probed instead, so the
+     * free list can still verify without any fetch succeeding.
+     * Never throws.
      */
     suspend fun quickRefresh(
         context: Context,
@@ -394,8 +484,19 @@ object Vpn5gSync {
             val remoteConfig = Vpn5gRemoteConfig.fetch()
             onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_CONFIG, 1f)
             onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_SOURCES, 0f)
+            // v1.1.17: fetch ALL sources in parallel (the full
+            // refresh's source set), not just the two small ones —
+            // on a slow/filtered connection the two small sources
+            // alone often yield too few candidates for the probe to
+            // verify anything. Large GitHub files are sampled at 40
+            // lines each in the quick path (300 in the full refresh).
+            val quickSources = linkedSetOf<String>()
+            quickSources += Vpn5gConstants.DEFAULT_CONFIG_SOURCES
+            remoteConfig.config_sources?.forEach { url ->
+                if (!url.isNullOrBlank()) quickSources.add(url.trim())
+            }
             val bodies = coroutineScope {
-                listOf(LIVE_JSON, SUB_TXT).map { url ->
+                quickSources.map { url ->
                     async {
                         url to runCatching {
                             HttpUtil.getUrlContent(
@@ -414,16 +515,27 @@ object Vpn5gSync {
                     candidates += parseLiveJson(body)
                 } else {
                     val text = decodeSubscriptionBody(body)
-                    candidates += parseUriLines(text, 100)
+                    if (Vpn5gConstants.isCappedSource(url)) {
+                        candidates += parseUriLines(text, QUICK_CAPPED_SOURCE_LINES)
+                    } else {
+                        candidates += parseUriLines(text, 100)
+                    }
                 }
             }
             onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_SOURCES, 1f)
             onProgress?.invoke(Vpn5gStartupProgress.Stage.PARSE_VALIDATE, 0f)
             val subId = ensureSubscriptionId()
-            val (unique, invalid) = parseValidateCandidates(candidates, subId)
+            val (validated, invalid) = parseValidateCandidates(candidates, subId)
             if (invalid > 0) {
                 LogUtil.i(AppConfig.TAG, "Vpn5gSync: quick dropped $invalid invalid configs")
             }
+            // v1.1.17: the quick path TCP-pings at 8-way concurrency
+            // with a 1.5 s timeout — hundreds of candidates would
+            // blow the 20 s first-screen deadline before any probe
+            // runs. An evenly-spread sample of 150 keeps the whole
+            // quick path inside the deadline while still sampling
+            // every source.
+            val unique = spreadSample(validated, QUICK_CANDIDATE_CAP)
             onProgress?.invoke(Vpn5gStartupProgress.Stage.PARSE_VALIDATE, 1f)
             onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 0f)
             val live = tcpPingCandidates(unique)

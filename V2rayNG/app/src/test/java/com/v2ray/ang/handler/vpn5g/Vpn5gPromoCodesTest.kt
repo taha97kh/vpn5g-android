@@ -370,4 +370,100 @@ class Vpn5gPromoCodesTest {
         assertNull(Vpn5gPromoCodes.findCode("", codes))
         assertNull(Vpn5gPromoCodes.findCode("AbC123", null))
     }
+
+    // v1.1.17: a full-plan code grants the PLAN's days, not its
+    // gift_hours — the 1.1.15/1.1.16 bug granted a purchased sub_1
+    // code only 24 hours (its gift_hours) instead of 30 days.
+
+    @Test
+    fun test_grant_duration_plan_days_win_over_gift_hours() {
+        // The live 352755 code: sub_1 with gift_hours 24.
+        assertEquals(
+            30L * 86_400L,
+            Vpn5gPromoCodes.grantDurationSeconds(
+                PromoCodeRemote(
+                    code = "352755", type = "gift", plan = "sub_1",
+                    gift_hours = 24, remaining_uses = 0,
+                )
+            ),
+        )
+        // The live 599835 code: sub_3 with gift_hours 24.
+        assertEquals(
+            90L * 86_400L,
+            Vpn5gPromoCodes.grantDurationSeconds(
+                PromoCodeRemote(
+                    code = "599835", type = "gift", plan = "sub_3",
+                    gift_hours = 24, remaining_uses = 0,
+                )
+            ),
+        )
+        // Plan via tier, gift_days present too: the plan still wins.
+        assertEquals(
+            360L * 86_400L,
+            Vpn5gPromoCodes.grantDurationSeconds(
+                PromoCodeRemote(code = "X", type = "gift", tier = "sub_12", gift_days = 30)
+            ),
+        )
+        // Plain gift: hours/days as before.
+        assertEquals(
+            24L * 3_600L,
+            Vpn5gPromoCodes.grantDurationSeconds(
+                PromoCodeRemote(code = "G", type = "gift", gift_hours = 24)
+            ),
+        )
+        assertEquals(
+            7L * 86_400L,
+            Vpn5gPromoCodes.grantDurationSeconds(
+                PromoCodeRemote(code = "G", type = "gift", gift_days = 7)
+            ),
+        )
+        // No plan, no duration: nothing.
+        assertNull(
+            Vpn5gPromoCodes.grantDurationSeconds(
+                PromoCodeRemote(code = "BAD", type = "gift")
+            )
+        )
+        // Discount: nothing.
+        assertNull(
+            Vpn5gPromoCodes.grantDurationSeconds(discount("SAVE20", 20, 5))
+        )
+    }
+
+    @Test
+    fun test_activation_expiry_uses_plan_days_for_plan_codes() {
+        // 352755 (sub_1, gift_hours 24) grants 30 days, not 24 hours.
+        assertEquals(
+            1_795_392_000L + 30L * 86_400L,
+            Vpn5gPromoCodes.activationExpiry(
+                PromoCodeRemote(
+                    code = "352755", type = "gift", plan = "sub_1",
+                    gift_hours = 24, remaining_uses = 0,
+                ),
+                1_795_392_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun test_plan_only_gift_is_valid() {
+        // A full-plan code with NO gift_hours/gift_days is usable:
+        // it grants the plan's days. (Before 1.1.17 it was
+        // InvalidEntry — "کد معتبر نیست" for a perfectly good code.)
+        assertTrue(
+            Vpn5gPromoCodes.validateEntry(
+                PromoCodeRemote(
+                    code = "P1", type = "gift", plan = "sub_1", remaining_uses = 1
+                ),
+                false,
+            ) is Vpn5gPromoCodes.Validation.Valid
+        )
+        // But a gift with neither plan nor duration is still invalid.
+        assertEquals(
+            Vpn5gPromoCodes.Validation.InvalidEntry,
+            Vpn5gPromoCodes.validateEntry(
+                PromoCodeRemote(code = "BAD", type = "gift", remaining_uses = 1),
+                false,
+            ),
+        )
+    }
 }

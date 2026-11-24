@@ -54,6 +54,78 @@ class Vpn5gServerRpcTest {
         }
     }
 
+    // -- The REAL server shape (v1.1.17): {"ok": bool, "reason": ...} ------
+    // Live-probed 2026-11-24: the real validate_and_redeem_code returns
+    // {"ok":true,"plan":...,"expires_at":...} / {"ok":false,"reason":
+    // "not_found"} — never the documented {"status":...} shape. The
+    // 1.1.15/1.1.16 parser only understood {"status":...}, so every
+    // real answer parsed as Unavailable and the code was consumed
+    // with no grant in-app.
+
+    @Test
+    fun test_parse_code_validated_ok_shape_with_grant() {
+        val result = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"plan":"sub_1","expires_at":"$expiresIso"}"""
+        )
+        assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated)
+        val validated = result as Vpn5gAuthService.CodeServerResult.Validated
+        assertEquals("sub_1", validated.plan)
+        assertEquals(
+            Vpn5gSubscriptionStatus.parseIsoToEpoch(expiresIso),
+            validated.expiresAtEpochSeconds,
+        )
+    }
+
+    @Test
+    fun test_parse_code_validated_ok_shape_without_grant() {
+        val result = Vpn5gAuthService.parseCodeServerResult("""{"ok":true}""")
+        assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated)
+        val validated = result as Vpn5gAuthService.CodeServerResult.Validated
+        assertNull(validated.plan)
+        assertNull(validated.expiresAtEpochSeconds)
+    }
+
+    @Test
+    fun test_parse_code_rejected_ok_shape_reasons() {
+        // not_found maps to the app's "unknown" status.
+        val notFound = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":false,"reason":"not_found"}"""
+        )
+        assertTrue(notFound is Vpn5gAuthService.CodeServerResult.Rejected)
+        assertEquals(
+            "unknown",
+            (notFound as Vpn5gAuthService.CodeServerResult.Rejected).status,
+        )
+        for (reason in listOf("already_used", "expired", "exhausted", "not_yours")) {
+            val result = Vpn5gAuthService.parseCodeServerResult(
+                """{"ok":false,"reason":"$reason"}"""
+            )
+            assertTrue(result is Vpn5gAuthService.CodeServerResult.Rejected, reason)
+            assertEquals(
+                reason,
+                (result as Vpn5gAuthService.CodeServerResult.Rejected).status,
+            )
+        }
+    }
+
+    @Test
+    fun test_parse_code_unavailable_on_ok_shape_garbage() {
+        // No reason: unparsable, never a false rejection.
+        assertTrue(
+            Vpn5gAuthService.parseCodeServerResult("""{"ok":false}""") is
+                Vpn5gAuthService.CodeServerResult.Unavailable
+        )
+        assertTrue(
+            Vpn5gAuthService.parseCodeServerResult(
+                """{"ok":false,"reason":"weird"}"""
+            ) is Vpn5gAuthService.CodeServerResult.Unavailable
+        )
+        assertTrue(
+            Vpn5gAuthService.parseCodeServerResult("""{"ok":"yes"}""") is
+                Vpn5gAuthService.CodeServerResult.Unavailable
+        )
+    }
+
     @Test
     fun test_parse_code_unavailable_on_garbage() {
         assertTrue(
