@@ -40,7 +40,7 @@ object Vpn5gTamperCheck {
      * proves which key signed the APK.
      */
     const val EXPECTED_CERT_SHA256 =
-        "961bb669119259f2bd1d8cbaeb2d43da46295ba188428844ca247e180fc076aa"
+        "18b790ccd20900d46353170b8b00492d734d39a12b96399816f97d7db259cde7"
 
     /** Known su / superuser paths (soft signal only). */
     private val ROOT_PATHS = listOf(
