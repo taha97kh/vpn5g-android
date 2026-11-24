@@ -203,6 +203,22 @@ data class SubscriptionPlanRemote(
     val name_fa: String? = null,
     /** Price in Toman. Null = price not published (card hidden). */
     val price_toman: Long? = null,
+    /**
+     * Volume cap in gigabytes, set by the admin for this plan
+     * (v1.1.18, Model B: volume or time, whichever first). The bot
+     * publishes it per plan in app_config.json; null/absent = no
+     * cap (unlimited). The app NEVER invents a cap: when neither
+     * [volume_gb] nor [gb] is present the plan is unlimited.
+     * When both are set, [volume_gb] wins.
+     */
+    val volume_gb: Double? = null,
+    /**
+     * Alias of [volume_gb] (v1.1.18): the field the bot already
+     * publishes for the `gb_20` / `gb_50` / `gb_100` / `gb_200`
+     * plans in the live app_config.json. Accepted so those plans
+     * meter from today; new publishes should use [volume_gb].
+     */
+    val gb: Double? = null,
 )
 
 /**

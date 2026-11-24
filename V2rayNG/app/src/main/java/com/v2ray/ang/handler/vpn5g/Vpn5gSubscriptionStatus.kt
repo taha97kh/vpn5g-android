@@ -45,6 +45,16 @@ object Vpn5gSubscriptionStatus {
         val status: String? = null,
         val expiresAtEpochSeconds: Long? = null,
         val plan: String? = null,
+        /**
+         * Volume cap of this grant in bytes (v1.1.18, Model B),
+         * resolved from the plan id via the published plans
+         * ([Vpn5gVolume.capBytesForPlanId]). Null = the plan has no
+         * cap (unlimited) or the cap could not be resolved yet (the
+         * plan config had not loaded) — never an invented number.
+         * Persisted in the MMKV JSON caches, so an older cache
+         * without the field reads as null (unlimited).
+         */
+        val volumeCapBytes: Long? = null,
     )
 
     /**
@@ -66,21 +76,44 @@ object Vpn5gSubscriptionStatus {
     private const val TIMEOUT_MS = 15_000L
 
     /**
+     * True when this grant's volume cap is reached (v1.1.18, Model
+     * B): the on-device measured consumption for THIS grant
+     * ([Vpn5gVolume.bytesFor] — bytes measured under another grant
+     * never count) is >= the grant's cap. No cap, or no attributable
+     * consumption, is never exhausted. Pure, JVM-tested.
+     */
+    fun isVolumeExhausted(
+        subscription: Vpn5gUserSubscription?,
+        volume: Vpn5gVolume.ConsumedState?,
+    ): Boolean {
+        val capBytes = subscription?.volumeCapBytes ?: return false
+        val consumed = Vpn5gVolume.bytesFor(subscription, volume) ?: return false
+        return Vpn5gVolume.isExhausted(consumed, capBytes)
+    }
+
+    /**
      * True only for an active FULL subscription whose expiry is in the
      * future. Pure, JVM-tested. Null, "none", "cancelled", an expired
      * "active" row and a missing expiry are all "not a subscriber".
      * v1.1.14: a gift-tier redemption (plan "gift") is NOT a full
      * subscription — it is [Vpn5gTier.GIFT] (top-50 pool, no timer),
      * never the full pool.
+     * v1.1.18 (Model B): when [volume] is given, a grant whose
+     * volume cap is reached is NOT a subscriber either — volume or
+     * time, whichever first. A null [volume] means "consumption
+     * unknown" and keeps the time-only decision (existing callers
+     * and tests are unaffected).
      */
     fun isSubscriber(
         subscription: Vpn5gUserSubscription?,
         nowEpochSeconds: Long,
+        volume: Vpn5gVolume.ConsumedState? = null,
     ): Boolean {
         if (subscription?.status != "active") return false
         if (subscription.plan == Vpn5gConstants.GIFT_TIER_PLAN_ID) return false
         val expiresAt = subscription.expiresAtEpochSeconds ?: return false
-        return expiresAt > nowEpochSeconds
+        if (expiresAt <= nowEpochSeconds) return false
+        return !isVolumeExhausted(subscription, volume)
     }
 
     /**
@@ -88,25 +121,31 @@ object Vpn5gSubscriptionStatus {
      * expiry is in the future. Pure, JVM-tested. The gift tier sits
      * between free and VIP: more servers than free, not the full pool,
      * and no 30-minute cutoff while it lasts.
+     * v1.1.18 (Model B): a gift-tier grant with a cap also ends when
+     * its volume is reached — [volume] is enforced the same way as
+     * for a full subscription.
      */
     fun isGiftTier(
         subscription: Vpn5gUserSubscription?,
         nowEpochSeconds: Long,
+        volume: Vpn5gVolume.ConsumedState? = null,
     ): Boolean {
         if (subscription?.status != "active") return false
         if (subscription.plan != Vpn5gConstants.GIFT_TIER_PLAN_ID) return false
         val expiresAt = subscription.expiresAtEpochSeconds ?: return false
-        return expiresAt > nowEpochSeconds
+        if (expiresAt <= nowEpochSeconds) return false
+        return !isVolumeExhausted(subscription, volume)
     }
 
     /** The access tier a subscription grants right now. Pure, JVM-tested. */
     fun tierOf(
         subscription: Vpn5gUserSubscription?,
         nowEpochSeconds: Long,
+        volume: Vpn5gVolume.ConsumedState? = null,
     ): Vpn5gTier {
         return when {
-            isSubscriber(subscription, nowEpochSeconds) -> Vpn5gTier.SUBSCRIBER
-            isGiftTier(subscription, nowEpochSeconds) -> Vpn5gTier.GIFT
+            isSubscriber(subscription, nowEpochSeconds, volume) -> Vpn5gTier.SUBSCRIBER
+            isGiftTier(subscription, nowEpochSeconds, volume) -> Vpn5gTier.GIFT
             else -> Vpn5gTier.FREE
         }
     }
@@ -115,8 +154,9 @@ object Vpn5gSubscriptionStatus {
     fun giftRemainingHours(
         subscription: Vpn5gUserSubscription?,
         nowEpochSeconds: Long,
+        volume: Vpn5gVolume.ConsumedState? = null,
     ): Long {
-        if (!isGiftTier(subscription, nowEpochSeconds)) return 0L
+        if (!isGiftTier(subscription, nowEpochSeconds, volume)) return 0L
         val remaining = (subscription?.expiresAtEpochSeconds ?: 0L) - nowEpochSeconds
         if (remaining <= 0L) return 0L
         return remaining / 3_600L
@@ -262,20 +302,30 @@ object Vpn5gSubscriptionStatus {
      * or a "none" row. When neither is active, the row is returned (so
      * the UI can show its expired state) or the redeemed one when
      * there is no row at all. Pure, JVM-tested.
+     * v1.1.18 (Model B): when [volume] is given, a grant whose
+     * volume cap is reached is not "active" for the merge either —
+     * a live grant with an earlier expiry beats an exhausted grant
+     * with a later one, so volume exhaustion can never hide a live
+     * grant. The fallback (neither active) still returns the row /
+     * redeemed record so the UI can show WHY it ended.
      */
     fun effectiveSubscription(
         row: Vpn5gUserSubscription?,
         redeemed: Vpn5gUserSubscription?,
         nowEpochSeconds: Long,
+        volume: Vpn5gVolume.ConsumedState? = null,
     ): Vpn5gUserSubscription? {
         val active = listOfNotNull(row, redeemed)
-            .filter { isSubscriber(it, nowEpochSeconds) || isGiftTier(it, nowEpochSeconds) }
+            .filter {
+                isSubscriber(it, nowEpochSeconds, volume) ||
+                    isGiftTier(it, nowEpochSeconds, volume)
+            }
         val bestSubscriber = active
-            .filter { isSubscriber(it, nowEpochSeconds) }
+            .filter { isSubscriber(it, nowEpochSeconds, volume) }
             .maxByOrNull { it.expiresAtEpochSeconds ?: 0L }
         if (bestSubscriber != null) return bestSubscriber
         val bestGift = active
-            .filter { isGiftTier(it, nowEpochSeconds) }
+            .filter { isGiftTier(it, nowEpochSeconds, volume) }
             .maxByOrNull { it.expiresAtEpochSeconds ?: 0L }
         if (bestGift != null) return bestGift
         return row ?: redeemed
@@ -298,8 +348,11 @@ object Vpn5gSubscriptionStatus {
         val nowSeconds = System.currentTimeMillis() / 1000
         val rowCandidate = when (val result = fetchOwnRow(session)) {
             is FetchResult.Found -> {
-                saveCached(result.subscription)
-                result.subscription
+                // v1.1.18: the row's plan cap is attached before the
+                // cache is saved, so the cached record meters.
+                val capped = withVolumeCap(result.subscription)
+                if (capped != null) saveCached(capped)
+                capped
             }
             FetchResult.NoRow -> {
                 val none = Vpn5gUserSubscription(status = "none")
@@ -319,13 +372,42 @@ object Vpn5gSubscriptionStatus {
             runCatching { Vpn5gAuthService.fetchServerSubscription(email) }.getOrNull()
         } ?: Vpn5gAuthService.ServerSubscriptionResult.Unavailable
         val serverSub = (serverResult as? Vpn5gAuthService.ServerSubscriptionResult.Found)
-            ?.subscription
+            ?.subscription?.let { withVolumeCap(it) }
         val trustedRedeemed = when (serverResult) {
             is Vpn5gAuthService.ServerSubscriptionResult.None -> null
-            else -> loadRedeemed()
+            else -> loadRedeemed()?.let { withVolumeCap(it) }
         }
-        val merged = effectiveSubscription(rowCandidate, serverSub, nowSeconds)
-        return effectiveSubscription(merged, trustedRedeemed, nowSeconds)
+        // v1.1.18 (Model B): the merge is volume-aware — a grant
+        // whose cap is reached is not "active", so a live grant with
+        // an earlier expiry beats it. The consumed bytes are
+        // attributed by grant key (see Vpn5gVolume.bytesFor), so
+        // bytes measured under one grant never end another.
+        val volume = Vpn5gVolumeStore.consumedState()
+        val merged = effectiveSubscription(rowCandidate, serverSub, nowSeconds, volume)
+        return effectiveSubscription(merged, trustedRedeemed, nowSeconds, volume)
+    }
+
+    /**
+     * Attaches a subscription record's plan volume cap (v1.1.18):
+     * resolved fresh from the cached published plans whenever the
+     * plan id is in them — so an admin cap change (including
+     * REMOVING the cap) takes effect on the next refresh — otherwise
+     * the record's stored cap is kept (never silently dropped to
+     * unlimited just because the plan config had not loaded yet, or
+     * the plan id is not in the published list). Never throws.
+     */
+    private fun withVolumeCap(
+        subscription: Vpn5gUserSubscription?,
+    ): Vpn5gUserSubscription? {
+        if (subscription == null) return null
+        val plans = runCatching { Vpn5gRemoteConfig.cached().plans }.getOrNull()
+            ?: return subscription
+        val plan = plans.firstOrNull {
+            it.id?.trim()?.equals(subscription.plan?.trim(), ignoreCase = true) == true
+        } ?: return subscription
+        val fresh = Vpn5gVolume.capBytes(Vpn5gPlans.volumeCapGb(plan))
+        if (fresh == subscription.volumeCapBytes) return subscription
+        return subscription.copy(volumeCapBytes = fresh)
     }
 
     /** The cached subscription, or null when nothing was ever cached. */

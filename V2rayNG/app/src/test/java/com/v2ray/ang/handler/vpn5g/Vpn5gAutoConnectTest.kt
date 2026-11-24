@@ -173,10 +173,21 @@ class Vpn5gAutoConnectTest {
     }
 
     @Test
-    fun test_user_disconnect_always_lands_in_idle() {
+    fun test_user_disconnect_lands_in_disconnecting_except_idle_and_failed() {
+        // v1.1.18: USER_DISCONNECT lands in DISCONNECTING from any
+        // live state — the button must not flip to "Disconnected"
+        // instantly while the daemon may still be stopping. From
+        // IDLE / FAILED there is nothing to stop, and a repeated tap
+        // while already disconnecting stays there.
         for (from in Vpn5gConnectState.entries) {
-            assertEquals(
+            val expected = when (from) {
                 Vpn5gConnectState.IDLE,
+                Vpn5gConnectState.FAILED,
+                Vpn5gConnectState.DISCONNECTING -> from
+                else -> Vpn5gConnectState.DISCONNECTING
+            }
+            assertEquals(
+                expected,
                 Vpn5gAutoConnect.transition(from, Vpn5gConnectEvent.USER_DISCONNECT),
                 "USER_DISCONNECT from $from",
             )
@@ -184,16 +195,59 @@ class Vpn5gAutoConnectTest {
     }
 
     @Test
-    fun test_give_up_lands_in_failed_except_idle_and_connected() {
+    fun test_disconnecting_restart_resumes_as_creating_tunnel() {
+        // A restart racing the disconnect (server tap while stopping):
+        // the new core started, so the chain resumes as a tunnel
+        // being created — it will be verified like any other start.
+        assertEquals(
+            Vpn5gConnectState.CREATING_TUNNEL,
+            Vpn5gAutoConnect.transition(
+                Vpn5gConnectState.DISCONNECTING, Vpn5gConnectEvent.SERVICE_STARTED
+            ),
+        )
+    }
+
+    @Test
+    fun test_disconnecting_absorbs_other_events() {
+        // While disconnecting, connect-chain events are no-ops until
+        // the stop lands or the timeout fires — a stray VERIFIED must
+        // never show "connected" during a disconnect.
+        for (event in listOf(
+            Vpn5gConnectEvent.START,
+            Vpn5gConnectEvent.INTERNET_OK,
+            Vpn5gConnectEvent.SERVER_FOUND,
+            Vpn5gConnectEvent.VERIFIED,
+            Vpn5gConnectEvent.TUNNEL_READY,
+            Vpn5gConnectEvent.VERIFY_FAILED,
+            Vpn5gConnectEvent.RESTARTING,
+        )) {
+            assertEquals(
+                Vpn5gConnectState.DISCONNECTING,
+                Vpn5gAutoConnect.transition(Vpn5gConnectState.DISCONNECTING, event),
+                "event=$event",
+            )
+        }
+    }
+
+    @Test
+    fun test_disconnect_timeout_is_5_seconds() {
+        assertEquals(5_000L, Vpn5gAutoConnect.DISCONNECT_TIMEOUT_MS)
+    }
+
+    @Test
+    fun test_give_up_lands_in_failed_except_idle_connected_and_disconnecting() {
         // v1.1.5 §2: giving up after a failed connect shows the precise
         // error (FAILED) instead of silently returning to IDLE. Only a
         // clean stop (CONNECTED — e.g. the 30-minute timer) and the
-        // already-idle state stay IDLE.
+        // already-idle state stay IDLE. v1.1.18: while DISCONNECTING
+        // the stop is still in flight, so GIVE_UP stays there and the
+        // timeout resolves it.
         for (from in Vpn5gConnectState.entries) {
             val expected = when (from) {
                 Vpn5gConnectState.IDLE -> Vpn5gConnectState.IDLE
                 Vpn5gConnectState.CONNECTED -> Vpn5gConnectState.IDLE
                 Vpn5gConnectState.FAILED -> Vpn5gConnectState.FAILED
+                Vpn5gConnectState.DISCONNECTING -> Vpn5gConnectState.DISCONNECTING
                 else -> Vpn5gConnectState.FAILED
             }
             assertEquals(
@@ -397,6 +451,7 @@ class Vpn5gAutoConnectTest {
             Vpn5gConnectState.CONNECTED,
             Vpn5gConnectState.RETRYING,
             Vpn5gConnectState.FAILED,
+            Vpn5gConnectState.DISCONNECTING,
         )) {
             assertFalse(
                 Vpn5gAutoConnect.shouldStartupAutoConnect(

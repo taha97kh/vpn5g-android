@@ -123,12 +123,14 @@ object Vpn5gConstants {
     const val FREE_SERVER_COUNT = 20
 
     /**
-     * Standby pool (v1.1.17): servers waiting to switch must ALWAYS
-     * be more than 10 — the free tier's real-verified pool is topped
-     * up (extra probe batches) until at least this many servers are
+     * Standby pool (v1.1.17, raised v1.1.18): servers waiting to
+     * switch must ALWAYS be at least 20 — Aref's 2026-11-25 order
+     * §1 (≥20 ready free servers; the old ">10" requirement is
+     * superseded). The free tier's real-verified pool is topped up
+     * (extra probe batches) until at least this many servers are
      * verified and ready, whenever the sources can supply them.
      */
-    const val STANDBY_POOL_MIN = 11
+    const val STANDBY_POOL_MIN = 20
 
     /** Extra probe batches the standby top-up runs at most (v1.1.17). */
     const val MAX_STANDBY_TOPUP_BATCHES = 2
@@ -305,6 +307,17 @@ object Vpn5gConstants {
 
     /** Per-ad impression counters, JSON {adId: {total, day, today}} (v1.1.15). */
     const val KEY_AD_IMPRESSIONS_JSON = "vpn5g_ad_impressions_json"
+
+    /**
+     * On-device volume metering (v1.1.18, Model B): the grant key
+     * (plan + expiry, see [Vpn5gVolume.grantKeyFor]) the consumption
+     * counter belongs to, and the cumulative real tunnel bytes for
+     * that grant. The :daemon speed job writes the counter; the UI
+     * process reads it and resets it (via [Vpn5gVolumeStore]) only
+     * when a new grant starts — never on app restart.
+     */
+    const val KEY_VOLUME_GRANT_KEY = "vpn5g_volume_grant_key"
+    const val KEY_VOLUME_CONSUMED_BYTES = "vpn5g_volume_consumed_bytes"
 
     /** Unique WorkManager name for the 30-minute disconnect work. */
     const val DISCONNECT_WORK_NAME = "vpn5g_30min_disconnect"

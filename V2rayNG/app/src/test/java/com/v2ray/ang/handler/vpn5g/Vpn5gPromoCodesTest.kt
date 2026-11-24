@@ -267,6 +267,22 @@ class Vpn5gPromoCodesTest {
     }
 
     @Test
+    fun test_gift_plan_id_volume_plan() {
+        // v1.1.18: a gift code whose plan is a published volume plan
+        // (gb_20) grants that plan — full pool, capped by its volume.
+        // Without the published plans the same entry falls back to
+        // the GIFT tier, so a malformed entry can never mint a full
+        // subscription by itself.
+        val entry = PromoCodeRemote(
+            code = "X", type = "gift", gift_hours = 24, plan = "gb_20"
+        )
+        val plans = listOf(SubscriptionPlanRemote(id = "gb_20", gb = 20.0))
+        assertEquals("gb_20", Vpn5gPromoCodes.giftPlanId(entry, plans))
+        assertEquals("gift", Vpn5gPromoCodes.giftPlanId(entry))
+        assertEquals("gift", Vpn5gPromoCodes.giftPlanId(entry, emptyList()))
+    }
+
+    @Test
     fun test_redeem_link_builds_bot_deep_link() {
         // v1.1.15: the redeem deep link is normalized (trimmed +
         // uppercased) — the same link the app and the bot both use.

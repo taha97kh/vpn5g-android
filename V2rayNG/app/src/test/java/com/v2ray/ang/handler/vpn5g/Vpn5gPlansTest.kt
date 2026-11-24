@@ -75,4 +75,43 @@ class Vpn5gPlansTest {
         )
         assertEquals(listOf("sub_1", "sub_12"), plans.map { it.id })
     }
+
+    // -- Volume cap (v1.1.18, Model B) ------------------------------------------
+
+    @Test
+    fun test_volume_cap_volume_gb_wins_over_gb() {
+        assertEquals(
+            50.0,
+            Vpn5gPlans.volumeCapGb(
+                SubscriptionPlanRemote(id = "gb_50", volume_gb = 50.0, gb = 20.0)
+            )
+        )
+    }
+
+    @Test
+    fun test_volume_cap_gb_alias() {
+        // The live config publishes only `gb` for the gb_* plans.
+        assertEquals(
+            20.0,
+            Vpn5gPlans.volumeCapGb(
+                SubscriptionPlanRemote(id = "gb_20", gb = 20.0)
+            )
+        )
+    }
+
+    @Test
+    fun test_volume_cap_absent_is_unlimited() {
+        assertNull(Vpn5gPlans.volumeCapGb(SubscriptionPlanRemote(id = "sub_1")))
+        assertNull(Vpn5gPlans.volumeCapGb(null))
+    }
+
+    @Test
+    fun test_volume_cap_zero_or_negative_is_unlimited() {
+        assertNull(
+            Vpn5gPlans.volumeCapGb(SubscriptionPlanRemote(id = "gb_0", gb = 0.0))
+        )
+        assertNull(
+            Vpn5gPlans.volumeCapGb(SubscriptionPlanRemote(id = "gb_x", volume_gb = -5.0))
+        )
+    }
 }

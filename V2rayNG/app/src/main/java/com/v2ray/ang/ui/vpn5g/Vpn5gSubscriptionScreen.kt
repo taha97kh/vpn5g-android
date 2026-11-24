@@ -46,6 +46,7 @@ import com.v2ray.ang.handler.vpn5g.SubscriptionPlanRemote
 import com.v2ray.ang.handler.vpn5g.Vpn5gCountryGroups
 import com.v2ray.ang.handler.vpn5g.Vpn5gPlans
 import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
+import com.v2ray.ang.handler.vpn5g.Vpn5gVolume
 
 /**
  * Premium / subscription screen.
@@ -423,6 +424,9 @@ fun Vpn5gSubscriptionScreen(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                     )
+                    // v1.1.18 (Model B): used / remaining volume for
+                    // this grant, measured on-device.
+                    Vpn5gVolumeBlock(state)
                 } else if (ownSubscription != null && state.isGift) {
                     // v1.1.14: the GIFT tier — middle tier, top-50
                     // servers, no 30-minute cutoff while it lasts.
@@ -443,6 +447,7 @@ fun Vpn5gSubscriptionScreen(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                     )
+                    Vpn5gVolumeBlock(state)
                 } else if (ownSubscription?.status == "active") {
                     Text(
                         text = stringResource(R.string.vpn5g_subscription_expired),
@@ -451,11 +456,26 @@ fun Vpn5gSubscriptionScreen(
                         fontWeight = FontWeight.Bold,
                     )
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.vpn5g_subscription_none_body),
-                        color = Vpn5gOnDarkMuted,
-                        fontSize = 14.sp,
-                    )
+                    // v1.1.18 (Model B): when the volume cap ended the
+                    // grant, say so — "expired" alone would hide the
+                    // real reason.
+                    if (Vpn5gSubscriptionStatus.isVolumeExhausted(
+                            ownSubscription, state.volumeState()
+                        )
+                    ) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_volume_finished),
+                            color = Vpn5gOnDark,
+                            fontSize = 14.sp,
+                        )
+                        Vpn5gVolumeBlock(state)
+                    } else {
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_none_body),
+                            color = Vpn5gOnDarkMuted,
+                            fontSize = 14.sp,
+                        )
+                    }
                 } else if (status == null) {
                     Text(
                         text = stringResource(R.string.vpn5g_subscription_none),
@@ -1011,6 +1031,81 @@ private fun vpn5gPromoFieldColors() = androidx.compose.material3.OutlinedTextFie
 )
 
 /**
+ * Measured consumption for the home state's current grant (v1.1.18):
+ * the grant key is derived from the effective subscription (the
+ * ViewModel's ensureGrant keeps the store's key on the same grant),
+ * so bytes measured under another grant never attribute here.
+ */
+internal fun Vpn5gHomeUiState.volumeState(): Vpn5gVolume.ConsumedState {
+    return Vpn5gVolume.ConsumedState(
+        Vpn5gVolume.grantKeyFor(userSubscription),
+        volumeConsumedBytes,
+    )
+}
+
+/**
+ * Volume meter for the current grant (v1.1.18, Model B), shared by
+ * the Premium status section, the REDEEMED block and the Me screen:
+ * used vs cap with a progress bar, "نامحدود" when the plan has no
+ * cap (never a made-up number), and the consumed amount even then —
+ * the user only ever sees the on-device measured consumption. Shows
+ * nothing when there is no subscription at all.
+ */
+@Composable
+internal fun Vpn5gVolumeBlock(state: Vpn5gHomeUiState) {
+    val subscription = state.userSubscription ?: return
+    val capBytes = subscription.volumeCapBytes
+    val consumed = state.volumeConsumedBytes.coerceAtLeast(0L)
+    Spacer(Modifier.height(8.dp))
+    if (capBytes == null) {
+        Text(
+            text = stringResource(R.string.vpn5g_volume_unlimited),
+            color = Vpn5gOnDark,
+            fontSize = 15.sp,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = stringResource(
+                R.string.vpn5g_volume_used,
+                Vpn5gVolume.formatGb(consumed),
+            ),
+            color = Vpn5gOnDarkMuted,
+            fontSize = 14.sp,
+        )
+    } else {
+        Text(
+            text = stringResource(
+                R.string.vpn5g_volume_used_of,
+                Vpn5gVolume.formatGb(consumed),
+                Vpn5gVolume.formatGb(capBytes),
+            ),
+            color = Vpn5gOnDark,
+            fontSize = 15.sp,
+        )
+        Spacer(Modifier.height(6.dp))
+        LinearProgressIndicator(
+            progress = {
+                Vpn5gVolume.usageFraction(consumed, capBytes) ?: 0f
+            },
+            modifier = Modifier.fillMaxWidth(),
+            color = Vpn5gAccentLight,
+            trackColor = Vpn5gOnDarkMuted.copy(alpha = 0.3f),
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = stringResource(
+                R.string.vpn5g_volume_remaining,
+                Vpn5gVolume.formatGb(
+                    Vpn5gVolume.remainingBytes(consumed, capBytes) ?: 0L
+                ),
+            ),
+            color = Vpn5gOnDarkMuted,
+            fontSize = 14.sp,
+        )
+    }
+}
+
+/**
  * Redeem-result block shared by the gift and subscription code
  * sections (v1.1.16): one status display, two entry boxes. On
  * REDEEMED it shows the activated plan + remaining time right where
@@ -1044,7 +1139,7 @@ private fun Vpn5gCodeStatusBlock(
                 ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(text = stringResource(R.string.vpn5g_promo_confirm_bot), fontSize = 16.sp)
+                Text(text = stringResource(R.string.vpn5g_promo_open_bot), fontSize = 16.sp)
             }
         }
         Vpn5gPromoStatus.UNKNOWN_CODE -> {
@@ -1086,8 +1181,8 @@ private fun Vpn5gCodeStatusBlock(
         Vpn5gPromoStatus.REDEEMED -> {
             // v1.1.12: the gift code activated the subscription
             // immediately — plan + remaining days prominent.
-            // The bot button below is OPTIONAL: it only lets
-            // the bot decrement remaining_uses server-side.
+            // v1.1.18: no bot confirm here — the grant is active
+            // in-app; the bot button is gone.
             Spacer(Modifier.height(8.dp))
             Text(
                 text = stringResource(R.string.vpn5g_promo_redeemed),
@@ -1132,23 +1227,10 @@ private fun Vpn5gCodeStatusBlock(
                     fontWeight = FontWeight.Bold,
                 )
             }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = stringResource(R.string.vpn5g_promo_bot_note),
-                color = Vpn5gOnDarkMuted,
-                fontSize = 13.sp,
-            )
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = onOpenPromoBot,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Vpn5gAccent,
-                    contentColor = Color.White,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(text = stringResource(R.string.vpn5g_promo_confirm_bot), fontSize = 16.sp)
-            }
+            // v1.1.18: a redeemed grant needs no bot confirm — the
+            // bot note and button are gone. The volume meter below
+            // shows the grant's cap (or "نامحدود").
+            Vpn5gVolumeBlock(state)
         }
         Vpn5gPromoStatus.EXPIRED -> {
             Spacer(Modifier.height(8.dp))

@@ -49,4 +49,18 @@ object Vpn5gPlans {
             .filter { isDisplayable(it) }
             .sortedBy { planDays(it) ?: Int.MAX_VALUE }
     }
+
+    /**
+     * Volume cap of a plan in gigabytes (v1.1.18, Model B), or null
+     * when the plan has no cap (unlimited). The canonical field is
+     * `volume_gb`; `gb` is the alias the bot already publishes for
+     * the gb_* plans — when both are set, `volume_gb` wins. A cap
+     * of 0 or less is not a cap (treated as absent, never as "0 GB
+     * left"). Pure, JVM-tested.
+     */
+    fun volumeCapGb(plan: SubscriptionPlanRemote?): Double? {
+        val cap = plan?.volume_gb ?: plan?.gb ?: return null
+        if (cap <= 0.0 || cap.isNaN() || cap.isInfinite()) return null
+        return cap
+    }
 }

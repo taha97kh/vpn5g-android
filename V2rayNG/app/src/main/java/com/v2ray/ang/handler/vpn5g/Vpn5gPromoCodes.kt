@@ -279,11 +279,29 @@ object Vpn5gPromoCodes {
      * or `tier`) grants a FULL subscription for that plan's days; any
      * other gift grants the middle GIFT tier (plan "gift"). Pure.
      */
-    fun giftPlanId(entry: PromoCodeRemote): String {
+    /**
+     * Plan id a gift code grants (v1.1.12; volume plans v1.1.18): a
+     * sub_* plan id grants a FULL subscription; a plan id that is in
+     * the published plans (e.g. a gb_* volume plan) also grants that
+     * plan — full pool, capped by its volume. Any other gift grants
+     * the middle GIFT tier. [plans] is the published plan list: when
+     * it is null (config not loaded) only the hardcoded sub_* ids
+     * are trusted, so a malformed entry can never mint a full
+     * subscription by itself. Pure.
+     */
+    fun giftPlanId(
+        entry: PromoCodeRemote,
+        plans: List<SubscriptionPlanRemote>? = null,
+    ): String {
         val candidate = entry.plan?.takeIf { it.isNotBlank() }
             ?: entry.tier?.takeIf { it.isNotBlank() }
-        if (candidate != null && candidate.trim().lowercase() in Vpn5gPlans.SUB_PLAN_DAYS) {
-            return candidate.trim()
+        if (candidate != null) {
+            val id = candidate.trim()
+            if (id.lowercase() in Vpn5gPlans.SUB_PLAN_DAYS) return id
+            if (plans.orEmpty().any {
+                    it.id?.trim()?.equals(id, ignoreCase = true) == true
+                }
+            ) return id
         }
         return Vpn5gConstants.GIFT_TIER_PLAN_ID
     }
@@ -304,11 +322,16 @@ object Vpn5gPromoCodes {
         nowEpochSeconds: Long,
     ): Pair<Vpn5gSubscriptionStatus.Vpn5gUserSubscription, String>? {
         val expiresAt = activationExpiry(entry, nowEpochSeconds) ?: return null
-        val plan = giftPlanId(entry)
+        // v1.1.18: the plan id comes from the published plans when it
+        // is one (a gb_* volume plan grants that plan, capped), and
+        // the grant carries its volume cap from the start.
+        val plans = runCatching { Vpn5gRemoteConfig.cached().plans }.getOrNull()
+        val plan = giftPlanId(entry, plans)
         val subscription = Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
             status = "active",
             expiresAtEpochSeconds = expiresAt,
             plan = plan,
+            volumeCapBytes = Vpn5gVolume.capBytesForPlanId(plan, plans),
         )
         Vpn5gSubscriptionStatus.saveRedeemed(subscription)
         val link = redeem(entry, email = email, expiresAtEpochSeconds = expiresAt)
@@ -344,10 +367,14 @@ object Vpn5gPromoCodes {
         if (expiresAt <= nowEpochSeconds) return null
         val grantedPlan = plan?.takeIf { it.isNotBlank() }
             ?: Vpn5gConstants.GIFT_TIER_PLAN_ID
+        // v1.1.18: the server-validated grant carries its volume cap
+        // from the published plans, like the config-list path.
+        val plans = runCatching { Vpn5gRemoteConfig.cached().plans }.getOrNull()
         val subscription = Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
             status = "active",
             expiresAtEpochSeconds = expiresAt,
             plan = grantedPlan,
+            volumeCapBytes = Vpn5gVolume.capBytesForPlanId(grantedPlan, plans),
         )
         Vpn5gSubscriptionStatus.saveRedeemed(subscription)
         val normalized = code.trim().uppercase()

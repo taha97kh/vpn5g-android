@@ -13,11 +13,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * The ten states the home screen ever shows (v1.1.5 §2 — the seven
- * user-visible connect states from the spec, plus IDLE, CONNECTED and the
- * transient RETRYING). The home text comes from these states only, and
- * the precise failure reason lives in the ViewModel's lastError, never in
- * a technical error string.
+ * The eleven states the home screen ever shows (v1.1.5 §2 — the seven
+ * user-visible connect states from the spec, plus IDLE, CONNECTED, the
+ * transient RETRYING, and DISCONNECTING v1.1.18). The home text comes
+ * from these states only, and the precise failure reason lives in the
+ * ViewModel's lastError, never in a technical error string.
  *
  * CONNECTED is reachable only from VERIFYING_TUNNEL on VERIFIED — never
  * from "the service is running" or "the ping came back". The service
@@ -37,6 +37,15 @@ enum class Vpn5gConnectState {
     RETRYING,
     /** The chain gave up: precise error shown, still Disconnected. */
     FAILED,
+    /**
+     * The user asked to disconnect and the daemon is still stopping
+     * (v1.1.18): the button must not flip to "Disconnected" instantly
+     * while the service may still be running. Lands in IDLE when the
+     * service reports stopped, or after [Vpn5gAutoConnect.DISCONNECT_TIMEOUT_MS]
+     * if it never does. A restart racing the disconnect (server tap)
+     * moves it back to CREATING_TUNNEL on SERVICE_STARTED.
+     */
+    DISCONNECTING,
 }
 
 enum class Vpn5gConnectEvent {
@@ -65,22 +74,45 @@ enum class Vpn5gConnectMode { AUTO, MANUAL }
 object Vpn5gAutoConnect {
 
     /**
+     * Fallback to IDLE when the service never reports stopped after a
+     * user disconnect (v1.1.18): the stop broadcast can be lost if the
+     * process dies mid-stop, and the home must never sit in
+     * DISCONNECTING forever. 5 s is long past a normal stop (~1 s)
+     * and short enough that a stuck button is never mistaken for a
+     * live tunnel.
+     */
+    const val DISCONNECT_TIMEOUT_MS = 5_000L
+
+    /**
      * Pure state machine. An event that makes no sense in the current state
-     * leaves the state unchanged — except USER_DISCONNECT, which always
-     * lands in IDLE, and GIVE_UP, which lands in FAILED (the precise error
-     * is shown and the app stays Disconnected) except from CONNECTED, where
+     * leaves the state unchanged — except USER_DISCONNECT, which lands in
+     * DISCONNECTING from any live state (IDLE / FAILED / DISCONNECTING
+     * stay), and GIVE_UP, which lands in FAILED (the precise error is
+     * shown and the app stays Disconnected) except from CONNECTED, where
      * a stop is a clean end (30-minute timer / service stop) and lands in
-     * IDLE. CONNECTED is only reachable from VERIFYING_TUNNEL on VERIFIED.
+     * IDLE, and from DISCONNECTING, where the stop is still in flight
+     * and the timeout resolves it. CONNECTED is only reachable from
+     * VERIFYING_TUNNEL on VERIFIED.
      */
     fun transition(from: Vpn5gConnectState, event: Vpn5gConnectEvent): Vpn5gConnectState {
         if (event == Vpn5gConnectEvent.USER_DISCONNECT) {
-            return Vpn5gConnectState.IDLE
+            // v1.1.18: the button flips to DISCONNECTING, not IDLE —
+            // the daemon may still be stopping. From IDLE / FAILED
+            // there is nothing to stop, and a repeated tap while
+            // already disconnecting stays there.
+            return when (from) {
+                Vpn5gConnectState.IDLE,
+                Vpn5gConnectState.FAILED,
+                Vpn5gConnectState.DISCONNECTING -> from
+                else -> Vpn5gConnectState.DISCONNECTING
+            }
         }
         if (event == Vpn5gConnectEvent.GIVE_UP) {
             return when (from) {
                 Vpn5gConnectState.IDLE -> Vpn5gConnectState.IDLE
                 Vpn5gConnectState.CONNECTED -> Vpn5gConnectState.IDLE
                 Vpn5gConnectState.FAILED -> Vpn5gConnectState.FAILED
+                Vpn5gConnectState.DISCONNECTING -> Vpn5gConnectState.DISCONNECTING
                 else -> Vpn5gConnectState.FAILED
             }
         }
@@ -145,6 +177,15 @@ object Vpn5gAutoConnect {
             }
             Vpn5gConnectState.FAILED -> when (event) {
                 Vpn5gConnectEvent.START -> Vpn5gConnectState.CHECKING_INTERNET
+                else -> from
+            }
+            Vpn5gConnectState.DISCONNECTING -> when (event) {
+                // A restart racing the disconnect (server tap while
+                // stopping): the new core started, so the chain
+                // resumes as a tunnel being created — it will be
+                // verified like any other start. Everything else is
+                // absorbed until the stop lands or the timeout fires.
+                Vpn5gConnectEvent.SERVICE_STARTED -> Vpn5gConnectState.CREATING_TUNNEL
                 else -> from
             }
         }

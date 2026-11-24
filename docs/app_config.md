@@ -109,11 +109,26 @@ it applies the benefit centrally and decrements `remaining_uses`.
 | `period` | string | `"monthly"` or `"yearly"` (legacy; drives the card layout for old plans). |
 | `name_fa` | string \| null | Display name in Persian, e.g. `"ماهانه"`. Falls back to the plan id. |
 | `price_toman` | integer \| null | Price in Toman. Null hides the card. |
+| `volume_gb` | number \| null | **(v1.1.18)** Volume cap in gigabytes, set by the admin for this plan (Model B: volume or time, whichever first — the app ends the subscription when the measured consumption reaches the cap OR the expiry passes). The app meters real on-device tunnel bytes against it; it NEVER invents a cap. Null/absent = no cap (unlimited — the app shows «نامحدود»). |
+| `gb` | number \| null | **(v1.1.18)** Alias of `volume_gb` — the field the bot already publishes for the `gb_20` / `gb_50` / `gb_100` / `gb_200` plans in the live config. When both are set, `volume_gb` wins. New publishes should use `volume_gb`. |
 
 Plans with a missing id, no known duration, or no price are ignored by the
 app. The app renders the plans from this config on every app start and on
 every manual refresh (see "Bot → app sync" below) — **no app update is needed
 for a plan or price change**. The longest plan is the default selection.
+
+**Volume (Model B, v1.1.18).** The cap above is the ONLY volume the app
+knows: there is no server-side per-user metering anywhere (no Marzban/X-UI
+panel, no traffic API), so the app measures consumption itself, on the
+device, from real tunnel bytes (the :daemon notification job accumulates
+the native per-interval byte counts while the tunnel runs). Consumption
+is cumulative across sessions for the current grant and resets only when
+a new grant starts — never on app restart. When consumption reaches the
+cap, the subscription ends: the pool, the country locks and the timer all
+fall back to the free tier, and the subscription panel says the volume
+finished. A plan with no cap shows «نامحدود», never a made-up number. The
+admin changes a cap by republishing the plan — the app picks it up on the
+next subscription refresh (a removed cap un-caps the grant).
 
 ### `payment_gateway` — direct bank payment gateway
 

@@ -17,6 +17,7 @@ import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.extension.delay
 import com.v2ray.ang.extension.toSpeedString
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
+import com.v2ray.ang.handler.vpn5g.Vpn5gVolumeStore
 import com.v2ray.ang.helper.NotificationHelper
 import com.v2ray.ang.ui.vpn5g.Vpn5gMainActivity
 import com.v2ray.ang.util.LogUtil
@@ -276,6 +277,16 @@ object NotificationManager {
         MmkvManager.encodeSettings(Vpn5gConstants.KEY_SPEED_DOWN_BPS, downBps)
         MmkvManager.encodeSettings(Vpn5gConstants.KEY_SPEED_UP_BPS, upBps)
         MmkvManager.encodeSettings(Vpn5gConstants.KEY_SPEED_UPDATED_AT_MS, queryTime)
+        // v1.1.18 (volume, Model B): the native counters reset on
+        // every query, so proxyDownlink/proxyUplink ARE the real
+        // tunnel bytes of this interval — accumulating them here, in
+        // the single querier, is a true byte count, not a rate
+        // sample. The counter is keyed to the current grant (set by
+        // the UI process) and survives restarts; bytes in the <1 s
+        // tail after the last query before the service stops are not
+        // counted. Direct (bypassed) traffic never counts: it does
+        // not go through the tunnel.
+        Vpn5gVolumeStore.addIntervalBytes(proxyDownlink + proxyUplink)
         if (!zeroSpeed || !lastZeroSpeed) {
             // v1.1.14: TUNNEL-ONLY speeds with Persian labels — the
             // bypassed (direct) traffic is never shown, and nothing is

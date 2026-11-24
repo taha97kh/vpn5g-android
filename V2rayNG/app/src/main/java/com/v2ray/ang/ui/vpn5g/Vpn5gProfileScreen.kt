@@ -173,6 +173,9 @@ fun Vpn5gProfileScreen(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                     )
+                    // v1.1.18 (Model B): used / remaining volume for
+                    // this grant, measured on-device.
+                    Vpn5gVolumeBlock(state)
                 } else if (ownSubscription?.status == "active") {
                     Text(
                         text = stringResource(R.string.vpn5g_subscription_expired),
@@ -181,11 +184,26 @@ fun Vpn5gProfileScreen(
                         fontWeight = FontWeight.Bold,
                     )
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.vpn5g_subscription_none_body),
-                        color = Vpn5gOnDarkMuted,
-                        fontSize = 14.sp,
-                    )
+                    // v1.1.18 (Model B): when the volume cap ended the
+                    // grant, say so — "expired" alone would hide the
+                    // real reason.
+                    if (Vpn5gSubscriptionStatus.isVolumeExhausted(
+                            ownSubscription, state.volumeState()
+                        )
+                    ) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_volume_finished),
+                            color = Vpn5gOnDark,
+                            fontSize = 14.sp,
+                        )
+                        Vpn5gVolumeBlock(state)
+                    } else {
+                        Text(
+                            text = stringResource(R.string.vpn5g_subscription_none_body),
+                            color = Vpn5gOnDarkMuted,
+                            fontSize = 14.sp,
+                        )
+                    }
                 } else if (status == null) {
                     Text(
                         text = stringResource(R.string.vpn5g_subscription_none),

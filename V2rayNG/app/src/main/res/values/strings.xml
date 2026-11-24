@@ -614,6 +614,12 @@
     <string name="vpn5g_subscription_plan">طرح: %1$s</string>
     <string name="vpn5g_subscription_days">روز باقی‌مانده: %1$d</string>
     <string name="vpn5g_subscription_volume">حجم باقی‌مانده: %1$s گیگابایت</string>
+    <!-- v1.1.18: volume (Model B) — measured on-device from real tunnel bytes. -->
+    <string name="vpn5g_volume_used_of">مصرف‌شده: %1$s از %2$s گیگابایت</string>
+    <string name="vpn5g_volume_remaining">باقی‌مانده: %1$s گیگابایت</string>
+    <string name="vpn5g_volume_unlimited">حجم: نامحدود</string>
+    <string name="vpn5g_volume_used">مصرف‌شده: %1$s گیگابایت</string>
+    <string name="vpn5g_volume_finished">علت: حجم این اشتراک تمام شد.</string>
     <string name="vpn5g_auth_title">ورود با ایمیل</string>
     <string name="vpn5g_auth_email">ایمیل</string>
     <string name="vpn5g_auth_email_hint">example@mail.com</string>
@@ -661,6 +667,8 @@
     <string name="vpn5g_connect_connecting">در حال اتصال…</string>
     <string name="vpn5g_connect_creating_tunnel">در حال ایجاد تونل امن…</string>
     <string name="vpn5g_connect_retrying">در حال تلاش مجدد برای اتصال…</string>
+    <!-- v1.1.18: disconnecting state — the daemon is still stopping. -->
+    <string name="vpn5g_disconnecting">در حال قطع اتصال…</string>
     <string name="vpn5g_no_internet">اینترنت در دسترس نیست؛ اتصال را بررسی کنید</string>
     <string name="vpn5g_loading_servers">در حال دریافت سرورها…</string>
     <string name="vpn5g_free_servers">سرورهای رایگان</string>
@@ -685,12 +693,12 @@
     <string name="vpn5g_promo_body">اگر از ربات کد خرید یا هدیه گرفته‌اید، اینجا وارد کنید؛ اشتراک بلافاصله و بدون تایید اضافه فعال می‌شود.</string>
     <string name="vpn5g_promo_code">کد</string>
     <string name="vpn5g_promo_redeem">فعال کردن کد</string>
-    <string name="vpn5g_promo_valid">کد معتبر است؛ برای فعال‌سازی نهایی، در ربات تأیید کنید.</string>
+    <string name="vpn5g_promo_valid">کد تخفیف ثبت شد؛ برای اعمال تخفیف در ربات ادامه بده.</string>
     <string name="vpn5g_promo_unknown">این کد شناخته نشد</string>
     <string name="vpn5g_promo_exhausted">ظرفیت استفاده از این کد تمام شده است</string>
     <string name="vpn5g_promo_already">این کد قبلاً در این دستگاه استفاده شده است</string>
     <string name="vpn5g_promo_invalid">کد معتبر نیست</string>
-    <string name="vpn5g_promo_confirm_bot">تأیید در ربات تلگرام</string>
+    <string name="vpn5g_promo_open_bot">ادامه در ربات</string>
 
     <!-- v1.1.12: in-app gift activation, premium look, persistent connection -->
     <string name="vpn5g_premium_badge">ویژه</string>
@@ -701,7 +709,6 @@
     <string name="vpn5g_promo_expired">این کد منقضی شده است</string>
     <string name="vpn5g_promo_not_yours">این کد برای حساب دیگری صادر شده است</string>
     <string name="vpn5g_promo_not_signed_in">برای فعال کردن کد، اول با ایمیل وارد شوید</string>
-    <string name="vpn5g_promo_bot_note">برای اینکه ظرفیت این کد در ربات هم کم شود، در ربات ثبتش کنید (اختیاری).</string>
     <string name="vpn5g_persistent_reconnect_failed">اتصال پایدار برقرار نشد؛ دوباره وصل شوید</string>
 
     <!-- v1.1.14: startup screen, live speeds, operator, gift tier, countries, per-app bypass -->
@@ -868,7 +875,7 @@
     <string name="vpn5g_guide_s05_title">۵. کشورهای ویژه و اشتراک</string>
     <string name="vpn5g_guide_s05_body">کشورهایی که قفل دارند با اشتراک باز می‌شوند. اشتراک را از ربات تلگرام می‌گیری؛ وضعیت اشتراکت در صفحهٔ «من» و صفحهٔ «حق بیمه» نمایش داده می‌شود.</string>
     <string name="vpn5g_guide_s06_title">۶. اگر سروری کار نکرد</string>
-    <string name="vpn5g_guide_s06_body">برنامه خودکار سرور بعدی را امتحان می‌کند (حداکثر ۳ بار در هر اتصال). اگر هیچ سروری تونل نکرد، خطای دقیق را می‌بینی و همچنان «متصل نیست» می‌مانی؛ لیست را به‌روزرسانی کن و دوباره تلاش کن.</string>
+    <string name="vpn5g_guide_s06_body">برنامه سرور بعدی را امتحان می‌کند تا زمانی که یک تونل واقعی تأیید شود؛ سقف تلاش ثابتی ندارد. اگر هیچ سروری تونل نکرد، خطای دقیق را می‌بینی و همچنان «متصل نیست» می‌مانی؛ لیست را به‌روزرسانی کن و دوباره تلاش کن.</string>
     <string name="vpn5g_guide_s07_title">۷. قطع خودکار بعد از ۳۰ دقیقه</string>
     <string name="vpn5g_guide_s07_body">هر اتصال بعد از ۳۰ دقیقه خودکار قطع می‌شود؛ این محدودیت نسخهٔ رایگان است. برای ادامه، دوباره روی دکمهٔ اتصال بزن.</string>
     <string name="vpn5g_guide_s08_title">۸. بررسی واقعی تونل</string>
@@ -881,12 +888,12 @@
     <string name="vpn5g_guide_s11_body">لینک کانفیگ (vmess ،vless ،trojan یا ss) را کپی کن و در برنامه باز کن، یا فایل txt. یا json. را از کانال دانلود کن و روی آن بزن تا در برنامه باز شود. کانفیگ خراب یا ناقص (مثلاً بدون SNI یا بدون کلید REALITY) وارد نمی‌شود.</string>
     <string name="vpn5g_guide_s12_title">۱۲. به‌روزرسانی لیست سرورها</string>
     <string name="vpn5g_guide_s12_body">لیست را با کشیدن صفحه به پایین به‌روز کن؛ برنامه هر ۵ دقیقه هم خودکار به‌روز می‌کند. سرورها از سرویس‌های آنلاین گرفته می‌شوند؛ اگر اینترنت نباشد، آخرین لیست ذخیره‌شده نمایش داده می‌شود.</string>
-    <string name="vpn5g_guide_s13_title">۱۳. حساب کاربری و کد تایید</string>
-    <string name="vpn5g_guide_s13_body">ثبت‌نام و ورود فقط با ایمیل Gmail و کد ۶ رقمی است؛ رمزی در کار نیست. کد را از ایمیلت برمی‌داری و اینجا وارد می‌کنی. ارسال مجدد کد هر ۶۰ ثانیه یک بار ممکن است و بعد از ۵ بار کد اشتباه، باید کد تازه بگیری. توجه: کدها با سرویس ایمیل ارسال می‌شوند؛ اگر کد نرسید، اول پوشهٔ اسپم را بررسی کن، بعد دوباره درخواست بده.</string>
+    <string name="vpn5g_guide_s13_title">۱۳. حساب کاربری و ورود</string>
+    <string name="vpn5g_guide_s13_body">ثبت‌نام و ورود فقط با ایمیل و رمز عبور است؛ هیچ کدی ارسال نمی‌شود. ایمیل و رمزت را وارد می‌کنی و وارد حسابت می‌شوی. رمزت را فراموش نکن؛ اگر فراموش کردی، از «فراموشی رمز عبور» لینک بازیابی را به ایمیلت می‌فرستیم.</string>
     <string name="vpn5g_guide_s14_title">۱۴. بازیابی حساب</string>
-    <string name="vpn5g_guide_s14_body">اگر از حسابت خارج شدی، در صفحهٔ ورود «فراموشی رمز عبور» را بزن؛ کد ورود به همان ایمیلت فرستاده می‌شود و با همان کد وارد حسابت می‌شوی.</string>
+    <string name="vpn5g_guide_s14_body">اگر از حسابت خارج شدی، در صفحهٔ ورود «فراموشی رمز عبور» را بزن؛ لینک بازیابی به همان ایمیلت فرستاده می‌شود. با باز کردن لینک، رمز تازه می‌سازی و وارد حسابت می‌شوی. هیچ کدی ارسال نمی‌شود؛ اگر لینک نرسید، اول پوشهٔ اسپم را بررسی کن.</string>
     <string name="vpn5g_guide_s15_title">۱۵. کد تخفیف / هدیه</string>
-    <string name="vpn5g_guide_s15_body">اگر از ربات کد تخفیف یا هدیه گرفته‌ای، در صفحهٔ «حق بیمه» واردش کن. کد اینجا بررسی می‌شود، ولی فعال‌سازی نهایی در ربات انجام می‌شود.</string>
+    <string name="vpn5g_guide_s15_body">اگر از ربات کد تخفیف یا هدیه گرفته‌ای، در صفحهٔ «حق بیمه» واردش کن. کد هدیه و کد خرید هر دو بلافاصله داخل برنامه فعال می‌شوند؛ بعد از تأیید سرور، هیچ مرحله‌ای در ربات لازم نیست. کد هدیه چند ساعت اعتبار می‌دهد و کد خرید چند روز (بسته به طرح). کد تخفیف در ربات اعمال می‌شود.</string>
     <string name="vpn5g_guide_s16_title">۱۶. به‌روزرسانی برنامه</string>
     <string name="vpn5g_guide_s16_body">وقتی نسخهٔ جدید منتشر شود، برنامه خودش خبرت می‌کند؛ با یک دکمه دانلود می‌شود و نصب‌کنندهٔ سیستم باز می‌شود. از نسخهٔ ۱٫۱٫۴ به بعد، به‌روزرسانی روی نسخهٔ قبلی نصب می‌شود.</string>
     <string name="vpn5g_guide_s17_title">۱۷. حریم خصوصی و امنیت</string>
@@ -894,13 +901,13 @@
     <string name="vpn5g_guide_s18_title">۱۸. مصرف باتری و داده</string>
     <string name="vpn5g_guide_s18_body">وقتی متصل‌ای، سرویس در پس‌زمینه فعال می‌ماند تا اتصال قطع نشود. با خاموش شدن صفحه، اتصال قطع نمی‌شود. اتصال بعد از ۳۰ دقیقه خودکار قطع می‌شود.</string>
     <string name="vpn5g_guide_s19_title">۱۹. مشکلات رایج</string>
-    <string name="vpn5g_guide_s19_body">«اینترنت در دسترس نیست»: اینترنت گوشی را بررسی کن. «هیچ سروری تونل نکرد»: لیست را به‌روز کن و دوباره تلاش کن. «اجازهٔ VPN داده نشد»: موقع اتصال، اجازهٔ VPN را در پنجرهٔ سیستم تأیید کن. «کد تایید نرسید»: پوشهٔ اسپم را ببین و بعد از ۶۰ ثانیه دوباره درخواست بده.</string>
+    <string name="vpn5g_guide_s19_body">«اینترنت در دسترس نیست»: اینترنت گوشی را بررسی کن. «هیچ سروری تونل نکرد»: لیست را به‌روز کن و دوباره تلاش کن. «اجازهٔ VPN داده نشد»: موقع اتصال، اجازهٔ VPN را در پنجرهٔ سیستم تأیید کن. «لینک بازیابی نرسید»: پوشهٔ اسپم را ببین و دوباره درخواست بده.</string>
     <string name="vpn5g_guide_s20_title">۲۰. راه ارتباط با پشتیبانی</string>
     <string name="vpn5g_guide_s20_body">اگر مشکلی داشتی که اینجا جوابش نیست، از همین سه راه با ما در تماس باش:</string>
 
     <!-- v1.1.5: FAQ (§5). -->
-    <string name="vpn5g_faq_q01">چرا کد تایید به ایمیلم نمی‌رسد؟</string>
-    <string name="vpn5g_faq_a01">کدها با سرویس ایمیل ارسال می‌شوند. اول پوشهٔ اسپم و تبلیغات را بررسی کن، مطمئن شو ایمیلت Gmail است، و بعد از ۶۰ ثانیه دوباره درخواست بده. اگر هنوز نرسید، از پشتیبانی بپرس؛ سرویس ارسال ایمیل در حال راه‌اندازی است و ممکن است کدها با تأخیر برسند.</string>
+    <string name="vpn5g_faq_q01">ورود به حساب چطور انجام می‌شود؟</string>
+    <string name="vpn5g_faq_a01">ورود فقط با ایمیل و رمز عبور است؛ هیچ کد تأییدی ارسال نمی‌شود. اگر رمزت را فراموش کرده‌ای، در صفحهٔ ورود «فراموشی رمز عبور» را بزن تا لینک بازیابی به ایمیلت فرستاده شود. لینک نرسید؟ اول پوشهٔ اسپم را بررسی کن.</string>
     <string name="vpn5g_faq_q02">چرا اتصال بعد از ۳۰ دقیقه قطع می‌شود؟</string>
     <string name="vpn5g_faq_a02">این محدودیت نسخهٔ رایگان است؛ هر اتصال ۳۰ دقیقه طول می‌کشد. برای ادامه، دوباره روی دکمهٔ اتصال بزن.</string>
     <string name="vpn5g_faq_q03">چرا بعضی کشورها قفل‌اند؟</string>
@@ -915,4 +922,8 @@
     <string name="vpn5g_faq_a07">نه؛ برنامه روی هر دو کار می‌کند و اندازهٔ بسته را خودکار با نوع شبکه تنظیم می‌کند. اگر شبکه عوض شود، برنامه تونل را دوباره بررسی می‌کند.</string>
     <string name="vpn5g_faq_q08">VPN وصل است ولی هیچ‌چیز باز نمی‌شود؛ چه کار کنم؟</string>
     <string name="vpn5g_faq_a08">برنامه هر ۶۰ ثانیه تونل را بررسی می‌کند؛ اگر تونل واقعاً کار نکند، خودش اتصال را قطع می‌کند و سرور بعدی را امتحان می‌کند. اگر مشکل ادامه داشت، قطع کن، لیست را به‌روز کن و به سرور دیگری وصل شو.</string>
+    <string name="vpn5g_faq_q09">طرح فعال و تاریخ انقضایش را کجا ببینم؟</string>
+    <string name="vpn5g_faq_a09">در صفحهٔ «حق بیمه»، بخش وضعیت اشتراک: نام طرح، روزهای باقی‌مانده (برای کد هدیه: ساعت‌های باقی‌مانده) و مصرف حجم را همان‌جا می‌بینی. در صفحهٔ «من» هم خلاصهٔ اشتراکت هست.</string>
+    <string name="vpn5g_faq_q10">حجم طرحم چقدر است و چقدر مصرف کرده‌ام؟</string>
+    <string name="vpn5g_faq_a10">سقف حجم هر طرح را ادمین تعیین می‌کند؛ در صفحهٔ «حق بیمه» مصرف‌شده و باقی‌مانده را با نوار پیشرفت می‌بینی. مصرف از بایت‌های واقعی تونل روی همین گوشی اندازه گرفته می‌شود و برای همان اشتراک جمع می‌شود. سرور مصرف هر کاربر را گزارش نمی‌کند، پس عددی که می‌بینی همان اندازه‌گیری خود گوشی است. اگر طرحت سقف حجم نداشت، «نامحدود» نشان داده می‌شود. وقتی حجم یا زمان طرح تمام شود — هرکدام زودتر — اشتراک پایان می‌یابد.</string>
 </resources>

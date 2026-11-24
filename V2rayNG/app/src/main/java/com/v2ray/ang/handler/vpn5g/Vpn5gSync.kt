@@ -116,7 +116,7 @@ object Vpn5gSync {
      * Saves the TCP-live profiles, real-probes the fastest batch, and
      * returns (per-country counts, real-pinged count). Shared by both
      * refresh paths; [probeCount]/[probeBudgetMs] are the full-refresh
-     * values (24 / 45 s) or the quick values (16 / 8 s). The stored
+     * values (24 / 45 s) or the quick values (24 / 10 s, v1.1.18). The stored
      * ping of a verified server becomes the REAL through-the-proxy
      * delay; a server that fails the real test has its ping withdrawn
      * so it is never free or auto-picked this round.
@@ -355,7 +355,7 @@ object Vpn5gSync {
     // 45 s budget — minutes on a fresh install, and the empty-cache
     // path blocked entry on it. The quick path fetches the sources IN
     // PARALLEL with 5 s timeouts, validates, TCP-pings a spread
-    // sample, and real-probes the fastest 16 with an 8 s budget,
+    // sample, and real-probes the fastest 24 with a 10 s budget,
     // inside the ViewModel's 20 s first-screen deadline (see
     // STARTUP_DEADLINE_MS in Vpn5gMainActivity). Whatever verifies
     // becomes the free list immediately; the full refresh still runs
@@ -369,12 +369,17 @@ object Vpn5gSync {
     // refresh's source set), with a small per-source sample for the
     // large GitHub files.
     private const val QUICK_FETCH_TIMEOUT_MS = 5_000
-    private const val QUICK_PROBE_CANDIDATES = 16
+    // v1.1.18: 24 candidates (was 16) so the launch list can hold the
+    // full 20 verified free servers Aref ordered (2026-11-25 §1) —
+    // a 16-candidate batch could verify at most 16, so the free
+    // tier started short. Budget 10 s (was 8 s); the 15 s total
+    // budget and the 20 s first-screen deadline are unchanged.
+    private const val QUICK_PROBE_CANDIDATES = 24
     /** Large GitHub files: this many spread lines each, quick path. */
     private const val QUICK_CAPPED_SOURCE_LINES = 40
     /** Validated candidates TCP-pinged in the quick path, at most. */
     private const val QUICK_CANDIDATE_CAP = 150
-    private const val QUICK_PROBE_BUDGET_MS = 8_000L
+    private const val QUICK_PROBE_BUDGET_MS = 10_000L
     /** The whole quick path must finish inside this budget. */
     const val QUICK_TOTAL_BUDGET_MS = 15_000L
 
@@ -468,8 +473,8 @@ object Vpn5gSync {
      * Quick first-screen refresh (v1.1.16, widened v1.1.17). Same
      * contract as [refresh] but bounded: ALL sources in parallel
      * with 5 s timeouts, a spread sample of at most 150 validated
-     * candidates for the TCP stage, and a 16-candidate / 8 s real
-     * probe. When every source fails, the STORED profiles (bundled
+     * candidates for the TCP stage, and a 24-candidate / 10 s real
+     * probe (v1.1.18: was 16 / 8 s). When every source fails, the STORED profiles (bundled
      * fallback on a fresh install) are real-probed instead, so the
      * free list can still verify without any fetch succeeding.
      * Never throws.
@@ -830,10 +835,19 @@ object Vpn5gSync {
         // v1.1.14: the GIFT tier gets the top 50 instead. Servers that
         // verified on the CURRENT operator are marked (own history
         // only) so the auto pick can prefer them.
+        // v1.1.18 (Model B): the tier is volume-aware — a grant whose
+        // volume cap is reached is FREE here too, so the pool, the
+        // country locks and the auto picker all follow the real
+        // state, not just the subscription text.
         val tier = if (forceFreeTier) {
             Vpn5gSubscriptionStatus.Vpn5gTier.FREE
         } else {
-            Vpn5gSubscriptionStatus.cachedTier()
+            val nowSeconds = System.currentTimeMillis() / 1000
+            Vpn5gSubscriptionStatus.tierOf(
+                Vpn5gSubscriptionStatus.loadEffective(nowSeconds),
+                nowSeconds,
+                Vpn5gVolumeStore.consumedState(),
+            )
         }
         val freeGuids = freeGuidsFor(byCountry.values.flatten(), tier)
         val sections = byCountry.map { (key, servers) ->

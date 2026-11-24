@@ -17,12 +17,14 @@ class Vpn5gQuickSyncTest {
         Vpn5gRealPing.RealPingCandidate(guid, key)
 
     @Test
-    fun test_quick_batch_caps_at_16_fastest_unproven() {
-        val candidates = (1..20).map { i -> candidate("g$i", "k$i") }
-        val delays = (1..20).associate { i -> "g$i" to (i * 10L) }
+    fun test_quick_batch_caps_at_24_fastest_unproven() {
+        // v1.1.18: 24 candidates (was 16) so the launch list can hold
+        // the full 20 verified free servers.
+        val candidates = (1..30).map { i -> candidate("g$i", "k$i") }
+        val delays = (1..30).associate { i -> "g$i" to (i * 10L) }
         val batch = Vpn5gSync.selectQuickCandidates(candidates, delays, emptySet())
-        assertEquals(16, batch.size)
-        assertEquals((1..16).map { "g$it" }, batch.map { it.guid })
+        assertEquals(24, batch.size)
+        assertEquals((1..24).map { "g$it" }, batch.map { it.guid })
     }
 
     @Test
@@ -72,20 +74,25 @@ class Vpn5gQuickSyncTest {
     // -- Standby top-up batch (v1.1.17) ------------------------------------
 
     @Test
-    fun test_standby_topup_empty_when_pool_already_above_10() {
-        val candidates = (1..20).map { i -> candidate("g$i", "k$i") }
-        val delays = (1..20).associate { i -> "g$i" to (i * 10L) }
-        // 11 verified already: the pool is big enough, no batch.
-        assertTrue(
-            Vpn5gSync.standbyTopUpBatch(candidates, delays, emptySet(), 11).isEmpty()
-        )
+    fun test_standby_topup_empty_when_pool_already_at_20() {
+        val candidates = (1..30).map { i -> candidate("g$i", "k$i") }
+        val delays = (1..30).associate { i -> "g$i" to (i * 10L) }
+        // v1.1.18: 20 verified already (was 11) — the pool is big
+        // enough, no batch.
         assertTrue(
             Vpn5gSync.standbyTopUpBatch(candidates, delays, emptySet(), 20).isEmpty()
+        )
+        assertTrue(
+            Vpn5gSync.standbyTopUpBatch(candidates, delays, emptySet(), 25).isEmpty()
+        )
+        // 19 verified: one short of the minimum — a batch is needed.
+        assertTrue(
+            Vpn5gSync.standbyTopUpBatch(candidates, delays, emptySet(), 19).isNotEmpty()
         )
     }
 
     @Test
-    fun test_standby_topup_returns_fastest_unproven_below_10() {
+    fun test_standby_topup_returns_fastest_unproven_below_20() {
         val candidates = (1..30).map { i -> candidate("g$i", "k$i") }
         val delays = (1..30).associate { i -> "g$i" to (i * 10L) }
         // 5 verified, k1/k2 already proven: the batch is the fastest

@@ -260,4 +260,100 @@ class Vpn5gSubscriptionStatusTest {
             Vpn5gSubscriptionStatus.effectiveSubscription(null, gift, now),
         )
     }
+
+    // -- Volume (v1.1.18, Model B): volume or time, whichever first --------
+
+    private val cap20Gb = 20L * Vpn5gVolume.GB_BYTES
+
+    private fun volumeStateFor(
+        sub: Vpn5gUserSubscription,
+        bytes: Long,
+    ): Vpn5gVolume.ConsumedState {
+        return Vpn5gVolume.ConsumedState(Vpn5gVolume.grantKeyFor(sub), bytes)
+    }
+
+    @Test
+    fun test_volume_exhausted_subscriber_is_free() {
+        val sub = Vpn5gUserSubscription(
+            "active", future, "gb_20", volumeCapBytes = cap20Gb
+        )
+        val volume = volumeStateFor(sub, cap20Gb)
+        assertTrue(Vpn5gSubscriptionStatus.isVolumeExhausted(sub, volume))
+        assertFalse(Vpn5gSubscriptionStatus.isSubscriber(sub, now, volume))
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.FREE,
+            Vpn5gSubscriptionStatus.tierOf(sub, now, volume),
+        )
+    }
+
+    @Test
+    fun test_volume_below_cap_stays_subscriber() {
+        val sub = Vpn5gUserSubscription(
+            "active", future, "gb_20", volumeCapBytes = cap20Gb
+        )
+        val volume = volumeStateFor(sub, cap20Gb - 1L)
+        assertFalse(Vpn5gSubscriptionStatus.isVolumeExhausted(sub, volume))
+        assertTrue(Vpn5gSubscriptionStatus.isSubscriber(sub, now, volume))
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
+            Vpn5gSubscriptionStatus.tierOf(sub, now, volume),
+        )
+    }
+
+    @Test
+    fun test_volume_unknown_consumption_keeps_time_only() {
+        val sub = Vpn5gUserSubscription(
+            "active", future, "gb_20", volumeCapBytes = cap20Gb
+        )
+        // No volume state at all: time-only, still a subscriber.
+        assertTrue(Vpn5gSubscriptionStatus.isSubscriber(sub, now, null))
+        // Bytes measured under ANOTHER grant never end this one.
+        val other = Vpn5gVolume.ConsumedState("sub_1|$future", cap20Gb)
+        assertTrue(Vpn5gSubscriptionStatus.isSubscriber(sub, now, other))
+        assertFalse(Vpn5gSubscriptionStatus.isVolumeExhausted(sub, other))
+    }
+
+    @Test
+    fun test_volume_exhausted_gift_is_free_and_hours_zero() {
+        val gift = Vpn5gUserSubscription(
+            "active", future, "gift", volumeCapBytes = cap20Gb
+        )
+        val volume = volumeStateFor(gift, cap20Gb + 1L)
+        assertFalse(Vpn5gSubscriptionStatus.isGiftTier(gift, now, volume))
+        assertEquals(0L, Vpn5gSubscriptionStatus.giftRemainingHours(gift, now, volume))
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.FREE,
+            Vpn5gSubscriptionStatus.tierOf(gift, now, volume),
+        )
+    }
+
+    @Test
+    fun test_effective_live_grant_beats_exhausted_later_grant() {
+        // An exhausted gb_20 with a LATER expiry must not hide a live
+        // sub_1 with an earlier expiry: volume exhaustion is not
+        // "active" for the merge.
+        val row = Vpn5gUserSubscription(
+            "active", future + 30 * 86_400L, "gb_20", volumeCapBytes = cap20Gb
+        )
+        val live = Vpn5gUserSubscription("active", future, "sub_1")
+        val volume = volumeStateFor(row, cap20Gb)
+        assertEquals(
+            live,
+            Vpn5gSubscriptionStatus.effectiveSubscription(row, live, now, volume),
+        )
+    }
+
+    @Test
+    fun test_effective_exhausted_grant_still_returned_when_nothing_live() {
+        // Neither grant is active: the fallback still returns the row
+        // so the UI can show WHY it ended (volume finished).
+        val row = Vpn5gUserSubscription(
+            "active", future, "gb_20", volumeCapBytes = cap20Gb
+        )
+        val volume = volumeStateFor(row, cap20Gb)
+        assertEquals(
+            row,
+            Vpn5gSubscriptionStatus.effectiveSubscription(row, null, now, volume),
+        )
+    }
 }

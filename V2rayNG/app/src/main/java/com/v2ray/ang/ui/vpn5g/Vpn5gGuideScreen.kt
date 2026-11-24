@@ -190,6 +190,8 @@ private val guideFaq = listOf(
     R.string.vpn5g_faq_q06 to R.string.vpn5g_faq_a06,
     R.string.vpn5g_faq_q07 to R.string.vpn5g_faq_a07,
     R.string.vpn5g_faq_q08 to R.string.vpn5g_faq_a08,
+    R.string.vpn5g_faq_q09 to R.string.vpn5g_faq_a09,
+    R.string.vpn5g_faq_q10 to R.string.vpn5g_faq_a10,
 )
 
 @Composable

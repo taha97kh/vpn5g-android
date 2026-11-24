@@ -157,6 +157,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gSync
 import com.v2ray.ang.handler.vpn5g.Vpn5gTamperCheck
 import com.v2ray.ang.handler.vpn5g.Vpn5gTimer
 import com.v2ray.ang.handler.vpn5g.Vpn5gTunnelCheck
+import com.v2ray.ang.handler.vpn5g.Vpn5gVolumeStore
 import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.ui.base.HelperBaseComponentActivity
 import com.v2ray.ang.ui.compose.colorPing
@@ -240,6 +241,13 @@ data class Vpn5gHomeUiState(
     val isGift: Boolean = false,
     /** Whole remaining hours of the gift tier (0 when not a gift). */
     val giftRemainingHours: Long = 0L,
+    /**
+     * On-device measured tunnel bytes for the current grant (v1.1.18,
+     * Model B): cumulative across sessions, reset only when a new
+     * grant starts. The subscription panel shows it against the
+     * grant's volume cap; 0 when there is no grant to meter.
+     */
+    val volumeConsumedBytes: Long = 0L,
     val subscriptionStatus: SubscriptionStatusRemote? = null,
     val errorMessage: String? = null,
     val tunnelState: Vpn5gTunnelState = Vpn5gTunnelState.IDLE,
@@ -335,6 +343,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** One connect chain at a time; a new tap cancels the previous one. */
     private var connectChainJob: Job? = null
+
+    /**
+     * Disconnect timeout (v1.1.18): if the service never reports
+     * stopped after a user disconnect, the home lands in IDLE after
+     * [Vpn5gAutoConnect.DISCONNECT_TIMEOUT_MS] instead of sitting in
+     * DISCONNECTING forever. Cancelled when the stop lands or the
+     * service comes back.
+     */
+    private var disconnectTimeoutJob: Job? = null
 
     /** Periodic tunnel re-verification while connected (v1.1.4 §7). */
     private var reverifyJob: Job? = null
@@ -674,6 +691,22 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                             }
                         )
                     }
+                    // v1.1.18 (volume, Model B): the daemon accumulates
+                    // real tunnel bytes into MMKV; re-read the counter
+                    // every second so the subscription panel stays
+                    // live, and catch a cap reached mid-session.
+                    val consumed = Vpn5gVolumeStore.consumedBytes()
+                    if (consumed != state.volumeConsumedBytes) {
+                        _uiState.update { it.copy(volumeConsumedBytes = consumed) }
+                    }
+                    if ((state.isSubscriber || state.isGift) &&
+                        Vpn5gSubscriptionStatus.isVolumeExhausted(
+                            state.userSubscription,
+                            Vpn5gVolumeStore.consumedState(),
+                        )
+                    ) {
+                        onVolumeExhausted()
+                    }
                     if (state.connectState == Vpn5gConnectState.CONNECTED) {
                         ticksSinceReverify++
                         if (ticksSinceReverify >= 60) {
@@ -699,6 +732,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         verifyJob?.cancel()
         updateDownloadJob?.cancel()
         connectChainJob?.cancel()
+        disconnectTimeoutJob?.cancel()
         reverifyJob?.cancel()
         watchdogJob?.cancel()
         autoFailoverJob?.cancel()
@@ -844,23 +878,28 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             Vpn5gOperator.storeCurrentKey(operator.key)
             val nowSeconds = System.currentTimeMillis() / 1000
             val effective = Vpn5gSubscriptionStatus.loadEffective(nowSeconds)
+            // v1.1.18 (Model B): the cached tier follows the volume
+            // state too, and the counter belongs to the cached
+            // effective grant from this launch on.
+            Vpn5gVolumeStore.ensureGrant(effective)
+            val volume = Vpn5gVolumeStore.consumedState()
             // v1.1.15 (anti-tamper, H3): a tampered build never publishes
             // a cached premium tier — the local cache is only a display
             // hint, never the authority.
             val subscriber = if (tamperDetected) {
                 false
             } else {
-                Vpn5gSubscriptionStatus.isSubscriber(effective, nowSeconds)
+                Vpn5gSubscriptionStatus.isSubscriber(effective, nowSeconds, volume)
             }
             val gift = if (tamperDetected) {
                 false
             } else {
-                Vpn5gSubscriptionStatus.isGiftTier(effective, nowSeconds)
+                Vpn5gSubscriptionStatus.isGiftTier(effective, nowSeconds, volume)
             }
             val giftHours = if (tamperDetected) {
                 0L
             } else {
-                Vpn5gSubscriptionStatus.giftRemainingHours(effective, nowSeconds)
+                Vpn5gSubscriptionStatus.giftRemainingHours(effective, nowSeconds, volume)
             }
             _uiState.update {
                 it.copy(
@@ -880,6 +919,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     isSubscriber = subscriber,
                     isGift = gift,
                     giftRemainingHours = giftHours,
+                    volumeConsumedBytes = Vpn5gVolumeStore.consumedBytes(),
                     tamperDetected = tamperDetected,
                     operatorLabel = operator.labelFa,
                     offline = usedFallback,
@@ -1101,6 +1141,45 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      * pool (top 20 vs all) matches the new status immediately. Never
      * throws.
      */
+    /**
+     * Volume cap reached mid-session (v1.1.18, Model B): the
+     * subscription ends — the tier flips to FREE, the pool/locks
+     * reload as free, and the 30-minute free timer starts from now
+     * (a free user gets 30 minutes per session; the session itself
+     * is NOT cut mid-stream). The subscription panel shows the
+     * volume-finished reason via
+     * [Vpn5gSubscriptionStatus.isVolumeExhausted]. Idempotent: the
+     * ticker only calls it while the state still says
+     * subscriber/gift, and the re-check below drops a stale call.
+     * Never throws.
+     */
+    private fun onVolumeExhausted() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val effective = _uiState.value.userSubscription
+            val volume = Vpn5gVolumeStore.consumedState()
+            if (!Vpn5gSubscriptionStatus.isVolumeExhausted(effective, volume)) {
+                return@launch
+            }
+            // The free timer starts at the exhaustion moment, so the
+            // countdown the home shows afterwards is real.
+            Vpn5gTimer.scheduleDisconnect(getApplication())
+            val countries = runCatching {
+                Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
+            }.getOrElse { _uiState.value.countries }
+            _uiState.update {
+                it.copy(
+                    isSubscriber = false,
+                    isGift = false,
+                    giftRemainingHours = 0L,
+                    volumeConsumedBytes = Vpn5gVolumeStore.consumedBytes(),
+                    countries = countries,
+                    remainingMillis = Vpn5gTimer.remainingMillis(),
+                )
+            }
+            refreshSelection()
+        }
+    }
+
     private fun refreshSubscriptionInBackground() {
         viewModelScope.launch(Dispatchers.IO) {
             val wasSubscriber = _uiState.value.isSubscriber
@@ -1109,8 +1188,17 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 Vpn5gAuthService.currentSession()
             )
             val nowSeconds = System.currentTimeMillis() / 1000
-            val subscriber = Vpn5gSubscriptionStatus.isSubscriber(subscription, nowSeconds)
-            val gift = Vpn5gSubscriptionStatus.isGiftTier(subscription, nowSeconds)
+            // v1.1.18 (Model B): the tier follows the volume state —
+            // a capped grant that is used up is FREE here, and the
+            // counter belongs to the effective grant from now on.
+            Vpn5gVolumeStore.ensureGrant(subscription)
+            val volume = Vpn5gVolumeStore.consumedState()
+            val subscriber = Vpn5gSubscriptionStatus.isSubscriber(
+                subscription, nowSeconds, volume
+            )
+            val gift = Vpn5gSubscriptionStatus.isGiftTier(
+                subscription, nowSeconds, volume
+            )
             _uiState.update {
                 it.copy(
                     userSubscription = subscription,
@@ -1122,9 +1210,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         0L
                     } else {
                         Vpn5gSubscriptionStatus.giftRemainingHours(
-                            subscription, nowSeconds
+                            subscription, nowSeconds, volume
                         )
                     },
+                    volumeConsumedBytes = Vpn5gVolumeStore.consumedBytes(),
                     tamperDetected = tamperDetected,
                 )
             }
@@ -1315,15 +1404,21 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 if (fresh != null) {
                     val nowSeconds = System.currentTimeMillis() / 1000
+                    // v1.1.18 (Model B): volume-aware, like every other
+                    // tier publish — a used-up grant never connects as
+                    // a subscriber.
+                    Vpn5gVolumeStore.ensureGrant(fresh)
+                    val volume = Vpn5gVolumeStore.consumedState()
                     _uiState.update {
                         it.copy(
                             userSubscription = fresh,
                             isSubscriber = Vpn5gSubscriptionStatus.isSubscriber(
-                                fresh, nowSeconds
+                                fresh, nowSeconds, volume
                             ),
-                            isGift = Vpn5gSubscriptionStatus.isGiftTier(fresh, nowSeconds),
+                            isGift = Vpn5gSubscriptionStatus.isGiftTier(fresh, nowSeconds, volume),
                             giftRemainingHours = Vpn5gSubscriptionStatus
-                                .giftRemainingHours(fresh, nowSeconds),
+                                .giftRemainingHours(fresh, nowSeconds, volume),
+                            volumeConsumedBytes = Vpn5gVolumeStore.consumedBytes(),
                         )
                     }
                 }
@@ -1718,6 +1813,23 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 manualServerFailed = null,
             )
         }
+        // v1.1.18: DISCONNECTING must never stick — if the service
+        // never reports stopped (lost stop broadcast, process died
+        // mid-stop), land in IDLE after the timeout. The job only
+        // fires while still DISCONNECTING and not running (a restart
+        // racing the disconnect moves the state first, and the stop
+        // landing cancels this job — see onRunningChanged).
+        disconnectTimeoutJob?.cancel()
+        if (_uiState.value.connectState == Vpn5gConnectState.DISCONNECTING) {
+            disconnectTimeoutJob = viewModelScope.launch {
+                delay(Vpn5gAutoConnect.DISCONNECT_TIMEOUT_MS)
+                if (_uiState.value.connectState == Vpn5gConnectState.DISCONNECTING &&
+                    !_uiState.value.isRunning
+                ) {
+                    _uiState.update { it.copy(connectState = Vpn5gConnectState.IDLE) }
+                }
+            }
+        }
     }
 
     /** A server switch while connected: the tunnel is rebuilt and re-verified. */
@@ -1761,6 +1873,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             val nowSeconds = System.currentTimeMillis() / 1000
             val effective = subscription
                 ?: Vpn5gSubscriptionStatus.loadEffective(nowSeconds)
+            // v1.1.18 (Model B): volume-aware tier + the counter
+            // belongs to the effective grant from now on.
+            Vpn5gVolumeStore.ensureGrant(effective)
+            val volume = Vpn5gVolumeStore.consumedState()
             val countries = runCatching {
                 Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
             }.getOrElse { _uiState.value.countries }
@@ -1771,18 +1887,21 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     isSubscriber = if (tamperDetected) {
                         false
                     } else {
-                        Vpn5gSubscriptionStatus.isSubscriber(effective, nowSeconds)
+                        Vpn5gSubscriptionStatus.isSubscriber(effective, nowSeconds, volume)
                     },
                     isGift = if (tamperDetected) {
                         false
                     } else {
-                        Vpn5gSubscriptionStatus.isGiftTier(effective, nowSeconds)
+                        Vpn5gSubscriptionStatus.isGiftTier(effective, nowSeconds, volume)
                     },
                     giftRemainingHours = if (tamperDetected) {
                         0L
                     } else {
-                        Vpn5gSubscriptionStatus.giftRemainingHours(effective, nowSeconds)
+                        Vpn5gSubscriptionStatus.giftRemainingHours(
+                            effective, nowSeconds, volume
+                        )
                     },
+                    volumeConsumedBytes = Vpn5gVolumeStore.consumedBytes(),
                     countries = countries,
                 )
             }
@@ -1800,6 +1919,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun signOut() {
         Vpn5gAuthService.signOut()
+        // v1.1.18: the volume counter belongs to the signed-out
+        // account's grant — the next account inherits nothing.
+        Vpn5gVolumeStore.clear()
         _uiState.update {
             it.copy(
                 signedInEmail = null,
@@ -1807,6 +1929,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 isSubscriber = false,
                 isGift = false,
                 giftRemainingHours = 0L,
+                volumeConsumedBytes = 0L,
             )
         }
     }
@@ -1882,7 +2005,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         link: String?,
         nowSeconds: Long,
     ) {
-        val tier = Vpn5gSubscriptionStatus.tierOf(subscription, nowSeconds)
+        // v1.1.18 (Model B): the new grant owns the counter from now
+        // on (a new grant resets it to 0), and the tier follows the
+        // volume state.
+        Vpn5gVolumeStore.ensureGrant(subscription)
+        val volume = Vpn5gVolumeStore.consumedState()
+        val tier = Vpn5gSubscriptionStatus.tierOf(subscription, nowSeconds, volume)
         val countries = runCatching {
             Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
         }.getOrElse { emptyList() }
@@ -1895,11 +2023,81 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 isGift = tier ==
                     Vpn5gSubscriptionStatus.Vpn5gTier.GIFT,
                 giftRemainingHours = Vpn5gSubscriptionStatus
-                    .giftRemainingHours(subscription, nowSeconds),
+                    .giftRemainingHours(subscription, nowSeconds, volume),
+                volumeConsumedBytes = Vpn5gVolumeStore.consumedBytes(),
                 countries = countries,
             )
         }
         refreshSelection()
+        // v1.1.18: re-read the subscription from Supabase so the row
+        // (bot-activated plans, expiry) and the local grant merge —
+        // the server state appears at once instead of on the next
+        // refresh. The just-granted subscription is the floor (see
+        // refreshSubscriptionAfterRedeem).
+        refreshSubscriptionAfterRedeem(subscription)
+    }
+
+    /**
+     * Post-redeem server re-read (v1.1.18): after a grant is
+     * published, the subscription is re-read from Supabase and the
+     * merged result re-published (plan + remaining time + volume +
+     * country list), so a server plan the local grant missed appears
+     * at once. The just-granted subscription is merged back in as a
+     * floor: refresh() can only drop a local gift on a DEFINITIVE
+     * server "none" (get_subscription_status does not exist yet, so
+     * that path is currently unreachable — the RPC answers 404), and
+     * a grant validated by validate_and_redeem_code seconds ago must
+     * never be demoted by its own post-redeem refresh. A Failed /
+     * NoRow row fetch keeps the local grant by construction (see
+     * Vpn5gSubscriptionStatus.refresh). Runs on IO; never throws.
+     */
+    private fun refreshSubscriptionAfterRedeem(
+        justGranted: Vpn5gSubscriptionStatus.Vpn5gUserSubscription,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = runCatching {
+                Vpn5gAuthService.currentSession()
+            }.getOrNull()
+            val refreshed = runCatching {
+                Vpn5gSubscriptionStatus.refresh(session)
+            }.getOrNull()
+            val nowSeconds = System.currentTimeMillis() / 1000
+            val volume = Vpn5gVolumeStore.consumedState()
+            val effective = Vpn5gSubscriptionStatus.effectiveSubscription(
+                refreshed, justGranted, nowSeconds, volume
+            ) ?: Vpn5gSubscriptionStatus.loadEffective(nowSeconds)
+            Vpn5gVolumeStore.ensureGrant(effective)
+            val freshVolume = Vpn5gVolumeStore.consumedState()
+            val tier = Vpn5gSubscriptionStatus.tierOf(effective, nowSeconds, freshVolume)
+            val countries = runCatching {
+                Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
+            }.getOrElse { _uiState.value.countries }
+            _uiState.update {
+                it.copy(
+                    userSubscription = effective,
+                    isSubscriber = if (tamperDetected) {
+                        false
+                    } else {
+                        tier == Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER
+                    },
+                    isGift = if (tamperDetected) {
+                        false
+                    } else {
+                        tier == Vpn5gSubscriptionStatus.Vpn5gTier.GIFT
+                    },
+                    giftRemainingHours = if (tamperDetected) {
+                        0L
+                    } else {
+                        Vpn5gSubscriptionStatus.giftRemainingHours(
+                            effective, nowSeconds, freshVolume
+                        )
+                    },
+                    volumeConsumedBytes = Vpn5gVolumeStore.consumedBytes(),
+                    countries = countries,
+                )
+            }
+            refreshSelection()
+        }
     }
 
     /**
@@ -1926,8 +2124,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         }
         val activated = Vpn5gPromoCodes.activateGift(entry, email, nowSeconds)
             ?: return false
-        val (subscription, link) = activated
-        publishRedeemed(subscription, link, nowSeconds)
+        // v1.1.18: a redeemed grant needs no bot confirm — the grant
+        // is active in-app. The link is dropped (it only ever served
+        // the removed "confirm in bot" step); the server-side
+        // decrement for gifts goes through recordCodeRedemption.
+        val (subscription, _) = activated
+        publishRedeemed(subscription, null, nowSeconds)
         setStatus(Vpn5gPromoStatus.REDEEMED)
         return true
     }
@@ -1997,11 +2199,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         email.orEmpty(), nowSeconds,
                     )
                     if (subscription != null) {
-                        publishRedeemed(
-                            subscription,
-                            Vpn5gPromoCodes.redeemLink(input),
-                            nowSeconds,
-                        )
+                        // v1.1.18: the server-validated grant activates
+                        // in-app at once — no bot confirm step, so no
+                        // bot link is published (the REDEEMED block no
+                        // longer shows one either).
+                        publishRedeemed(subscription, null, nowSeconds)
                         setStatus(Vpn5gPromoStatus.REDEEMED)
                     } else {
                         // Server-validated but no usable grant (e.g. a
@@ -2060,7 +2262,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         entry, email.orEmpty(), nowSeconds
                     )
                     if (activated != null) {
-                        val (subscription, link) = activated
+                        // v1.1.18: no bot link for a grant (see the
+                        // Validated branch above).
+                        val (subscription, _) = activated
                         // v1.1.14: report the redemption server-side so
                         // the bot can enforce the people-limit
                         // (remaining_uses) when it republishes the code
@@ -2075,7 +2279,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                                 )
                             }
                         }
-                        publishRedeemed(subscription, link, nowSeconds)
+                        publishRedeemed(subscription, null, nowSeconds)
                         setStatus(Vpn5gPromoStatus.REDEEMED)
                     } else {
                         // Discount code (or a gift without days): the bot
@@ -2257,6 +2461,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     private fun onRunningChanged(running: Boolean) {
         val app = getApplication<Application>()
         if (running) {
+            // v1.1.18: the service is back — a disconnect in flight
+            // is over (either it was a restart racing the disconnect,
+            // or the stop never landed). The timeout job is dead.
+            disconnectTimeoutJob?.cancel()
+            disconnectTimeoutJob = null
             // Start the 30-minute session clock once per session —
             // subscribers have no timer at all (v1.1.11): unlimited
             // session, no auto-disconnect, no countdown. v1.1.14: the
@@ -2303,11 +2512,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // CREATING_TUNNEL. A plain state re-read while already
             // CONNECTED (e.g. Activity resume) leaves the state alone.
             // A failover/manual-switch restart also lands here, from
-            // SWITCHING_SERVER (v1.1.5 §2).
+            // SWITCHING_SERVER (v1.1.5 §2). v1.1.18: a restart racing
+            // a user disconnect also lands here, from DISCONNECTING —
+            // the new core is a tunnel being created, and the
+            // verification below runs for it.
             val chainState = _uiState.value.connectState
             if (chainState == Vpn5gConnectState.CONNECTING ||
                 chainState == Vpn5gConnectState.RETRYING ||
-                chainState == Vpn5gConnectState.SWITCHING_SERVER
+                chainState == Vpn5gConnectState.SWITCHING_SERVER ||
+                chainState == Vpn5gConnectState.DISCONNECTING
             ) {
                 _uiState.update {
                     it.copy(
@@ -3869,6 +4082,7 @@ fun Vpn5gHomeScreen(
         Vpn5gConnectState.CONNECTED -> R.string.vpn5g_connected
         Vpn5gConnectState.RETRYING -> R.string.vpn5g_connect_retrying
         Vpn5gConnectState.FAILED -> R.string.vpn5g_connect_failed
+        Vpn5gConnectState.DISCONNECTING -> R.string.vpn5g_disconnecting
         Vpn5gConnectState.IDLE -> R.string.vpn5g_status_not_connected
     }
     val statusColor = when (state.connectState) {
@@ -5122,7 +5336,12 @@ private fun Vpn5gPowerButton(
         connectState == Vpn5gConnectState.SWITCHING_SERVER ||
         // RETRYING is a connecting state (v1.1.5 refinement): the ring
         // spins cyan while the chain switches servers, never red.
-        connectState == Vpn5gConnectState.RETRYING
+        connectState == Vpn5gConnectState.RETRYING ||
+        // DISCONNECTING (v1.1.18): the ring spins while the daemon
+        // stops, too — a tap then just re-asks for the same
+        // disconnect (toggleConnect guards on isRunning; no second
+        // tunnel can start while one is stopping).
+        connectState == Vpn5gConnectState.DISCONNECTING
     val isFailed = connectState == Vpn5gConnectState.FAILED
     val connected = connectState == Vpn5gConnectState.CONNECTED
     val ringColor = when {
