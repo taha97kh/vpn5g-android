@@ -113,18 +113,23 @@ object Vpn5gAds {
      * local hour 0..23. No windows published = any hour. Hour windows
      * are [start, end) pairs — start inclusive, end exclusive — so
      * [9, 12] means 09:00–11:59. Never shows more impressions than
-     * purchased: the caps are the purchased amounts.
+     * purchased: the caps are the purchased amounts. The per-day cap
+     * counts only impressions from [today] ("yyyy-MM-dd"): a stored
+     * count from an earlier day rolls over to 0, so a new day never
+     * stays blocked by yesterday's impressions.
      */
     fun isUserAdDue(
         ad: UserAdRemote,
         impressions: AdImpressions,
         hour: Int,
+        today: String = java.time.LocalDate.now().toString(),
     ): Boolean {
         if (ad.enabled != true || ad.approved != true) return false
         val max = ad.max_impressions
         if (max != null && impressions.total >= max) return false
         val perDay = ad.impressions_per_day
-        if (perDay != null && impressions.today >= perDay) return false
+        val todayCount = if (impressions.day == today) impressions.today else 0
+        if (perDay != null && todayCount >= perDay) return false
         val windows = ad.hour_windows
         if (windows.isNullOrEmpty()) return true
         return windows.any { window ->
@@ -145,6 +150,7 @@ object Vpn5gAds {
         ads: AdsRemote?,
         impressionsById: Map<String, AdImpressions>,
         hour: Int,
+        today: String = java.time.LocalDate.now().toString(),
     ): InterstitialAdUi? {
         val duration = clampDuration(ads?.interstitial?.duration_seconds)
         val userAd = ads?.user_ads
@@ -153,6 +159,7 @@ object Vpn5gAds {
                     it,
                     impressionsById[it.id.orEmpty()] ?: AdImpressions(),
                     hour,
+                    today,
                 )
             }
             ?.firstOrNull()

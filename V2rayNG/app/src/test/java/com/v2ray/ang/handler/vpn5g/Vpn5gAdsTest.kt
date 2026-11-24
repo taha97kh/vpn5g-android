@@ -156,6 +156,7 @@ class Vpn5gAdsTest {
                 userAd(perDay = 5),
                 Vpn5gAds.AdImpressions(total = 1, day = "2026-11-24", today = 5),
                 10,
+                today = "2026-11-24",
             )
         )
         // Per-day count rolls over on a new day.
@@ -164,6 +165,7 @@ class Vpn5gAdsTest {
                 userAd(perDay = 5),
                 Vpn5gAds.AdImpressions(total = 5, day = "2026-11-23", today = 5),
                 10,
+                today = "2026-11-24",
             )
         )
     }
