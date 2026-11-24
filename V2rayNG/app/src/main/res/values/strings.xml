@@ -698,6 +698,7 @@
     <string name="vpn5g_promo_exhausted">ظرفیت استفاده از این کد تمام شده است</string>
     <string name="vpn5g_promo_already">این کد قبلاً در این دستگاه استفاده شده است</string>
     <string name="vpn5g_promo_invalid">کد معتبر نیست</string>
+    <string name="vpn5g_promo_invalid_email">ایمیل حساب شما مشکل دارد؛ دوباره وارد شوید</string>
     <string name="vpn5g_promo_open_bot">ادامه در ربات</string>
 
     <!-- v1.1.12: in-app gift activation, premium look, persistent connection -->

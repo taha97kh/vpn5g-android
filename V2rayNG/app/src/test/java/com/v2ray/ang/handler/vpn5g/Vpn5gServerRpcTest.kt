@@ -1,6 +1,7 @@
 package com.v2ray.ang.handler.vpn5g
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -83,6 +84,160 @@ class Vpn5gServerRpcTest {
         val validated = result as Vpn5gAuthService.CodeServerResult.Validated
         assertNull(validated.plan)
         assertNull(validated.expiresAtEpochSeconds)
+        assertNull(validated.applied)
+    }
+
+    // -- v1.1.19: the live function burns the code first, then grants
+    // only IF a registrations row exists for the email. With no row
+    // it answers ok:true + applied:false with expires_at stripped
+    // (242593 / 490013 showed VALID with no plan granted), and its
+    // real reason spellings are "already_redeemed" / "invalid_email"
+    // (there is NO "already_used" reason server-side).
+
+    @Test
+    fun test_parse_code_validated_ok_shape_plan_no_expiry() {
+        // The 1.1.18 case: plan present, expires_at stripped.
+        val result = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"plan":"sub_1"}"""
+        )
+        assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated)
+        val validated = result as Vpn5gAuthService.CodeServerResult.Validated
+        assertEquals("sub_1", validated.plan)
+        assertNull(validated.expiresAtEpochSeconds)
+        assertNull(validated.applied)
+    }
+
+    @Test
+    fun test_parse_code_validated_applied_false() {
+        val result = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"plan":"sub_1","applied":false}"""
+        )
+        assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated)
+        val validated = result as Vpn5gAuthService.CodeServerResult.Validated
+        assertEquals("sub_1", validated.plan)
+        assertNull(validated.expiresAtEpochSeconds)
+        assertEquals(false, validated.applied)
+    }
+
+    @Test
+    fun test_parse_code_validated_applied_true() {
+        val result = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"plan":"sub_1","expires_at":"$expiresIso","applied":true}"""
+        )
+        assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated)
+        val validated = result as Vpn5gAuthService.CodeServerResult.Validated
+        assertEquals("sub_1", validated.plan)
+        assertEquals(
+            Vpn5gSubscriptionStatus.parseIsoToEpoch(expiresIso),
+            validated.expiresAtEpochSeconds,
+        )
+        assertEquals(true, validated.applied)
+    }
+
+    @Test
+    fun test_parse_code_validated_numeric_epoch_expires_at() {
+        // Bare numeric epoch (unquoted digits) as a fallback.
+        val result = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"plan":"sub_1","expires_at":1793000000}"""
+        )
+        assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated)
+        val validated = result as Vpn5gAuthService.CodeServerResult.Validated
+        assertEquals(1793000000L, validated.expiresAtEpochSeconds)
+        // A quoted all-digits value parses as an epoch too.
+        val quoted = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"plan":"sub_1","expires_at":"1793000000"}"""
+        )
+        assertEquals(
+            1793000000L,
+            (quoted as Vpn5gAuthService.CodeServerResult.Validated).expiresAtEpochSeconds,
+        )
+    }
+
+    @Test
+    fun test_parse_code_rejected_already_redeemed_maps_to_already_used() {
+        // The live reason spelling; the app's recovery path keys off
+        // "already_used", so the parser maps it (literal
+        // "already_used" still accepted too).
+        for (body in listOf(
+            """{"ok":false,"reason":"already_redeemed"}""",
+            """{"status":"already_redeemed"}""",
+            """{"ok":false,"reason":"already_used"}""",
+        )) {
+            val result = Vpn5gAuthService.parseCodeServerResult(body)
+            assertTrue(result is Vpn5gAuthService.CodeServerResult.Rejected, body)
+            assertEquals(
+                "already_used",
+                (result as Vpn5gAuthService.CodeServerResult.Rejected).status,
+                body,
+            )
+        }
+    }
+
+    @Test
+    fun test_parse_code_rejected_invalid_email_distinct_status() {
+        for (body in listOf(
+            """{"ok":false,"reason":"invalid_email"}""",
+            """{"status":"invalid_email"}""",
+        )) {
+            val result = Vpn5gAuthService.parseCodeServerResult(body)
+            assertTrue(result is Vpn5gAuthService.CodeServerResult.Rejected, body)
+            assertEquals(
+                "invalid_email",
+                (result as Vpn5gAuthService.CodeServerResult.Rejected).status,
+                body,
+            )
+        }
+    }
+
+    // -- v1.1.19: the derive-from-entry helper (pure) ----------------
+    // Used to recover a code the server validated but did not grant
+    // (applied:false / stripped expires_at): the grant is re-derived
+    // from the published entry instead of showing VALID.
+
+    @Test
+    fun test_derive_grant_from_entry_plan_code_grants_plan_days() {
+        // The live 242593 case: type gift, plan sub_1 → 30 days.
+        val now = 1_800_000_000L
+        val derived = Vpn5gPromoCodes.deriveGrantFromEntry(
+            PromoCodeRemote(code = "242593", type = "gift", plan = "sub_1"),
+            now,
+        )
+        assertNotNull(derived)
+        assertEquals("sub_1", derived?.plan)
+        assertEquals(now + 30L * 86_400L, derived?.expiresAtEpochSeconds)
+        assertEquals("active", derived?.status)
+    }
+
+    @Test
+    fun test_derive_grant_from_entry_gift_hours_grants_hours() {
+        // The live 490013 case: type gift, gift_hours 24 → 24 hours,
+        // middle GIFT tier.
+        val now = 1_800_000_000L
+        val derived = Vpn5gPromoCodes.deriveGrantFromEntry(
+            PromoCodeRemote(code = "490013", type = "gift", gift_hours = 24),
+            now,
+        )
+        assertNotNull(derived)
+        assertEquals(Vpn5gConstants.GIFT_TIER_PLAN_ID, derived?.plan)
+        assertEquals(now + 24L * 3_600L, derived?.expiresAtEpochSeconds)
+    }
+
+    @Test
+    fun test_derive_grant_from_entry_discount_derives_nothing() {
+        // A discount code has no grant to derive — it goes through
+        // the bot, never through recovery.
+        assertNull(
+            Vpn5gPromoCodes.deriveGrantFromEntry(
+                PromoCodeRemote(code = "DISC10", type = "discount", discount_percent = 10),
+                1_800_000_000L,
+            )
+        )
+        assertNull(
+            Vpn5gPromoCodes.deriveGrantFromEntry(
+                PromoCodeRemote(code = "NODUR", type = "gift"),
+                1_800_000_000L,
+            )
+        )
     }
 
     @Test

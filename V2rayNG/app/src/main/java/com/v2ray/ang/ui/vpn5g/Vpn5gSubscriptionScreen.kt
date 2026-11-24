@@ -1178,6 +1178,15 @@ private fun Vpn5gCodeStatusBlock(
                 fontWeight = FontWeight.Bold,
             )
         }
+        Vpn5gPromoStatus.INVALID_EMAIL -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_invalid_email),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
         Vpn5gPromoStatus.REDEEMED -> {
             // v1.1.12: the gift code activated the subscription
             // immediately — plan + remaining days prominent.

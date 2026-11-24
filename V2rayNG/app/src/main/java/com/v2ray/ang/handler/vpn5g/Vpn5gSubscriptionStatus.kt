@@ -59,7 +59,7 @@ object Vpn5gSubscriptionStatus {
 
     /**
      * Access tier (v1.1.14): FREE = top-20 servers + 30-minute timer;
-     * GIFT = a redeemed gift code (top-50 servers, the countries those
+     * GIFT = a redeemed gift code (top-100 servers, the countries those
      * servers belong to, no 30-minute cutoff while it lasts); SUBSCRIBER
      * = a bot-activated plan (full pool, no timer).
      */
@@ -96,7 +96,7 @@ object Vpn5gSubscriptionStatus {
      * future. Pure, JVM-tested. Null, "none", "cancelled", an expired
      * "active" row and a missing expiry are all "not a subscriber".
      * v1.1.14: a gift-tier redemption (plan "gift") is NOT a full
-     * subscription — it is [Vpn5gTier.GIFT] (top-50 pool, no timer),
+     * subscription — it is [Vpn5gTier.GIFT] (top-100 pool, no timer),
      * never the full pool.
      * v1.1.18 (Model B): when [volume] is given, a grant whose
      * volume cap is reached is NOT a subscriber either — volume or
@@ -297,7 +297,7 @@ object Vpn5gSubscriptionStatus {
      * The effective subscription (v1.1.12, tier-aware v1.1.14): a
      * FULL subscription always beats a gift-tier redemption, whatever
      * the expiries — a longer gift must never demote a subscriber to
-     * the top-50 pool. Within one tier the later expiry wins. A
+     * the top-100 pool. Within one tier the later expiry wins. A
      * redeemed code is never demoted by a row fetch that finds no row
      * or a "none" row. When neither is active, the row is returned (so
      * the UI can show its expired state) or the redeemed one when

@@ -142,7 +142,7 @@ object Vpn5gConstants {
      * no 30-minute cutoff while the gift lasts. The gift expires when
      * its duration ends (stored at redeem time).
      */
-    const val GIFT_SERVER_COUNT = 50
+    const val GIFT_SERVER_COUNT = 100
 
     /** Plan id the app stores for a gift-tier redemption (v1.1.14). */
     const val GIFT_TIER_PLAN_ID = "gift"

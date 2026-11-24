@@ -159,7 +159,7 @@ object Vpn5gPromoCodes {
      * place. Pure, JVM-tested.
      *
      * - GIFT: type "gift" with no plan id and no plan tier — it grants
-     *   the middle GIFT tier (hours, top-50 pool).
+     *   the middle GIFT tier (hours, top-100 pool).
      * - SUBSCRIPTION: type "gift" whose `plan` or `tier` names a full
      *   plan (sub_1 / sub_3 / sub_6 / sub_12) — a purchased code.
      * - DISCOUNT: type "discount" — goes through the bot, never a
@@ -307,6 +307,35 @@ object Vpn5gPromoCodes {
     }
 
     /**
+     * The grant a published code entry derives, WITHOUT saving
+     * anything (v1.1.19): the subscription the entry would activate
+     * — plan id from [giftPlanId], expiry from [activationExpiry],
+     * volume cap from the published plans when given. Null when the
+     * entry grants nothing (a discount code, or a gift with no
+     * duration). Pure (no MMKV, no config read — [plans] is passed
+     * in; null means only the hardcoded sub_* ids are trusted), so
+     * JVM tests can assert the derived grant directly. The redeem
+     * flow uses this to recover a code the server validated but did
+     * not grant (`applied:false` / stripped expires_at); the actual
+     * activation still goes through [activateGift], which saves the
+     * grant and records the redemption.
+     */
+    fun deriveGrantFromEntry(
+        entry: PromoCodeRemote,
+        nowEpochSeconds: Long,
+        plans: List<SubscriptionPlanRemote>? = null,
+    ): Vpn5gSubscriptionStatus.Vpn5gUserSubscription? {
+        val expiresAt = activationExpiry(entry, nowEpochSeconds) ?: return null
+        val plan = giftPlanId(entry, plans)
+        return Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
+            status = "active",
+            expiresAtEpochSeconds = expiresAt,
+            plan = plan,
+            volumeCapBytes = Vpn5gVolume.capBytesForPlanId(plan, plans),
+        )
+    }
+
+    /**
      * Activates a gift code in the app, immediately (v1.1.12): records
      * the redemption for [email] and saves the granted subscription
      * locally, so the UI treats the user as a subscriber at once — no
@@ -321,20 +350,20 @@ object Vpn5gPromoCodes {
         email: String,
         nowEpochSeconds: Long,
     ): Pair<Vpn5gSubscriptionStatus.Vpn5gUserSubscription, String>? {
-        val expiresAt = activationExpiry(entry, nowEpochSeconds) ?: return null
         // v1.1.18: the plan id comes from the published plans when it
         // is one (a gb_* volume plan grants that plan, capped), and
         // the grant carries its volume cap from the start.
+        // v1.1.19: the grant itself is derived by
+        // [deriveGrantFromEntry]; this only saves it + records the
+        // redemption.
         val plans = runCatching { Vpn5gRemoteConfig.cached().plans }.getOrNull()
-        val plan = giftPlanId(entry, plans)
-        val subscription = Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
-            status = "active",
-            expiresAtEpochSeconds = expiresAt,
-            plan = plan,
-            volumeCapBytes = Vpn5gVolume.capBytesForPlanId(plan, plans),
-        )
+        val subscription = deriveGrantFromEntry(entry, nowEpochSeconds, plans) ?: return null
         Vpn5gSubscriptionStatus.saveRedeemed(subscription)
-        val link = redeem(entry, email = email, expiresAtEpochSeconds = expiresAt)
+        val link = redeem(
+            entry,
+            email = email,
+            expiresAtEpochSeconds = subscription.expiresAtEpochSeconds,
+        )
         return subscription to link
     }
 

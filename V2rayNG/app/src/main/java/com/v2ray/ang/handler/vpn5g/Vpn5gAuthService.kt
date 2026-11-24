@@ -378,9 +378,23 @@ object Vpn5gAuthService {
      * two devices at once.
      */
     sealed interface CodeServerResult {
-        /** Server validated + marked the code used. [plan]/[expiresAt] are the grant (gifts). */
-        data class Validated(val plan: String?, val expiresAtEpochSeconds: Long?) : CodeServerResult
-        /** Server definitively rejected the code ("unknown" | "already_used" | "expired" | "exhausted" | "not_yours"). */
+        /**
+         * Server validated + marked the code used. [plan]/[expiresAt]
+         * are the grant (gifts). [applied] is the server's own flag:
+         * true = the grant landed in vpn5g_registrations, false = the
+         * code was burned but nothing was granted (v1.1.19: the
+         * function only grants IF a registrations row exists for the
+         * email, and strips expires_at when it does not apply) —
+         * the caller must then re-derive the grant from the
+         * published entry instead of showing VALID. Null when the
+         * server did not report it.
+         */
+        data class Validated(
+            val plan: String?,
+            val expiresAtEpochSeconds: Long?,
+            val applied: Boolean? = null,
+        ) : CodeServerResult
+        /** Server definitively rejected the code ("unknown" | "already_used" | "expired" | "exhausted" | "not_yours" | "invalid_email"). */
         data class Rejected(val status: String) : CodeServerResult
         /** RPC missing / offline / unparsable — the caller falls back to the config-list check. */
         data object Unavailable : CodeServerResult
@@ -421,13 +435,15 @@ object Vpn5gAuthService {
      *   `{"status":"already_used"}` (and the other reject statuses);
      * - real (live probe 2026-11-24): `{"ok":true,"plan":"sub_1",
      *   "expires_at":"..."}` or `{"ok":false,"reason":"not_found"}`
-     *   (reasons: not_found | already_used | expired | exhausted |
-     *   not_yours). The 1.1.15/1.1.16 parser only understood the
-     *   documented shape, so EVERY real server answer parsed as
-     *   Unavailable: the server had already marked the code used
-     *   while the app fell through to the config-list fallback,
-     *   which then saw remaining_uses 0 and said EXHAUSTED — the
-     *   code was consumed with no grant in-app. Pure, JVM-tested.
+     *   (reasons: not_found | already_used | already_redeemed |
+     *   expired | exhausted | not_yours | invalid_email).
+     * v1.1.19: the live function burns the code FIRST and only
+     * grants IF a row exists in vpn5g_registrations for the email —
+     * with no row it answers ok:true with `applied:false` and
+     * expires_at stripped, so the caller must check [Validated.applied]
+     * and the presence of an expiry, never trust ok:true alone.
+     * `expires_at` is also accepted as a bare numeric epoch
+     * (unquoted digits) as a fallback. Pure, JVM-tested.
      * An unrecognised body is [CodeServerResult.Unavailable]
      * (fallback), never a false success.
      */
@@ -439,13 +455,15 @@ object Vpn5gAuthService {
                 "ok", "valid", "validated" -> {
                     val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
                         .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
-                    val expiresRaw = Regex("\"expires_at\"\\s*:\\s*\"([^\"]+)\"")
-                        .find(body)?.groupValues?.get(1)
-                    val expiresAt = expiresRaw?.let { Vpn5gSubscriptionStatus.parseIsoToEpoch(it) }
-                    CodeServerResult.Validated(plan, expiresAt)
+                    CodeServerResult.Validated(plan, parseExpiresAt(body), parseApplied(body))
                 }
                 "unknown", "already_used", "expired", "exhausted", "not_yours" ->
                     CodeServerResult.Rejected(status)
+                // v1.1.19: the live function answers "already_redeemed"
+                // (not "already_used") — same meaning, mapped to the
+                // existing recovery status.
+                "already_redeemed" -> CodeServerResult.Rejected("already_used")
+                "invalid_email" -> CodeServerResult.Rejected("invalid_email")
                 else -> CodeServerResult.Unavailable
             }
         }
@@ -456,10 +474,7 @@ object Vpn5gAuthService {
         if (ok == "true") {
             val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
                 .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
-            val expiresRaw = Regex("\"expires_at\"\\s*:\\s*\"([^\"]+)\"")
-                .find(body)?.groupValues?.get(1)
-            val expiresAt = expiresRaw?.let { Vpn5gSubscriptionStatus.parseIsoToEpoch(it) }
-            return CodeServerResult.Validated(plan, expiresAt)
+            return CodeServerResult.Validated(plan, parseExpiresAt(body), parseApplied(body))
         }
         val reason = Regex("\"reason\"\\s*:\\s*\"([^\"]*)\"")
             .find(body)?.groupValues?.get(1)?.trim()?.lowercase()
@@ -467,8 +482,46 @@ object Vpn5gAuthService {
             "not_found" -> CodeServerResult.Rejected("unknown")
             "already_used", "expired", "exhausted", "not_yours" ->
                 CodeServerResult.Rejected(reason)
+            // v1.1.19: the live function's own reason spellings.
+            "already_redeemed" -> CodeServerResult.Rejected("already_used")
+            "invalid_email" -> CodeServerResult.Rejected("invalid_email")
             else -> CodeServerResult.Unavailable
         }
+    }
+
+    /**
+     * The `applied` flag of a `validate_and_redeem_code` response
+     * (v1.1.19): true = the grant landed, false = the code was
+     * burned with no grant. Null when the server did not report it
+     * (older shape). Pure.
+     */
+    private fun parseApplied(body: String): Boolean? {
+        return when (
+            Regex("\"applied\"\\s*:\\s*(true|false)")
+                .find(body)?.groupValues?.get(1)?.lowercase()
+        ) {
+            "true" -> true
+            "false" -> false
+            else -> null
+        }
+    }
+
+    /**
+     * `expires_at` of a `validate_and_redeem_code` response
+     * (v1.1.19): a quoted ISO-8601 string as before, or a bare
+     * numeric epoch (unquoted digits) as a fallback — a quoted
+     * all-digits value parses as an epoch too. Null when absent or
+     * unparsable. Pure.
+     */
+    private fun parseExpiresAt(body: String): Long? {
+        val quoted = Regex("\"expires_at\"\\s*:\\s*\"([^\"]+)\"")
+            .find(body)?.groupValues?.get(1)
+        if (quoted != null) {
+            return Vpn5gSubscriptionStatus.parseIsoToEpoch(quoted)
+                ?: quoted.trim().toLongOrNull()
+        }
+        return Regex("\"expires_at\"\\s*:\\s*([0-9]+)")
+            .find(body)?.groupValues?.get(1)?.toLongOrNull()
     }
 
     /**
@@ -581,6 +634,22 @@ object Vpn5gAuthService {
                 plan = plan,
             )
         )
+    }
+
+    /**
+     * Makes sure a row exists in vpn5g_registrations for [email]
+     * (v1.1.19): the server-side `validate_and_redeem_code` only
+     * grants a code when such a row exists — without it the code is
+     * burned and `applied:false` comes back. Fetches the current
+     * public IP and calls [recordRegistration]. Best effort only:
+     * true when the server stored the row, false on any failure
+     * (including no network/IP) — the caller never blocks sign-in
+     * or a redeem on this. Never throws.
+     */
+    suspend fun ensureRegistrationRow(email: String): Boolean {
+        if (email.isBlank()) return false
+        val ip = runCatching { fetchPublicIp() }.getOrNull() ?: return false
+        return runCatching { recordRegistration(email.trim(), ip) }.getOrDefault(false)
     }
 
     /**
