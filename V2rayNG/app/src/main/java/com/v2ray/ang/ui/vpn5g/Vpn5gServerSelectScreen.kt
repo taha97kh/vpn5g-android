@@ -21,6 +21,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +42,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
+import com.v2ray.ang.handler.vpn5g.Vpn5gConnectMode
+import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
+import com.v2ray.ang.handler.vpn5g.Vpn5gServerUi
+import com.v2ray.ang.ui.compose.colorPing
+import com.v2ray.ang.ui.compose.colorPingRed
 
 /**
  * Server-select screen (v1.1.21, Lantern server-select page): the whole

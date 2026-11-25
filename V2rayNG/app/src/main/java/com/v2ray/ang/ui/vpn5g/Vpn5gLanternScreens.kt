@@ -552,7 +552,11 @@ fun Vpn5gFeaturesScreen(
 ) {
     var entered by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { entered = true }
-    val features = listOf(
+    // The icon slot is a composable lambda, so the list needs its
+    // element type spelled out — Triple's inference would otherwise
+    // store the lambdas as plain () -> Unit and the feature rows
+    // could not call them.
+    val features: List<Triple<Int, Int, @Composable () -> Unit>> = listOf(
         Triple(
             R.string.vpn5g_feature_smart_title,
             R.string.vpn5g_feature_smart_body,

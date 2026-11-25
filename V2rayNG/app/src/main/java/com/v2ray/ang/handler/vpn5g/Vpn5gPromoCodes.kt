@@ -281,26 +281,22 @@ object Vpn5gPromoCodes {
     }
 
     /**
-     * Plan id a gift grants (v1.1.14): a sub_* plan id (from `plan`
-     * or `tier`) grants a FULL subscription for that plan's days; any
-     * other gift grants the middle GIFT tier (plan "gift"). Pure.
+     * Plan id a grant carries (v1.1.21): a sub_* plan id grants a
+     * FULL subscription; a plan id that is in the published plans
+     * (e.g. a gb_* volume plan) also grants that plan — full pool,
+     * capped by its volume. Any other gift grants the middle GIFT
+     * tier. [plans] is the published plan list: when it is null
+     * (config not loaded) only the hardcoded sub_* ids are trusted,
+     * so a malformed answer can never mint a full subscription by
+     * itself. Pure.
      */
-    /**
-     * Plan id a gift code grants (v1.1.12; volume plans v1.1.18): a
-     * sub_* plan id grants a FULL subscription; a plan id that is in
-     * the published plans (e.g. a gb_* volume plan) also grants that
-     * plan — full pool, capped by its volume. Any other gift grants
-     * the middle GIFT tier. [plans] is the published plan list: when
-     * it is null (config not loaded) only the hardcoded sub_* ids
-     * are trusted, so a malformed entry can never mint a full
-     * subscription by itself. Pure.
-     */
-    fun giftPlanId(
-        entry: PromoCodeRemote,
+    fun grantPlanId(
+        plan: String?,
+        tier: String?,
         plans: List<SubscriptionPlanRemote>? = null,
     ): String {
-        val candidate = entry.plan?.takeIf { it.isNotBlank() }
-            ?: entry.tier?.takeIf { it.isNotBlank() }
+        val candidate = plan?.takeIf { it.isNotBlank() }
+            ?: tier?.takeIf { it.isNotBlank() }
         if (candidate != null) {
             val id = candidate.trim()
             if (id.lowercase() in Vpn5gPlans.SUB_PLAN_DAYS) return id
@@ -310,6 +306,20 @@ object Vpn5gPromoCodes {
             ) return id
         }
         return Vpn5gConstants.GIFT_TIER_PLAN_ID
+    }
+
+    /**
+     * Plan id a gift code grants (v1.1.12; volume plans v1.1.18): a
+     * sub_* plan id grants a FULL subscription; a plan id that is in
+     * the published plans (e.g. a gb_* volume plan) also grants that
+     * plan — full pool, capped by its volume. Any other gift grants
+     * the middle GIFT tier (plan "gift"). Pure.
+     */
+    fun giftPlanId(
+        entry: PromoCodeRemote,
+        plans: List<SubscriptionPlanRemote>? = null,
+    ): String {
+        return grantPlanId(entry.plan, entry.tier, plans)
     }
 
     /**
@@ -382,6 +392,128 @@ object Vpn5gPromoCodes {
     }
 
     /**
+     * The grant a `validate_and_redeem_code` answer carries (v1.1.21):
+     * the server's own expiry when present and in the future,
+     * otherwise a grant re-derived from the answer's own fields — a
+     * sub_* tier/plan grants that plan's days, a gb_* plan grants
+     * its published days, a gift grants its `gift_hours` — so a code
+     * the server validated but did not apply (`applied:false`, or a
+     * stripped expiry) still grants in-app WITHOUT the code being in
+     * the published list. The volume cap comes from the answer's
+     * `gb_total` when present, else from the plan. A discount answer
+     * grants nothing (the bot applies it). Null when the answer
+     * carries no usable grant at all. Pure (no MMKV, no config read
+     * — [plans] is passed in), so JVM tests can assert the derived
+     * grant directly.
+     */
+    fun deriveGrantFromServer(
+        server: Vpn5gAuthService.CodeServerResult.Validated,
+        nowEpochSeconds: Long,
+        plans: List<SubscriptionPlanRemote>? = null,
+    ): Vpn5gSubscriptionStatus.Vpn5gUserSubscription? {
+        val tier = server.tier?.trim()?.lowercase()
+        if (tier == "discount") return null
+        val plan = grantPlanId(server.plan, server.tier, plans)
+        val serverExpiry = server.expiresAtEpochSeconds
+        val expiresAt = if (serverExpiry != null && serverExpiry > nowEpochSeconds) {
+            serverExpiry
+        } else {
+            val durationSeconds = grantDurationFromServer(server, plan, plans)
+                ?: return null
+            nowEpochSeconds + durationSeconds
+        }
+        val capBytes = server.gbTotal
+            ?.takeIf { it > 0 }
+            ?.let { Vpn5gVolume.capBytes(it.toDouble()) }
+            ?: Vpn5gVolume.capBytesForPlanId(plan, plans)
+        return Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
+            status = "active",
+            expiresAtEpochSeconds = expiresAt,
+            plan = plan,
+            volumeCapBytes = capBytes,
+        )
+    }
+
+    /**
+     * Duration a `Validated` answer grants, in seconds (v1.1.21): a
+     * sub_* plan grants that plan's days — the plan is the authority,
+     * so a sub_1 code grants 30 days even when it also carries
+     * gift_hours 24; a gb_* plan grants its published days;
+     * otherwise the answer's `gift_hours`. Null when the answer
+     * grants no duration. Pure.
+     */
+    private fun grantDurationFromServer(
+        server: Vpn5gAuthService.CodeServerResult.Validated,
+        plan: String,
+        plans: List<SubscriptionPlanRemote>? = null,
+    ): Long? {
+        val planDays = Vpn5gPlans.SUB_PLAN_DAYS[plan.lowercase()]
+        if (planDays != null && planDays > 0) return planDays * 86_400L
+        val published = plans.orEmpty().firstOrNull {
+            it.id?.trim()?.equals(plan, ignoreCase = true) == true
+        }
+        val publishedDays = published?.let { Vpn5gPlans.planDays(it) }
+        if (publishedDays != null && publishedDays > 0) return publishedDays * 86_400L
+        val hours = server.giftHours
+        if (hours != null && hours > 0) return hours * 3_600L
+        return null
+    }
+
+    /**
+     * Persists a server-validated grant locally and records the
+     * redemption for [email] (v1.1.21): the subscription cache and
+     * the local redemption record, shared by [activateServerGift]
+     * and [activateRpcGrant] so both paths persist exactly the same
+     * way. Never throws.
+     */
+    private fun saveGrant(
+        code: String,
+        subscription: Vpn5gSubscriptionStatus.Vpn5gUserSubscription,
+        email: String,
+    ) {
+        Vpn5gSubscriptionStatus.saveRedeemed(subscription)
+        val normalized = code.trim().uppercase()
+        val stored = redeemedLocally().toMutableList()
+        if (stored.none { it.code == normalized }) {
+            stored.add(
+                Redemption(
+                    code = normalized,
+                    type = "gift",
+                    redeemedAtEpochMillis = System.currentTimeMillis(),
+                    email = email.takeIf { it.isNotBlank() },
+                    plan = subscription.plan,
+                    expiresAtEpochSeconds = subscription.expiresAtEpochSeconds,
+                )
+            )
+            saveRedeemed(stored)
+        }
+    }
+
+    /**
+     * Activates the grant a `validate_and_redeem_code` answer
+     * carries (v1.1.21): the grant is derived from the answer
+     * itself — its expiry when present, otherwise its tier / plan /
+     * gift_hours / gb_total — so a code the server validated but did
+     * not apply (`applied:false`, or a stripped expiry) still
+     * grants in-app without the code being in the published list.
+     * Saves the grant + records the redemption, like
+     * [activateServerGift]. Returns null when the answer carries no
+     * usable grant. Never throws.
+     */
+    fun activateRpcGrant(
+        code: String,
+        server: Vpn5gAuthService.CodeServerResult.Validated,
+        email: String,
+        nowEpochSeconds: Long,
+    ): Vpn5gSubscriptionStatus.Vpn5gUserSubscription? {
+        val plans = runCatching { Vpn5gRemoteConfig.cached().plans }.getOrNull()
+        val subscription = deriveGrantFromServer(server, nowEpochSeconds, plans)
+            ?: return null
+        saveGrant(code, subscription, email)
+        return subscription
+    }
+
+    /**
      * Activates a gift the SERVER validated (v1.1.15): the grant (plan
      * + expiry) comes from the `validate_and_redeem_code` RPC, not
      * from the published config list — the server already marked the
@@ -411,22 +543,7 @@ object Vpn5gPromoCodes {
             plan = grantedPlan,
             volumeCapBytes = Vpn5gVolume.capBytesForPlanId(grantedPlan, plans),
         )
-        Vpn5gSubscriptionStatus.saveRedeemed(subscription)
-        val normalized = code.trim().uppercase()
-        val stored = redeemedLocally().toMutableList()
-        if (stored.none { it.code == normalized }) {
-            stored.add(
-                Redemption(
-                    code = normalized,
-                    type = "gift",
-                    redeemedAtEpochMillis = System.currentTimeMillis(),
-                    email = email.takeIf { it.isNotBlank() },
-                    plan = grantedPlan,
-                    expiresAtEpochSeconds = expiresAt,
-                )
-            )
-            saveRedeemed(stored)
-        }
+        saveGrant(code, subscription, email)
         return subscription
     }
 

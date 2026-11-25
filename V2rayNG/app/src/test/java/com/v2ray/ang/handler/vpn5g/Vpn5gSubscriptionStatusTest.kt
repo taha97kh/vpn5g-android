@@ -387,4 +387,46 @@ class Vpn5gSubscriptionStatusTest {
             Vpn5gSubscriptionStatus.effectiveSubscription(row, null, now, volume),
         )
     }
+
+    // -- Redeemed grant survives a failed / "none" row read (v1.1.21) -----
+    // The 1.1.20 failure: the row re-read is 403 (missing GRANT SELECT
+    // for `authenticated`), so the merge must never let a failed or
+    // "none" row demote a just-redeemed grant — otherwise the status
+    // section stays empty AND the country locks stay closed.
+    @Test
+    fun test_redeemed_gift_survives_none_row() {
+        val redeemed = Vpn5gUserSubscription("active", future, "gift")
+        val merged = Vpn5gSubscriptionStatus.effectiveSubscription(
+            Vpn5gUserSubscription("none", null, null), redeemed, now
+        )
+        assertEquals(redeemed, merged)
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.GIFT,
+            Vpn5gSubscriptionStatus.tierOf(merged, now),
+        )
+        assertTrue(Vpn5gSubscriptionStatus.isGiftTier(merged, now))
+        assertFalse(Vpn5gSubscriptionStatus.isSubscriber(merged, now))
+    }
+
+    @Test
+    fun test_redeemed_sub_survives_missing_row() {
+        val redeemed = Vpn5gUserSubscription("active", future, "sub_1")
+        val merged = Vpn5gSubscriptionStatus.effectiveSubscription(null, redeemed, now)
+        assertEquals(redeemed, merged)
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
+            Vpn5gSubscriptionStatus.tierOf(merged, now),
+        )
+        assertTrue(Vpn5gSubscriptionStatus.isSubscriber(merged, now))
+    }
+
+    @Test
+    fun test_expired_row_never_demotes_redeemed_gift() {
+        val row = Vpn5gUserSubscription("active", past, "sub_1")
+        val redeemed = Vpn5gUserSubscription("active", future, "gift")
+        assertEquals(
+            redeemed,
+            Vpn5gSubscriptionStatus.effectiveSubscription(row, redeemed, now),
+        )
+    }
 }

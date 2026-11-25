@@ -49,11 +49,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
@@ -86,6 +89,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -231,6 +235,26 @@ data class Vpn5gHomeUiState(
     val notice: String? = null,
     /** Admin-published app announcement (v1.1.5); null = none to show. */
     val announcement: AnnouncementRemote? = null,
+    /**
+     * Startup notice (v1.1.21, Aref 2026-11-25): shown on EVERY app
+     * entry until dismissed — then it stays gone for the rest of the
+     * session only. In-memory only, never persisted: the next launch
+     * shows it again.
+     */
+    val startupNoticeDismissed: Boolean = false,
+    /**
+     * Current page of the startup notice (v1.1.21): 0 = free servers,
+     * 1 = gift codes + Premium countries, 2 = Terms & Conditions +
+     * login. In-memory only, like [startupNoticeDismissed].
+     */
+    val startupNoticePage: Int = 0,
+    /**
+     * Terms & Conditions accepted (v1.1.21): true once the user ticked
+     * the checkbox on the notice's last page. PERSISTED in MMKV — the
+     * user is never asked to re-tick on later launches; the notice
+     * itself still shows on every entry.
+     */
+    val termsAccepted: Boolean = false,
     val countries: List<Vpn5gCountryUi> = emptyList(),
     val selectedGuid: String? = null,
     val currentServerName: String? = null,
@@ -611,6 +635,38 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(themeMode = mode) }
     }
 
+    /**
+     * Startup notice (v1.1.21): dismiss for the current session
+     * only — the flag lives in memory, so the next launch shows the
+     * notice again.
+     */
+    fun dismissStartupNotice() {
+        _uiState.update { it.copy(startupNoticeDismissed = true) }
+    }
+
+    /**
+     * Startup notice (v1.1.21): advance one page — «بعدی» on pages
+     * 0 and 1. Clamped to the last page (2); the last page offers
+     * the Guide and the dismiss button instead.
+     */
+    fun advanceStartupNotice() {
+        _uiState.update {
+            it.copy(startupNoticePage = (it.startupNoticePage + 1).coerceAtMost(2))
+        }
+    }
+
+    /**
+     * Terms & Conditions (v1.1.21): the user ticked the checkbox on
+     * the notice's last page — persist the acceptance (MMKV) and
+     * publish it, so the login button enables at once and the user is
+     * never asked to re-tick on later launches. One-way: there is no
+     * un-accept path in the app.
+     */
+    fun acceptTerms() {
+        MmkvManager.encodeSettings(Vpn5gConstants.KEY_TERMS_ACCEPTED, true)
+        _uiState.update { it.copy(termsAccepted = true) }
+    }
+
     private val serviceReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val safeIntent = intent ?: return
@@ -718,6 +774,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     AppConfig.PREF_LANGUAGE
                 ) ?: "auto",
                 themeMode = ThemeManager.themeMode.value,
+                // v1.1.21: T&C acceptance is persisted — a user who
+                // ticked it once is never asked again.
+                termsAccepted = MmkvManager.decodeSettingsBool(
+                    Vpn5gConstants.KEY_TERMS_ACCEPTED, false
+                ),
             )
         }
 
@@ -2313,10 +2374,16 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      * rebuilt); a DISCOUNT code still goes through the bot (VALID +
      * deep link). A code the server already counts as used is
      * re-granted locally instead of saying invalid (see
-     * [tryRecoverGrant]). After a successful redeem the subscription
-     * is re-read from the server row at once (see
-     * [publishServerRowGrant] / [refreshSubscriptionAfterRedeem]) so
-     * the panel shows the fresh plan + expiry on the same screen.
+     * [tryRecoverGrant]). The grant comes from the RPC answer itself
+     * first (see [Vpn5gPromoCodes.activateRpcGrant] — its expiry when
+     * present, otherwise its tier / plan / gift_hours / gb_total), so
+     * a validated-but-unapplied code still grants without the code
+     * being in the published list; the server-row re-read (see
+     * [publishServerRowGrant]) is only the last resort, and the
+     * published entry the one after it. After a successful redeem the
+     * subscription is re-read from the server row at once (see
+     * [refreshSubscriptionAfterRedeem]) so the panel shows the fresh
+     * plan + expiry on the same screen.
      * [setStatus] reports the outcome to the section that asked (gift
      * or subscription). Never throws.
      */
@@ -2385,52 +2452,39 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         setStatus(Vpn5gPromoStatus.VALID)
                         return@launch
                     }
-                    // v1.1.19/1.1.20: applied:false means the server
-                    // said ok but granted nothing in-app (no
-                    // registrations row for the email when it burned
-                    // the code). The server row is the authority
-                    // now — re-read it (it may hold the grant) — then
-                    // re-derive from the published entry. Only when
-                    // both fail is it a specific error, never
-                    // "invalid": the code was consumed.
-                    if (server.applied == false) {
-                        if (publishServerRowGrant(email, nowSeconds, setStatus)) {
-                            return@launch
-                        }
-                        val entry = Vpn5gPromoCodes.findCode(
-                            input, _uiState.value.promoCodes
-                        )
-                        if (entry != null && tryRecoverGrant(
-                                entry, email, nowSeconds, setStatus
-                            )
-                        ) {
-                            return@launch
-                        }
-                        setStatus(Vpn5gPromoStatus.NOT_APPLIED)
-                        return@launch
-                    }
-                    val subscription = Vpn5gPromoCodes.activateServerGift(
-                        input, server.plan, server.expiresAtEpochSeconds,
-                        email, nowSeconds,
+                    // v1.1.21: the answer itself carries the grant —
+                    // its expiry when present, otherwise its tier /
+                    // plan / gift_hours / gb_total — so a code the
+                    // server validated but did not apply (applied:
+                    // false, or a stripped expiry) still grants
+                    // in-app at once, WITHOUT the code being in the
+                    // published list and WITHOUT waiting on the
+                    // server-row re-read (the row read is 403 until
+                    // the server grants SELECT — it stays as the last
+                    // resort below, never the gate). A failed row
+                    // re-read can never demote this grant:
+                    // publishRedeemed persists it locally and merges
+                    // it back as the floor on the post-redeem refresh.
+                    val granted = Vpn5gPromoCodes.activateRpcGrant(
+                        input, server, email, nowSeconds
                     )
-                    if (subscription != null) {
+                    if (granted != null) {
                         // v1.1.18: the server-validated grant activates
                         // in-app at once — no bot confirm step, so no
                         // bot link is published (the REDEEMED block no
                         // longer shows one either). The post-redeem
                         // re-read inside publishRedeemed refreshes the
                         // panel from the server row at once.
-                        publishRedeemed(subscription, null, nowSeconds)
+                        publishRedeemed(granted, null, nowSeconds)
                         setStatus(Vpn5gPromoStatus.REDEEMED)
                         return@launch
                     }
-                    // ok:true but no usable expiry in the answer: the
-                    // grant is on the server row, or re-derivable from
-                    // the published entry. VALID + bot link is ONLY
-                    // for a true DISCOUNT entry; a gift/subscription
-                    // code with no derivable grant is NOT_APPLIED,
-                    // never INVALID and never VALID — the server said
-                    // ok, so the code itself is not the problem.
+                    // The answer carried no usable grant: the server
+                    // row is the authority now — re-read it (it may
+                    // hold the grant) — then re-derive from the
+                    // published entry. Only when both fail is it a
+                    // specific error, never "invalid": the code was
+                    // consumed.
                     if (publishServerRowGrant(email, nowSeconds, setStatus)) {
                         return@launch
                     }
@@ -2451,6 +2505,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         _uiState.update { it.copy(promoBotLink = link) }
                         setStatus(Vpn5gPromoStatus.VALID)
                     } else {
+                        // ok:true but no derivable grant: a gift /
+                        // subscription code with no derivable grant is
+                        // NOT_APPLIED, never INVALID and never VALID
+                        // — the server said ok, so the code itself is
+                        // not the problem.
                         setStatus(Vpn5gPromoStatus.NOT_APPLIED)
                     }
                     return@launch
@@ -3738,6 +3797,10 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onUpdateDownload = { viewModel.startUpdateDownload() },
                             onDismissUpdate = { viewModel.dismissUpdate() },
                             onDismissAnnouncement = { viewModel.dismissAnnouncement() },
+                            onDismissStartupNotice = { viewModel.dismissStartupNotice() },
+                            onNextStartupNotice = { viewModel.advanceStartupNotice() },
+                            onAcceptTerms = { viewModel.acceptTerms() },
+                            onOpenLogin = { destination = Vpn5gDestination.AUTH },
                             onShareCrashReport = {
                                 Vpn5gCrashHandler.shareIntent(this@Vpn5gMainActivity)?.let { intent ->
                                     startActivity(
@@ -3973,7 +4036,10 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                                 Vpn5gDestination.PREMIUM -> Vpn5gCrownIcon(iconColor)
                                 Vpn5gDestination.GUIDE -> Vpn5gHelpIcon(iconColor)
                                 Vpn5gDestination.ME -> Vpn5gPersonIcon(iconColor)
-                                Vpn5gDestination.AUTH -> {
+                                Vpn5gDestination.AUTH,
+                                Vpn5gDestination.SERVER_SELECT,
+                                Vpn5gDestination.ROUTING,
+                                Vpn5gDestination.FEATURES -> {
                                     // Never a bottom-bar destination.
                                 }
                             }
@@ -4274,6 +4340,14 @@ fun Vpn5gHomeScreen(
     onUpdateDownload: () -> Unit,
     onDismissUpdate: () -> Unit,
     onDismissAnnouncement: () -> Unit,
+    /** Startup notice (v1.1.21): dismiss for the current session only. */
+    onDismissStartupNotice: () -> Unit = {},
+    /** Startup notice (v1.1.21): «بعدی» — advance one page. */
+    onNextStartupNotice: () -> Unit = {},
+    /** Startup notice (v1.1.21): last page — tick the T&C checkbox. */
+    onAcceptTerms: () -> Unit = {},
+    /** Startup notice (v1.1.21): last page — open the login page. */
+    onOpenLogin: () -> Unit = {},
     /** Crash report from an earlier run (v1.1.16): share / dismiss. */
     onShareCrashReport: () -> Unit = {},
     onDismissCrashReport: () -> Unit = {},
@@ -4369,6 +4443,25 @@ fun Vpn5gHomeScreen(
                             }
                         }
                     }
+                }
+            }
+
+            // Startup notice (v1.1.21, Aref 2026-11-25): paged — one
+            // point per page, shown on EVERY app entry, dismissible
+            // for the current session only from the last page. While
+            // the user reads through the pages (~2 minutes) the server
+            // updates in the background. No stagger: the notice must
+            // be visible on entry, not fade in late.
+            if (!state.startupNoticeDismissed) {
+                item(key = "startup_notice") {
+                    Vpn5gStartupNoticeCard(
+                        page = state.startupNoticePage,
+                        termsAccepted = state.termsAccepted,
+                        onNext = onNextStartupNotice,
+                        onAcceptTerms = onAcceptTerms,
+                        onOpenLogin = onOpenLogin,
+                        onDismiss = onDismissStartupNotice,
+                    )
                 }
             }
 
@@ -4833,6 +4926,157 @@ fun Vpn5gHomeScreen(
  * with Coil; a failed image hides its slot so the card never shows a
  * blank box — the text always remains.
  */
+/**
+ * Startup notice (v1.1.21, Aref 2026-11-25): a paged Lantern card on
+ * home, shown on EVERY app entry. Page 1 first only — «بعدی» advances
+ * one page at a time. The copy is an engaging tour of the real
+ * features (20 free servers, 30-minute session, gift codes, Premium
+ * countries, auto-connect) — enough reading for about 2 minutes while
+ * the server updates in the background. The last page is Terms &
+ * Conditions with a checkbox: ticking it persists the acceptance
+ * (MMKV — never asked again on later launches) and enables the login
+ * button, which opens the login page where the 20 free servers are
+ * ready. The close button dismisses the notice for the current session
+ * only (the flag is in-memory, so the next launch shows it again).
+ * The checkbox row is the single activation node for acceptance (the
+ * inner Checkbox's semantics are cleared); the page dots are
+ * decoration only, never a focus target.
+ */
+@Composable
+private fun Vpn5gStartupNoticeCard(
+    page: Int,
+    termsAccepted: Boolean,
+    onNext: () -> Unit,
+    onAcceptTerms: () -> Unit,
+    onOpenLogin: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val safePage = page.coerceIn(0, 2)
+    val titleRes = when (safePage) {
+        0 -> R.string.vpn5g_startup_notice_title1
+        1 -> R.string.vpn5g_startup_notice_title2
+        else -> R.string.vpn5g_startup_notice_title3
+    }
+    val bodyRes = when (safePage) {
+        0 -> R.string.vpn5g_startup_notice_page1
+        1 -> R.string.vpn5g_startup_notice_page2
+        else -> R.string.vpn5g_startup_notice_terms
+    }
+    Vpn5gGlassCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Vpn5gGlobeIcon(color = Vpn5gTealLight, size = 24.dp)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(titleRes),
+                    color = Vpn5gOnDark,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(bodyRes),
+                    color = Vpn5gOnDark,
+                    fontSize = 14.sp,
+                )
+            }
+        }
+        if (safePage >= 2) {
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .toggleable(
+                        value = termsAccepted,
+                        onValueChange = { onAcceptTerms() },
+                        role = Role.Checkbox,
+                        enabled = !termsAccepted,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = termsAccepted,
+                    onCheckedChange = null,
+                    modifier = Modifier.clearAndSetSemantics {},
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = Vpn5gTeal,
+                        uncheckedColor = Vpn5gOnDarkMuted,
+                        checkmarkColor = Color.White,
+                        disabledCheckedColor = Vpn5gTeal,
+                    ),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_startup_notice_accept),
+                    color = Vpn5gOnDark,
+                    fontSize = 13.sp,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (i in 0..2) {
+                    Box(
+                        modifier = Modifier
+                            .size(if (i == safePage) 8.dp else 6.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (i == safePage) Vpn5gTealLight else Vpn5gOnDarkMuted
+                            ),
+                    )
+                }
+            }
+            if (safePage >= 2) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onOpenLogin,
+                        enabled = termsAccepted,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Vpn5gTeal,
+                            contentColor = Color.White,
+                            disabledContainerColor = Vpn5gCardBorder,
+                            disabledContentColor = Vpn5gOnDarkMuted,
+                        ),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_startup_notice_login),
+                            fontSize = 14.sp,
+                        )
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_close),
+                            color = Vpn5gOnDarkMuted,
+                            fontSize = 13.sp,
+                        )
+                    }
+                }
+            } else {
+                Button(
+                    onClick = onNext,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Vpn5gTeal,
+                        contentColor = Color.White,
+                    ),
+                ) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_next),
+                        fontSize = 14.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun Vpn5gAnnouncementCard(
     announcement: AnnouncementRemote,

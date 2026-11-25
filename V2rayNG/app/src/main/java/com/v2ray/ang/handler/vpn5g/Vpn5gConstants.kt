@@ -304,6 +304,14 @@ object Vpn5gConstants {
     const val KEY_ANNOUNCEMENT_DISMISSED = "vpn5g_announcement_dismissed"
 
     /**
+     * Terms & Conditions acceptance (v1.1.21): true once the user
+     * ticked the checkbox on the startup notice's last page. Persisted
+     * in MMKV — the user is never asked to re-tick on later launches;
+     * the notice itself still shows on every entry.
+     */
+    const val KEY_TERMS_ACCEPTED = "vpn5g_terms_accepted"
+
+    /**
      * Live tunnel speeds, published once a second by the :daemon
      * notification job (v1.1.15, speeds root-cause fix): the UI process
      * cannot query the core itself (different process), so the daemon

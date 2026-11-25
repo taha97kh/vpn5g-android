@@ -385,17 +385,34 @@ object Vpn5gAuthService {
          * code was burned but nothing was granted (v1.1.19: the
          * function only grants IF a registrations row exists for the
          * email, and strips expires_at when it does not apply) —
-         * the caller must then re-derive the grant from the
-         * published entry instead of showing VALID. Null when the
-         * server did not report it. [tier] is the code's tier as the
-         * server reports it ("discount" = a discount code with no
-         * grant — the bot applies it; "gift" / a plan id = a grant).
+         * the caller re-derives the grant from the answer's own
+         * fields (tier / plan / gift_hours / gb_total, v1.1.21) or
+         * from the published entry instead of showing VALID. Null
+         * when the server did not report it. [tier] is the code's
+         * tier as the server reports it ("discount" = a discount code
+         * with no grant — the bot applies it; "gift" / a plan id = a
+         * grant). [giftHours]/[gbTotal] are the answer's own
+         * duration/volume, for that re-derivation.
          */
         data class Validated(
             val plan: String?,
             val expiresAtEpochSeconds: Long?,
             val applied: Boolean? = null,
             val tier: String? = null,
+            /**
+             * Gift duration in hours, as the server reports it
+             * (v1.1.21): the RPC answer carries `gift_hours` next to
+             * the tier — the caller re-derives the grant from it when
+             * the answer has no usable expiry, instead of needing
+             * the code in the published list.
+             */
+            val giftHours: Int? = null,
+            /**
+             * Volume of the grant in GB, as the server reports it
+             * (v1.1.21): the RPC answer carries `gb_total` — the
+             * caller caps the derived grant from it.
+             */
+            val gbTotal: Int? = null,
         ) : CodeServerResult
         /** Server definitively rejected the code ("unknown" | "already_used" | "expired" | "exhausted" | "not_yours" | "invalid_email" | "no_registration"). */
         data class Rejected(val status: String) : CodeServerResult
@@ -443,8 +460,11 @@ object Vpn5gAuthService {
      * v1.1.19: the live function burns the code FIRST and only
      * grants IF a row exists in vpn5g_registrations for the email —
      * with no row it answers ok:true with `applied:false` and
-     * expires_at stripped, so the caller must check [Validated.applied]
-     * and the presence of an expiry, never trust ok:true alone.
+     * expires_at stripped, so the caller must never trust ok:true
+     * alone. v1.1.21: the caller derives the grant from the answer's
+     * own fields instead (tier / plan / gift_hours / gb_total) —
+     * [Validated.applied] is still parsed, but no longer gates the
+     * grant.
      * `expires_at` is also accepted as a bare numeric epoch
      * (unquoted digits) as a fallback. Pure, JVM-tested.
      * v1.1.20: the guard's fixed function also answers
@@ -463,7 +483,8 @@ object Vpn5gAuthService {
                     val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
                         .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
                     CodeServerResult.Validated(
-                        plan, parseExpiresAt(body), parseApplied(body), parseTier(body)
+                        plan, parseExpiresAt(body), parseApplied(body), parseTier(body),
+                        parseGiftHours(body), parseGbTotal(body),
                     )
                 }
                 "unknown", "already_used", "expired", "exhausted", "not_yours" ->
@@ -488,7 +509,8 @@ object Vpn5gAuthService {
             val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
                 .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
             return CodeServerResult.Validated(
-                plan, parseExpiresAt(body), parseApplied(body), parseTier(body)
+                plan, parseExpiresAt(body), parseApplied(body), parseTier(body),
+                parseGiftHours(body), parseGbTotal(body),
             )
         }
         val reason = Regex("\"reason\"\\s*:\\s*\"([^\"]*)\"")
@@ -504,6 +526,28 @@ object Vpn5gAuthService {
             "no_registration" -> CodeServerResult.Rejected("no_registration")
             else -> CodeServerResult.Unavailable
         }
+    }
+
+    /**
+     * The `gift_hours` of a `validate_and_redeem_code` response
+     * (v1.1.21): the gift duration the code grants, used to re-derive
+     * the grant when the answer has no usable expiry. Null when the
+     * server did not report it. Pure.
+     */
+    private fun parseGiftHours(body: String): Int? {
+        return Regex("\"gift_hours\"\\s*:\\s*([0-9]+)")
+            .find(body)?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    /**
+     * The `gb_total` of a `validate_and_redeem_code` response
+     * (v1.1.21): the volume of the grant in GB, used to cap a grant
+     * re-derived from the answer. Null when the server did not
+     * report it. Pure.
+     */
+    private fun parseGbTotal(body: String): Int? {
+        return Regex("\"gb_total\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)")
+            .find(body)?.groupValues?.get(1)?.toDoubleOrNull()?.toInt()
     }
 
     /**

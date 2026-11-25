@@ -394,4 +394,84 @@ class Vpn5gServerRpcTest {
             validated.expiresAtEpochSeconds,
         )
     }
+
+    // -- The 1.1.21 server shape: every tier + gift_hours/gb_total ------
+    // The 1.1.20 on-device failure (codes 493401 gift + 301963 gb_50,
+    // both NOT_APPLIED) came from the row re-read + the local-list
+    // recovery, not from this parser — but the parser must prove it
+    // reads EVERY field of the exact shape, including the +00:00 ISO
+    // expiry, so the recovery can derive the grant from the answer.
+
+    @Test
+    fun test_parse_exact_server_shape_gift() {
+        val result = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok": true, "tier": "gift", "plan": "gift", "gift_hours": 24, "gb_total": 50, "applied": true, "expires_at": "2027-01-25T23:30:08+00:00"}"""
+        )
+        assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated)
+        val validated = result as Vpn5gAuthService.CodeServerResult.Validated
+        assertEquals("gift", validated.tier)
+        assertEquals("gift", validated.plan)
+        assertEquals(true, validated.applied)
+        assertEquals(24, validated.giftHours)
+        assertEquals(50, validated.gbTotal)
+        // The +00:00 ISO expiry MUST parse — a null here would make
+        // the direct activation path return null (the 1.1.20 shape).
+        assertNotNull(validated.expiresAtEpochSeconds)
+        assertEquals(
+            Vpn5gSubscriptionStatus.parseIsoToEpoch("2027-01-25T23:30:08+00:00"),
+            validated.expiresAtEpochSeconds,
+        )
+    }
+
+    @Test
+    fun test_parse_exact_server_shape_every_tier() {
+        // Every tier the server reports must parse with its own plan id.
+        for (tier in listOf(
+            "gift", "sub_1", "sub_3", "sub_6", "sub_12",
+            "gb_20", "gb_50", "gb_100", "gb_200"
+        )) {
+            val result = Vpn5gAuthService.parseCodeServerResult(
+                """{"ok":true,"tier":"$tier","plan":"$tier","gift_hours":24,"gb_total":50,"applied":true,"expires_at":"2027-01-25T23:30:08+00:00"}"""
+            )
+            assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated, tier)
+            val validated = result as Vpn5gAuthService.CodeServerResult.Validated
+            assertEquals(tier, validated.tier, tier)
+            assertEquals(tier, validated.plan, tier)
+            assertEquals(true, validated.applied, tier)
+            assertEquals(24, validated.giftHours, tier)
+            assertEquals(50, validated.gbTotal, tier)
+            assertNotNull(validated.expiresAtEpochSeconds, tier)
+        }
+    }
+
+    @Test
+    fun test_parse_exact_server_shape_applied_false_keeps_fields() {
+        // applied:false (the 1.1.20 shape): the code was burned with no
+        // grant — the answer still carries everything the recovery
+        // needs (tier / plan / gift_hours / gb_total), so the caller
+        // can derive the grant without the published list.
+        val result = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"tier":"gb_50","plan":"gb_50","gift_hours":24,"gb_total":50,"applied":false}"""
+        )
+        assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated)
+        val validated = result as Vpn5gAuthService.CodeServerResult.Validated
+        assertEquals(false, validated.applied)
+        assertEquals("gb_50", validated.tier)
+        assertEquals("gb_50", validated.plan)
+        assertEquals(24, validated.giftHours)
+        assertEquals(50, validated.gbTotal)
+        assertNull(validated.expiresAtEpochSeconds)
+    }
+
+    @Test
+    fun test_parse_exact_server_shape_numeric_epoch_expiry() {
+        val result = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"tier":"sub_1","plan":"sub_1","applied":true,"expires_at":1799999999}"""
+        )
+        assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated)
+        assertEquals(
+            1799999999L,
+            (result as Vpn5gAuthService.CodeServerResult.Validated).expiresAtEpochSeconds,
+        )
+    }
 }

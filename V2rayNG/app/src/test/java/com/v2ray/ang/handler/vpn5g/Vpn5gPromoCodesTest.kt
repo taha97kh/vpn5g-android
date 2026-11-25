@@ -1,6 +1,7 @@
 package com.v2ray.ang.handler.vpn5g
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -480,6 +481,152 @@ class Vpn5gPromoCodesTest {
                 PromoCodeRemote(code = "BAD", type = "gift", remaining_uses = 1),
                 false,
             ),
+        )
+    }
+
+    // -- Grant derived from the RPC answer (v1.1.21) -----------------------
+    // The 1.1.20 failure: a validated-but-unapplied code (applied:false,
+    // or a stripped expiry) only recovered when the code was in the
+    // published list — codes published minutes earlier were not, so both
+    // 493401 (gift) and 301963 (gb_50) ended NOT_APPLIED. The answer's
+    // own fields now derive the grant; the list is never needed.
+    private val rpcNow = 1_800_000_000L // ~2027-01-15
+    private val rpcExpiry = Vpn5gSubscriptionStatus.parseIsoToEpoch(
+        "2027-01-25T23:30:08+00:00"
+    )!!
+    private val rpcPlans = listOf(
+        SubscriptionPlanRemote(id = "sub_1", days = 30),
+        SubscriptionPlanRemote(id = "sub_3", days = 90),
+        SubscriptionPlanRemote(id = "sub_6", days = 180),
+        SubscriptionPlanRemote(id = "sub_12", days = 360),
+        SubscriptionPlanRemote(id = "gb_20", days = 30, gb = 20.0),
+        SubscriptionPlanRemote(id = "gb_50", days = 30, gb = 50.0),
+        SubscriptionPlanRemote(id = "gb_100", days = 90, gb = 100.0),
+        SubscriptionPlanRemote(id = "gb_200", days = 180, gb = 200.0),
+    )
+
+    private fun validated(
+        tier: String?,
+        plan: String?,
+        applied: Boolean? = true,
+        giftHours: Int? = 24,
+        gbTotal: Int? = 50,
+        expiresAt: Long? = null,
+    ) = Vpn5gAuthService.CodeServerResult.Validated(
+        plan = plan,
+        expiresAtEpochSeconds = expiresAt,
+        applied = applied,
+        tier = tier,
+        giftHours = giftHours,
+        gbTotal = gbTotal,
+    )
+
+    @Test
+    fun test_derive_grant_from_server_uses_server_expiry() {
+        // applied:true + parseable expiry: the server's expiry is the
+        // grant, whatever the other fields say.
+        val grant = Vpn5gPromoCodes.deriveGrantFromServer(
+            validated("gift", "gift", expiresAt = rpcExpiry), rpcNow, rpcPlans
+        )
+        assertNotNull(grant)
+        assertEquals("active", grant?.status)
+        assertEquals("gift", grant?.plan)
+        assertEquals(rpcExpiry, grant?.expiresAtEpochSeconds)
+        assertEquals(50L * 1_000_000_000L, grant?.volumeCapBytes)
+    }
+
+    @Test
+    fun test_derive_grant_from_server_gift_hours() {
+        // applied:false + no expiry (the 493401 shape): 24 gift hours.
+        val grant = Vpn5gPromoCodes.deriveGrantFromServer(
+            validated("gift", "gift", applied = false), rpcNow, rpcPlans
+        )
+        assertNotNull(grant)
+        assertEquals("gift", grant?.plan)
+        assertEquals(rpcNow + 24 * 3_600L, grant?.expiresAtEpochSeconds)
+    }
+
+    @Test
+    fun test_derive_grant_from_server_gb_plan() {
+        // applied:false + no expiry (the 301963 shape): gb_50 grants
+        // its published 30 days, capped at the answer's 50 GB.
+        val grant = Vpn5gPromoCodes.deriveGrantFromServer(
+            validated("gb_50", "gb_50", applied = false), rpcNow, rpcPlans
+        )
+        assertNotNull(grant)
+        assertEquals("gb_50", grant?.plan)
+        assertEquals(rpcNow + 30 * 86_400L, grant?.expiresAtEpochSeconds)
+        assertEquals(50L * 1_000_000_000L, grant?.volumeCapBytes)
+    }
+
+    @Test
+    fun test_derive_grant_from_server_every_tier() {
+        val expectedDays = mapOf(
+            "sub_1" to 30L, "sub_3" to 90L, "sub_6" to 180L, "sub_12" to 360L,
+            "gb_20" to 30L, "gb_50" to 30L, "gb_100" to 90L, "gb_200" to 180L,
+        )
+        for ((tier, days) in expectedDays) {
+            val grant = Vpn5gPromoCodes.deriveGrantFromServer(
+                validated(tier, tier, applied = false), rpcNow, rpcPlans
+            )
+            assertNotNull(grant, tier)
+            assertEquals(tier, grant?.plan, tier)
+            assertEquals(rpcNow + days * 86_400L, grant?.expiresAtEpochSeconds, tier)
+        }
+        // The plain gift tier grants its gift hours, not plan days.
+        val gift = Vpn5gPromoCodes.deriveGrantFromServer(
+            validated("gift", "gift", applied = false), rpcNow, rpcPlans
+        )
+        assertEquals(rpcNow + 24 * 3_600L, gift?.expiresAtEpochSeconds)
+    }
+
+    @Test
+    fun test_derive_grant_from_server_sub_plan_days_win_over_gift_hours() {
+        // The 1.1.15/1.1.16 bug, re-checked for the RPC path: a sub_1
+        // code that also carries gift_hours 24 grants 30 days, never
+        // 24 hours.
+        val grant = Vpn5gPromoCodes.deriveGrantFromServer(
+            validated("sub_1", "sub_1", applied = false, giftHours = 24),
+            rpcNow, rpcPlans
+        )
+        assertEquals(rpcNow + 30 * 86_400L, grant?.expiresAtEpochSeconds)
+    }
+
+    @Test
+    fun test_derive_grant_from_server_no_grant_cases() {
+        // A discount answer grants nothing (the bot applies it).
+        assertNull(
+            Vpn5gPromoCodes.deriveGrantFromServer(
+                validated("discount", null, giftHours = null, gbTotal = null),
+                rpcNow, rpcPlans
+            )
+        )
+        // An answer with no usable field at all grants nothing — the
+        // caller falls back to the row re-read, then the entry.
+        assertNull(
+            Vpn5gPromoCodes.deriveGrantFromServer(
+                validated(null, null, applied = false, giftHours = null, gbTotal = null),
+                rpcNow, rpcPlans
+            )
+        )
+        // A gift with no duration and no expiry grants nothing.
+        assertNull(
+            Vpn5gPromoCodes.deriveGrantFromServer(
+                validated("gift", "gift", giftHours = null, gbTotal = null),
+                rpcNow, rpcPlans
+            )
+        )
+    }
+
+    @Test
+    fun test_activate_rpc_grant_null_branches_are_jvm_safe() {
+        // Only the null branches are JVM-testable: a usable grant saves
+        // to MMKV, which is a device concern (Not run here).
+        assertNull(
+            Vpn5gPromoCodes.activateRpcGrant(
+                "BAD", validated("discount", null, giftHours = null, gbTotal = null),
+                "a@b.c", rpcNow
+            )
         )
     }
 }

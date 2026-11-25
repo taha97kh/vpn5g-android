@@ -51,4 +51,35 @@ class Vpn5gGiftTierTest {
         assertEquals(20, Vpn5gSync.freeGuidsFor(mixed, Vpn5gTier.FREE).size)
         assertEquals(20, Vpn5gSync.freeGuidsFor(mixed, Vpn5gTier.GIFT).size)
     }
+
+    // -- A redeem opens the locks (v1.1.21) --------------------------------
+    // The 1.1.20 symptom (Aref 2026-11-25 ~05:56): after registering a
+    // key the paid/gift servers stayed LOCKED in Premium countries AND
+    // in All Locations — the same root cause (no grant was ever saved,
+    // so the tier stayed FREE). Once the grant IS saved, the merged
+    // subscription's tier must open the matching pool: gift → top-100,
+    // sub → the full pool.
+    @Test
+    fun test_redeemed_gift_opens_top_100() {
+        val now = 1_800_000_000L
+        val redeemed = Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
+            "active", now + 86_400L, "gift"
+        )
+        val merged = Vpn5gSubscriptionStatus.effectiveSubscription(null, redeemed, now)
+        val tier = Vpn5gSubscriptionStatus.tierOf(merged, now)
+        assertEquals(Vpn5gTier.GIFT, tier)
+        assertEquals(100, Vpn5gSync.freeGuidsFor(servers(150), tier).size)
+    }
+
+    @Test
+    fun test_redeemed_sub_opens_full_pool() {
+        val now = 1_800_000_000L
+        val redeemed = Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
+            "active", now + 30 * 86_400L, "sub_1"
+        )
+        val merged = Vpn5gSubscriptionStatus.effectiveSubscription(null, redeemed, now)
+        val tier = Vpn5gSubscriptionStatus.tierOf(merged, now)
+        assertEquals(Vpn5gTier.SUBSCRIBER, tier)
+        assertEquals(60, Vpn5gSync.freeGuidsFor(servers(60), tier).size)
+    }
 }
