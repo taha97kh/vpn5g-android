@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -52,9 +53,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.BuildConfig
@@ -65,9 +70,27 @@ import kotlinx.coroutines.delay
 val Vpn5gNavyTop = Color(0xFF000000)
 val Vpn5gNavyBottom = Color(0xFF0A0A0A)
 val Vpn5gCyan = Color(0xFF00E5CC)
-val Vpn5gBlackBar = Color(0xFF000000)
+/**
+ * Floating nav-bar surface (v1.1.21): charcoal, not black, so the pill
+ * bar reads as a card floating over the near-black background.
+ */
+val Vpn5gBlackBar = Color(0xFF1A1D21)
 val Vpn5gAccent = Color(0xFF2563EB)
 val Vpn5gAccentLight = Color(0xFF3B82F6)
+/**
+ * Lantern system (v1.1.21 restyle): teal primary, charcoal cards on
+ * near-black, gold Pro accents, red "5G". Teal is the primary action
+ * colour (pill buttons, selected tabs); cyan stays the bright accent
+ * for small live-value text (speeds, pings, connecting states).
+ */
+val Vpn5gTeal = Color(0xFF0E7C86)
+val Vpn5gTealLight = Color(0xFF14A0AC)
+val Vpn5gCard = Color(0xFF1A1D21)
+val Vpn5gCardBorder = Color(0xFF2C3138)
+val Vpn5gBackground = Color(0xFF0B0C0E)
+/** The red "5G" (Aref, 2026-11-25): TAHA VPN white, 5G red, everywhere. */
+val Vpn5gRed = Color(0xFFE5484D)
+val Vpn5gGreen = Color(0xFF22C55E)
 /**
  * Electric blue (v1.1.15, luxury dark style): the light-effect accent
  * for the motion brand, the interstitial countdown and new surfaces.
@@ -80,8 +103,9 @@ val Vpn5gOnDarkMuted = Color(0xFF94A3B8)
  * Premium gold (v1.1.12): the subscriber treatment — a restrained gold
  * pill and gold-tinted surfaces on the home and profile screens. Free
  * users never see it; the base palette above is untouched.
+ * v1.1.21: Lantern gold #C9A227 (was #D4AF37).
  */
-val Vpn5gGold = Color(0xFFD4AF37)
+val Vpn5gGold = Color(0xFFC9A227)
 val Vpn5gGoldOnDark = Color(0xFF1A1A1A)
 
 /**
@@ -108,12 +132,14 @@ fun Vpn5gPremiumPill() {
 }
 
 /**
- * Animated background (near-black with a slowly shifting dark-cyan tint).
+ * Animated background (near-black with a slowly shifting dark-teal tint).
  *
  * Purely presentational: two [animateFloat] progress values on an infinite
  * transition drive the middle/bottom gradient stops through [lerp].
  * Render-thread driven, no bitmap animation, no new dependencies. Never
- * gates sync or connect work.
+ * gates sync or connect work. v1.1.21: Lantern charcoal — the middle stop
+ * drifts toward the card colour and the tint is a faint dark teal, never
+ * the old bright cyan wash.
  *
  * NOTE: this project ships a Compose BOM with no Color animation support
  * (no `animateColor`, no `Color.VectorConverter`), so colors are driven by
@@ -132,7 +158,7 @@ fun Vpn5gAnimatedBackground(content: @Composable BoxScope.() -> Unit) {
         ),
         label = "gradient_mid",
     )
-    val mid = lerp(Vpn5gNavyBottom, Color(0xFF06231F), midProgress)
+    val mid = lerp(Vpn5gNavyBottom, Vpn5gCard, midProgress)
     val tintProgress by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -142,7 +168,7 @@ fun Vpn5gAnimatedBackground(content: @Composable BoxScope.() -> Unit) {
         ),
         label = "gradient_tint",
     )
-    val tint = lerp(Color(0xFF00897B), Vpn5gCyan, tintProgress)
+    val tint = lerp(Vpn5gTeal, Vpn5gTealLight, tintProgress)
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -151,7 +177,7 @@ fun Vpn5gAnimatedBackground(content: @Composable BoxScope.() -> Unit) {
                     listOf(
                         Vpn5gNavyTop,
                         mid,
-                        tint.copy(alpha = 0.35f),
+                        tint.copy(alpha = 0.14f),
                     )
                 )
             )
@@ -232,11 +258,11 @@ fun Vpn5gStaggeredItem(
 }
 
 /**
- * Controlled glassmorphism card (v1.1.15, luxury dark style): a
- * translucent white gradient over the near-black background with a
- * hairline light border. Used by the interstitial ad and the
- * announcement card — the same surface everywhere, never a solid
- * block. Purely presentational.
+ * Shared card surface (v1.1.15 glassmorphism, v1.1.21 Lantern charcoal):
+ * a solid charcoal card with a hairline border. Used by the
+ * interstitial ad, the announcement card and the crash-report card —
+ * the same surface everywhere, never a solid block. Purely
+ * presentational.
  */
 @Composable
 fun Vpn5gGlassCard(
@@ -246,19 +272,69 @@ fun Vpn5gGlassCard(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.10f),
-                        Color.White.copy(alpha = 0.03f),
-                    )
-                )
-            )
-            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
+            .background(Vpn5gCard)
+            .border(1.dp, Vpn5gCardBorder, RoundedCornerShape(16.dp))
             .padding(16.dp),
     ) {
         content()
     }
+}
+
+/**
+ * Brand wordmark (v1.1.21): "TAHA VPN" in white + "5G" in RED (Aref,
+ * 2026-11-25 — the sheet's 5G is cyan, the app's is red). The brand
+ * string is a single translatable=false resource; the split is on its
+ * last space, so the two spans always come from the same source.
+ */
+@Composable
+fun Vpn5gBrandText(
+    fontSize: TextUnit,
+    fontWeight: FontWeight = FontWeight.Bold,
+    textAlign: TextAlign = TextAlign.Center,
+    modifier: Modifier = Modifier,
+) {
+    val brand = stringResource(R.string.vpn5g_home_brand)
+    val text = remember(brand) {
+        val split = brand.lastIndexOf(' ')
+        buildAnnotatedString {
+            if (split > 0) {
+                withStyle(SpanStyle(color = Vpn5gOnDark)) {
+                    append(brand.substring(0, split))
+                }
+                append(" ")
+                withStyle(SpanStyle(color = Vpn5gRed)) {
+                    append(brand.substring(split + 1))
+                }
+            } else {
+                withStyle(SpanStyle(color = Vpn5gOnDark)) { append(brand) }
+            }
+        }
+    }
+    Text(
+        text = text,
+        fontSize = fontSize,
+        fontWeight = fontWeight,
+        textAlign = textAlign,
+        modifier = modifier,
+    )
+}
+
+/**
+ * Shield logo (v1.1.21): Aref's shield + lock mark from the logo sheet
+ * (R.drawable.vpn5g_logo_shield, transparent background, "5G" already
+ * red in the asset). Decorative next to the [Vpn5gBrandText] wordmark,
+ * so no content description — the wordmark supplies the name.
+ */
+@Composable
+fun Vpn5gShieldLogo(width: Dp, modifier: Modifier = Modifier) {
+    Image(
+        painter = painterResource(R.drawable.vpn5g_logo_shield),
+        contentDescription = null,
+        contentScale = ContentScale.Fit,
+        modifier = modifier
+            .width(width)
+            .aspectRatio(300f / 335f),
+    )
 }
 
 /**
@@ -309,13 +385,8 @@ fun Vpn5gMotionBrandText(modifier: Modifier = Modifier) {
     ) {
         val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = stringResource(R.string.vpn5g_home_brand),
-                color = Vpn5gOnDark,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-            )
+            // v1.1.21: "TAHA VPN" white + "5G" red.
+            Vpn5gBrandText(fontSize = 30.sp)
             Spacer(Modifier.height(10.dp))
             // Speed lines under the text: three thin lines sliding
             // left to right at staggered offsets, fading as they travel.
@@ -338,7 +409,7 @@ fun Vpn5gMotionBrandText(modifier: Modifier = Modifier) {
                                     listOf(
                                         Color.Transparent,
                                         Vpn5gElectricBlue,
-                                        Vpn5gCyan,
+                                        Vpn5gTealLight,
                                         Color.Transparent,
                                     )
                                 ),
@@ -363,7 +434,7 @@ fun Vpn5gMotionBrandText(modifier: Modifier = Modifier) {
                         listOf(
                             Color.Transparent,
                             Vpn5gElectricBlue.copy(alpha = 0.9f),
-                            Vpn5gCyan.copy(alpha = 0.9f),
+                            Vpn5gTealLight.copy(alpha = 0.9f),
                             Color.Transparent,
                         )
                     ),
@@ -382,7 +453,7 @@ fun Vpn5gMotionBrandText(modifier: Modifier = Modifier) {
                         translationY = 18f - progress * 36f
                         alpha = (1f - progress) * (0.4f + 0.6f * progress)
                     }
-                    .background(Vpn5gCyan, CircleShape),
+                    .background(Vpn5gTealLight, CircleShape),
             )
         }
     }
@@ -465,7 +536,7 @@ fun Vpn5gStartupScreen(
             Spacer(Modifier.height(4.dp))
             Text(
                 text = "4ref.ai",
-                color = Vpn5gCyan,
+                color = Vpn5gTealLight,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
@@ -482,8 +553,8 @@ fun Vpn5gStartupScreen(
                 Button(
                     onClick = onRetry,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Vpn5gCyan,
-                        contentColor = Color.Black,
+                        containerColor = Vpn5gTeal,
+                        contentColor = Color.White,
                     ),
                 ) {
                     Text(
@@ -538,7 +609,7 @@ fun Vpn5gStartupScreen(
                 LinearProgressIndicator(
                     progress = { progress.coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth(),
-                    color = Vpn5gCyan,
+                    color = Vpn5gTeal,
                     trackColor = Vpn5gOnDark.copy(alpha = 0.15f),
                 )
                 Spacer(Modifier.height(8.dp))
@@ -584,7 +655,7 @@ fun Vpn5gSplashScreen() {
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 48.dp),
         ) {
-            CircularProgressIndicator(color = Vpn5gCyan, modifier = Modifier.size(32.dp))
+            CircularProgressIndicator(color = Vpn5gTeal, modifier = Modifier.size(32.dp))
             Spacer(Modifier.height(12.dp))
             Text(
                 text = stringResource(R.string.vpn5g_loading),

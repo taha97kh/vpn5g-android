@@ -131,7 +131,7 @@ fun Vpn5gAuthScreen(
             Vpn5gStaggeredItem(index = 2, visible = entered) {
                 Text(
                     text = stringResource(R.string.vpn5g_auth_coming_soon),
-                    color = Vpn5gAccentLight,
+                    color = Vpn5gTealLight,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                 )
@@ -157,7 +157,7 @@ fun Vpn5gAuthScreen(
                 Button(
                     onClick = onBack,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Vpn5gAccent,
+                        containerColor = Vpn5gTeal,
                         contentColor = Color.White,
                     ),
                     modifier = Modifier.fillMaxWidth(),
@@ -220,7 +220,7 @@ fun Vpn5gAuthScreen(
                                         R.string.vpn5g_auth_show_password
                                     }
                                 ),
-                                color = Vpn5gAccentLight,
+                                color = Vpn5gTealLight,
                                 fontSize = 13.sp,
                             )
                         }
@@ -285,7 +285,7 @@ fun Vpn5gAuthScreen(
                 },
                 enabled = primaryEnabled,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Vpn5gAccent,
+                    containerColor = Vpn5gTeal,
                     contentColor = Color.White,
                 ),
                 modifier = Modifier.fillMaxWidth(),
@@ -312,7 +312,7 @@ fun Vpn5gAuthScreen(
                     ) {
                         Text(
                             text = stringResource(R.string.vpn5g_auth_send_link_again),
-                            color = Vpn5gAccentLight,
+                            color = Vpn5gTealLight,
                             fontSize = 14.sp,
                         )
                     }
@@ -350,13 +350,13 @@ fun Vpn5gAuthScreen(
                             onClick = { authViewModel.setMode(Vpn5gAuthMode.REGISTER) },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(text = stringResource(R.string.vpn5g_auth_go_register), color = Vpn5gAccentLight, fontSize = 14.sp)
+                            Text(text = stringResource(R.string.vpn5g_auth_go_register), color = Vpn5gTealLight, fontSize = 14.sp)
                         }
                         TextButton(
                             onClick = { authViewModel.setMode(Vpn5gAuthMode.RECOVER) },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(text = stringResource(R.string.vpn5g_auth_forgot), color = Vpn5gAccentLight, fontSize = 14.sp)
+                            Text(text = stringResource(R.string.vpn5g_auth_forgot), color = Vpn5gTealLight, fontSize = 14.sp)
                         }
                     }
                     Vpn5gAuthMode.REGISTER -> {
@@ -364,7 +364,7 @@ fun Vpn5gAuthScreen(
                             onClick = { authViewModel.setMode(Vpn5gAuthMode.LOGIN) },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(text = stringResource(R.string.vpn5g_auth_go_login), color = Vpn5gAccentLight, fontSize = 14.sp)
+                            Text(text = stringResource(R.string.vpn5g_auth_go_login), color = Vpn5gTealLight, fontSize = 14.sp)
                         }
                     }
                     Vpn5gAuthMode.RECOVER -> {
@@ -372,12 +372,12 @@ fun Vpn5gAuthScreen(
                             onClick = { authViewModel.setMode(Vpn5gAuthMode.LOGIN) },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(text = stringResource(R.string.vpn5g_auth_go_password_login), color = Vpn5gAccentLight, fontSize = 14.sp)
+                            Text(text = stringResource(R.string.vpn5g_auth_go_password_login), color = Vpn5gTealLight, fontSize = 14.sp)
                         }
                     }
                 }
                 TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                    Text(text = stringResource(R.string.vpn5g_nav_me), color = Vpn5gAccentLight, fontSize = 14.sp)
+                    Text(text = stringResource(R.string.vpn5g_nav_me), color = Vpn5gTealLight, fontSize = 14.sp)
                 }
             }
         }
@@ -388,11 +388,11 @@ fun Vpn5gAuthScreen(
 private fun vpn5gTextFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = Vpn5gOnDark,
     unfocusedTextColor = Vpn5gOnDark,
-    focusedLabelColor = Vpn5gAccentLight,
+    focusedLabelColor = Vpn5gTealLight,
     unfocusedLabelColor = Vpn5gOnDarkMuted,
-    focusedBorderColor = Vpn5gAccentLight,
+    focusedBorderColor = Vpn5gTealLight,
     unfocusedBorderColor = Vpn5gOnDarkMuted,
-    cursorColor = Vpn5gAccentLight,
+    cursorColor = Vpn5gTealLight,
     focusedPlaceholderColor = Vpn5gOnDarkMuted,
     unfocusedPlaceholderColor = Vpn5gOnDarkMuted,
 )

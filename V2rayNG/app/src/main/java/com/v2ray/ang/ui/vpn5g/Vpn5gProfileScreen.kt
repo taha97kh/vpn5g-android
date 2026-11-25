@@ -105,7 +105,7 @@ fun Vpn5gProfileScreen(
                     Button(
                         onClick = onOpenAuth,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Vpn5gAccent,
+                            containerColor = Vpn5gTeal,
                             contentColor = Color.White,
                         ),
                         modifier = Modifier.fillMaxWidth(),
@@ -122,7 +122,7 @@ fun Vpn5gProfileScreen(
                     TextButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = stringResource(R.string.vpn5g_auth_signout),
-                            color = Vpn5gAccentLight,
+                            color = Vpn5gTealLight,
                             fontSize = 14.sp,
                         )
                     }
@@ -228,7 +228,7 @@ fun Vpn5gProfileScreen(
                         LinearProgressIndicator(
                             progress = { (days / 30f).coerceIn(0f, 1f) },
                             modifier = Modifier.fillMaxWidth(),
-                            color = Vpn5gAccentLight,
+                            color = Vpn5gTealLight,
                             trackColor = Vpn5gOnDarkMuted.copy(alpha = 0.3f),
                         )
                     }
@@ -267,7 +267,7 @@ fun Vpn5gProfileScreen(
                 Button(
                     onClick = onOpenPerAppBypass,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Vpn5gAccent,
+                        containerColor = Vpn5gTeal,
                         contentColor = Color.White,
                     ),
                     modifier = Modifier.fillMaxWidth(),
@@ -332,7 +332,7 @@ fun Vpn5gProfileScreen(
             TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = stringResource(R.string.vpn5g_nav_home),
-                    color = Vpn5gAccentLight,
+                    color = Vpn5gTealLight,
                     fontSize = 14.sp,
                 )
             }

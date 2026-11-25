@@ -261,7 +261,7 @@ fun Vpn5gSubscriptionScreen(
                 Button(
                     onClick = onRedeemGiftCode,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Vpn5gAccent,
+                        containerColor = Vpn5gTeal,
                         contentColor = Color.White,
                     ),
                     modifier = Modifier.fillMaxWidth(),
@@ -510,7 +510,7 @@ fun Vpn5gSubscriptionScreen(
                         LinearProgressIndicator(
                             progress = { (days / 30f).coerceIn(0f, 1f) },
                             modifier = Modifier.fillMaxWidth(),
-                            color = Vpn5gAccentLight,
+                            color = Vpn5gTealLight,
                             trackColor = Vpn5gOnDarkMuted.copy(alpha = 0.3f),
                         )
                         Spacer(Modifier.height(8.dp))
@@ -562,7 +562,7 @@ fun Vpn5gSubscriptionScreen(
                     Button(
                         onClick = { showPayment = true },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Vpn5gCyan,
+                            containerColor = Vpn5gTeal,
                             contentColor = Color.White,
                         ),
                         modifier = Modifier.fillMaxWidth(),
@@ -663,7 +663,7 @@ fun Vpn5gSubscriptionScreen(
                 Button(
                     onClick = onRedeemSubCode,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Vpn5gAccent,
+                        containerColor = Vpn5gTeal,
                         contentColor = Color.White,
                     ),
                     modifier = Modifier.fillMaxWidth(),
@@ -680,7 +680,7 @@ fun Vpn5gSubscriptionScreen(
                 Button(
                     onClick = onOpenBot,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Vpn5gAccent,
+                        containerColor = Vpn5gTeal,
                         contentColor = Color.White,
                     ),
                     modifier = Modifier.fillMaxWidth(),
@@ -749,7 +749,7 @@ fun Vpn5gSubscriptionScreen(
                 TextButton(onClick = onOpenAuth, modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = stringResource(R.string.vpn5g_auth_title),
-                        color = Vpn5gAccentLight,
+                        color = Vpn5gTealLight,
                         fontSize = 14.sp,
                     )
                 }
@@ -816,7 +816,7 @@ fun Vpn5gSubscriptionScreen(
                     TextButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = stringResource(R.string.vpn5g_auth_signout),
-                            color = Vpn5gAccentLight,
+                            color = Vpn5gTealLight,
                             fontSize = 14.sp,
                         )
                     }
@@ -827,7 +827,7 @@ fun Vpn5gSubscriptionScreen(
             TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = stringResource(R.string.vpn5g_nav_home),
-                    color = Vpn5gAccentLight,
+                    color = Vpn5gTealLight,
                     fontSize = 14.sp,
                 )
             }
@@ -865,7 +865,7 @@ private fun Vpn5gCompareRow(
         )
         Text(
             text = premium,
-            color = if (header) Vpn5gCyan else Vpn5gOnDark,
+            color = if (header) Vpn5gTealLight else Vpn5gOnDark,
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
             fontWeight = FontWeight.Bold,
@@ -912,7 +912,7 @@ private fun Vpn5gPlanCard(
             .clip(RoundedCornerShape(16.dp))
             .border(
                 width = if (selected) 2.dp else 1.dp,
-                color = if (selected) Vpn5gCyan else Vpn5gOnDarkMuted.copy(alpha = 0.4f),
+                color = if (selected) Vpn5gTeal else Vpn5gOnDarkMuted.copy(alpha = 0.4f),
                 shape = RoundedCornerShape(16.dp),
             )
             .background(Vpn5gOnDark.copy(alpha = 0.06f))
@@ -922,7 +922,7 @@ private fun Vpn5gPlanCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = name,
-                color = Vpn5gCyan,
+                color = Vpn5gTealLight,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f),
@@ -931,7 +931,7 @@ private fun Vpn5gPlanCard(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Vpn5gCyan)
+                        .background(Vpn5gTeal)
                         .padding(horizontal = 8.dp, vertical = 2.dp)
                 ) {
                     Text(
@@ -1023,11 +1023,11 @@ private fun Vpn5gPaymentRow(
 private fun vpn5gPromoFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
     focusedTextColor = Vpn5gOnDark,
     unfocusedTextColor = Vpn5gOnDark,
-    focusedLabelColor = Vpn5gAccentLight,
+    focusedLabelColor = Vpn5gTealLight,
     unfocusedLabelColor = Vpn5gOnDarkMuted,
-    focusedBorderColor = Vpn5gAccentLight,
+    focusedBorderColor = Vpn5gTealLight,
     unfocusedBorderColor = Vpn5gOnDarkMuted,
-    cursorColor = Vpn5gAccentLight,
+    cursorColor = Vpn5gTealLight,
 )
 
 /**
@@ -1088,7 +1088,7 @@ internal fun Vpn5gVolumeBlock(state: Vpn5gHomeUiState) {
                 Vpn5gVolume.usageFraction(consumed, capBytes) ?: 0f
             },
             modifier = Modifier.fillMaxWidth(),
-            color = Vpn5gAccentLight,
+            color = Vpn5gTealLight,
             trackColor = Vpn5gOnDarkMuted.copy(alpha = 0.3f),
         )
         Spacer(Modifier.height(4.dp))
@@ -1134,7 +1134,7 @@ private fun Vpn5gCodeStatusBlock(
             Button(
                 onClick = onOpenPromoBot,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Vpn5gAccent,
+                    containerColor = Vpn5gTeal,
                     contentColor = Color.White,
                 ),
                 modifier = Modifier.fillMaxWidth(),
@@ -1314,7 +1314,7 @@ private fun Vpn5gCodeStatusBlock(
             Button(
                 onClick = onOpenAuth,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Vpn5gAccent,
+                    containerColor = Vpn5gTeal,
                     contentColor = Color.White,
                 ),
                 modifier = Modifier.fillMaxWidth(),

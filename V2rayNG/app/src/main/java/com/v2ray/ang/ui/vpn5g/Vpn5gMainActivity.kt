@@ -33,7 +33,6 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -55,20 +54,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -88,7 +89,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -108,6 +108,7 @@ import com.v2ray.ang.dto.UrlContentRequest
 import com.v2ray.ang.enums.PermissionType
 import com.v2ray.ang.extension.toSpeedString
 import com.v2ray.ang.extension.toast
+import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.handler.vpn5g.AdsRemote
@@ -130,6 +131,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConnectState
 import com.v2ray.ang.handler.vpn5g.Vpn5gConnectionPersistence
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.DROP_FAILOVER_DEBOUNCE_MS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.EMPTY_POOL_BACKOFF_MS
@@ -147,6 +149,8 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gOperator
 import com.v2ray.ang.handler.vpn5g.Vpn5gPromoCodes
 import com.v2ray.ang.handler.vpn5g.Vpn5gRecoveryLink
 import com.v2ray.ang.handler.vpn5g.Vpn5gRemoteConfig
+import com.v2ray.ang.handler.vpn5g.Vpn5gRouting
+import com.v2ray.ang.handler.vpn5g.Vpn5gRoutingMode
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerValidator
 import com.v2ray.ang.handler.vpn5g.Vpn5gSounds
@@ -160,6 +164,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gTunnelCheck
 import com.v2ray.ang.handler.vpn5g.Vpn5gVolumeStore
 import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.ui.base.HelperBaseComponentActivity
+import com.v2ray.ang.ui.compose.ThemeManager
 import com.v2ray.ang.ui.compose.colorPing
 import com.v2ray.ang.ui.compose.colorPingRed
 import com.v2ray.ang.ui.perappproxy.PerAppProxyActivity
@@ -185,7 +190,13 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 enum class Vpn5gDestination {
-    HOME, PREMIUM, GUIDE, ME, AUTH
+    HOME, PREMIUM, GUIDE, ME, AUTH,
+    /** v1.1.21: the server list moved out of home into its own screen. */
+    SERVER_SELECT,
+    /** v1.1.21: Lantern routing-mode screen. */
+    ROUTING,
+    /** v1.1.21: Lantern features page. */
+    FEATURES,
 }
 
 /** Server-list tabs on the home screen (X-VPN server-list style). */
@@ -224,6 +235,9 @@ data class Vpn5gHomeUiState(
     val selectedGuid: String? = null,
     val currentServerName: String? = null,
     val currentServerFlag: String = "",
+    /** Protocol of the selected server (v1.1.21): shown in the
+     * home status card's current-server row. */
+    val currentServerProtocol: String = "",
     val currentPingMillis: Long = 0L,
     /** True when [currentPingMillis] is a real through-the-proxy delay
      * (v1.1.7); false = TCP-only, shown as "—" instead of a number. */
@@ -308,6 +322,17 @@ data class Vpn5gHomeUiState(
     /** A crash report from an earlier run is waiting (v1.1.16): the
      * home screen offers to share it with support. */
     val crashReportAvailable: Boolean = false,
+    /**
+     * Routing mode (v1.1.21, Lantern routing screen): the mode and the
+     * direct-first switch, loaded from MMKV at startup. The tunnel
+     * reads the mapped upstream prefs at the next connect.
+     */
+    val routingMode: Vpn5gRoutingMode = Vpn5gRoutingMode.SMART,
+    val directFirst: Boolean = true,
+    /** Stored language code ("auto" = system), for the drawer (v1.1.21). */
+    val languageCode: String = "auto",
+    /** Stored theme mode ("0" = system, "1" = light, "2" = dark). */
+    val themeMode: String = "0",
 )
 
 /**
@@ -545,6 +570,47 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /**
+     * Routing mode (v1.1.21, Lantern routing screen): the choice is
+     * persisted and mapped to the upstream per-app-proxy prefs (see
+     * [Vpn5gRouting]) so the next connect uses it. The mapping is
+     * applied synchronously — it is a small MMKV write — so a mode
+     * change made just before a connect is never lost.
+     */
+    fun setRoutingMode(mode: Vpn5gRoutingMode) {
+        Vpn5gRouting.apply(mode, _uiState.value.directFirst)
+        _uiState.update { it.copy(routingMode = mode) }
+    }
+
+    /**
+     * Direct-first switch (v1.1.21): under Smart routing, non-VPN
+     * traffic tries a direct connection first. Same persistence and
+     * mapping as [setRoutingMode].
+     */
+    fun setDirectFirst(on: Boolean) {
+        Vpn5gRouting.apply(_uiState.value.routingMode, on)
+        _uiState.update { it.copy(directFirst = on) }
+    }
+
+    /**
+     * Drawer language (v1.1.21): applies the new locale immediately
+     * (the activity recreates) and stores the choice in state so the
+     * drawer reopens on the stored value.
+     */
+    fun setLanguage(code: String) {
+        AppLocaleManager.setApplicationLanguage(code)
+        _uiState.update { it.copy(languageCode = code) }
+    }
+
+    /**
+     * Drawer appearance (v1.1.21): "0" = system, "1" = light,
+     * "2" = dark. Applies immediately and stores the choice.
+     */
+    fun setThemeMode(mode: String) {
+        ThemeManager.setThemeMode(mode)
+        _uiState.update { it.copy(themeMode = mode) }
+    }
+
     private val serviceReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val safeIntent = intent ?: return
@@ -632,6 +698,27 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     manualGuid = savedManualGuid,
                 )
             }
+        }
+
+        // Restore the routing screen choices (v1.1.21): the mode and the
+        // direct-first switch, plus the drawer language and appearance,
+        // so the screens open on the stored values. The routing mapping
+        // is re-applied here too, so the stored mode is always the one
+        // the next connect sees even if the app was killed mid-change.
+        // Language is the MMKV PREF_LANGUAGE value ("auto" = system);
+        // theme is the ThemeManager flow's current value.
+        val savedMode = Vpn5gRouting.loadMode()
+        val savedDirectFirst = Vpn5gRouting.loadDirectFirst()
+        Vpn5gRouting.apply(savedMode, savedDirectFirst)
+        _uiState.update {
+            it.copy(
+                routingMode = savedMode,
+                directFirst = savedDirectFirst,
+                languageCode = MmkvManager.decodeSettingsString(
+                    AppConfig.PREF_LANGUAGE
+                ) ?: "auto",
+                themeMode = ThemeManager.themeMode.value,
+            )
         }
 
         // Re-check the operator when the network changes (v1.1.14): the
@@ -3284,6 +3371,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 },
                 currentServerFlag = server?.flag.orEmpty(),
+                currentServerProtocol = server?.protocol.orEmpty(),
                 currentPingMillis = ping,
                 currentHasRealPing = server?.hasRealPing ?: false,
             )
@@ -3557,6 +3645,46 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             return
         }
 
+        // Hamburger drawer (v1.1.21, Lantern): the drawer holds the
+        // settings that used to live only in Me — upgrade, login, VPN
+        // settings (routing + per-app bypass), usage, language,
+        // appearance, support, about. Closing is a suspend call, so
+        // navigation fires at once and the drawer animates shut behind.
+        val drawerState = rememberDrawerState(DrawerValue.Closed)
+        val drawerScope = rememberCoroutineScope()
+        val closeDrawerAndNavigate: (Vpn5gDestination) -> Unit = { dest ->
+            drawerScope.launch { drawerState.close() }
+            destination = dest
+        }
+        var showBellAnnouncement by remember { mutableStateOf(false) }
+
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                Vpn5gDrawerContent(
+                    state = uiState,
+                    onOpenPremium = { closeDrawerAndNavigate(Vpn5gDestination.PREMIUM) },
+                    onOpenAuth = { closeDrawerAndNavigate(Vpn5gDestination.AUTH) },
+                    onOpenMe = { closeDrawerAndNavigate(Vpn5gDestination.ME) },
+                    onOpenRouting = { closeDrawerAndNavigate(Vpn5gDestination.ROUTING) },
+                    onOpenPerAppBypass = {
+                        drawerScope.launch { drawerState.close() }
+                        startActivity(
+                            Intent(
+                                this@Vpn5gMainActivity,
+                                PerAppProxyActivity::class.java,
+                            )
+                        )
+                    },
+                    onOpenSupport = {
+                        drawerScope.launch { drawerState.close() }
+                        Utils.openUri(this@Vpn5gMainActivity, SUPPORT_BOT_URL)
+                    },
+                    onLanguageChange = { viewModel.setLanguage(it) },
+                    onThemeModeChange = { viewModel.setThemeMode(it) },
+                )
+            },
+        ) {
         Vpn5gAnimatedBackground {
             Scaffold(
                 containerColor = Color.Transparent,
@@ -3583,22 +3711,28 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             state = uiState,
                             onRefresh = { viewModel.refresh() },
                             onToggleConnect = { toggleConnect() },
-                            onServerTap = { guid -> onServerTap(guid) },
-                            onAutoConnect = { connectBestServer() },
-                            onSelectManualServer = { guid -> viewModel.selectManualServer(guid) },
-                            onSelectAutoMode = { viewModel.selectAutoMode() },
-                            onClearManualFailure = { viewModel.clearManualFailure() },
+                            // v1.1.21: the server list lives on its own
+                            // screen now — home only links to it.
+                            onOpenDrawer = { drawerScope.launch { drawerState.open() } },
+                            onOpenServerSelect = { destination = Vpn5gDestination.SERVER_SELECT },
+                            onOpenRouting = { destination = Vpn5gDestination.ROUTING },
+                            onOpenPerAppBypass = {
+                                startActivity(
+                                    Intent(
+                                        this@Vpn5gMainActivity,
+                                        PerAppProxyActivity::class.java,
+                                    )
+                                )
+                            },
+                            onBellClick = { showBellAnnouncement = true },
                             onRetryConnect = {
                                 requestUserConnect {
                                     viewModel.beginConnect(userInitiated = true)
                                 }
                             },
-                            onLockedCountryTap = { lockedCountry = it },
+                            onSelectAutoMode = { viewModel.selectAutoMode() },
+                            onClearManualFailure = { viewModel.clearManualFailure() },
                             onOpenPremium = { destination = Vpn5gDestination.PREMIUM },
-                            onOpenGiftCode = {
-                                giftCodeRequest++
-                                destination = Vpn5gDestination.PREMIUM
-                            },
                             onOpenUrl = { url -> Utils.openUri(this@Vpn5gMainActivity, url) },
                             onConsumeAutoFailoverNotice = { viewModel.consumeAutoFailoverNotice() },
                             onUpdateDownload = { viewModel.startUpdateDownload() },
@@ -3615,6 +3749,43 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                                 }
                             },
                             onDismissCrashReport = { viewModel.dismissCrashReport() },
+                        )
+                        // v1.1.21: the server list moved out of home
+                        // into its own Lantern-style screen.
+                        Vpn5gDestination.SERVER_SELECT -> Vpn5gServerSelectScreen(
+                            state = uiState,
+                            onBack = { destination = Vpn5gDestination.HOME },
+                            onRefresh = { viewModel.refresh() },
+                            onServerTap = { guid -> onServerTap(guid) },
+                            onAutoConnect = { connectBestServer() },
+                            onSelectManualServer = { guid -> viewModel.selectManualServer(guid) },
+                            onSelectAutoMode = { viewModel.selectAutoMode() },
+                            onLockedCountryTap = { lockedCountry = it },
+                            onOpenPremium = { destination = Vpn5gDestination.PREMIUM },
+                            onOpenGiftCode = {
+                                giftCodeRequest++
+                                destination = Vpn5gDestination.PREMIUM
+                            },
+                        )
+                        // v1.1.21: Lantern routing-mode screen.
+                        Vpn5gDestination.ROUTING -> Vpn5gRoutingScreen(
+                            state = uiState,
+                            onBack = { destination = Vpn5gDestination.HOME },
+                            onModeChange = { viewModel.setRoutingMode(it) },
+                            onDirectFirstChange = { viewModel.setDirectFirst(it) },
+                            onOpenPerAppBypass = {
+                                startActivity(
+                                    Intent(
+                                        this@Vpn5gMainActivity,
+                                        PerAppProxyActivity::class.java,
+                                    )
+                                )
+                            },
+                        )
+                        // v1.1.21: Lantern features page.
+                        Vpn5gDestination.FEATURES -> Vpn5gFeaturesScreen(
+                            onBack = { destination = Vpn5gDestination.HOME },
+                            onOpenPremium = { destination = Vpn5gDestination.PREMIUM },
                         )
                         Vpn5gDestination.PREMIUM -> Vpn5gSubscriptionScreen(
                             state = uiState,
@@ -3646,6 +3817,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                         Vpn5gDestination.GUIDE -> Vpn5gGuideScreen(
                             onBack = { destination = Vpn5gDestination.HOME },
                             onOpenUrl = { url -> Utils.openUri(this@Vpn5gMainActivity, url) },
+                            onOpenFeatures = { destination = Vpn5gDestination.FEATURES },
                         )
                         Vpn5gDestination.ME -> Vpn5gProfileScreen(
                             state = uiState,
@@ -3671,6 +3843,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                 }
             }
         }
+        }
 
         lockedCountry?.let { country ->
             AlertDialog(
@@ -3690,6 +3863,27 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                 },
                 dismissButton = {
                     TextButton(onClick = { lockedCountry = null }) {
+                        Text(stringResource(R.string.vpn5g_close))
+                    }
+                },
+            )
+        }
+
+        // Bell (v1.1.21): the top-bar bell opens the latest
+        // announcement; dismissing it is a no-op (the announcement
+        // card still shows on home until dismissed there).
+        if (showBellAnnouncement) {
+            AlertDialog(
+                onDismissRequest = { showBellAnnouncement = false },
+                title = { Text(stringResource(R.string.vpn5g_notifications)) },
+                text = {
+                    Text(
+                        uiState.announcement?.text
+                            ?: stringResource(R.string.vpn5g_no_announcement)
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showBellAnnouncement = false }) {
                         Text(stringResource(R.string.vpn5g_close))
                     }
                 },
@@ -3750,19 +3944,20 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                     ),
                     label = "vpn5g_nav_indicator",
                 )
-                // Sliding pill behind the selected item.
+                // Sliding pill behind the selected item (v1.1.21:
+                // Lantern teal instead of the old cyan).
                 Box(
                     modifier = Modifier
                         .offset(x = indicatorOffset)
                         .width(itemWidth - 12.dp)
                         .height(44.dp)
                         .clip(RoundedCornerShape(22.dp))
-                        .background(Vpn5gCyan.copy(alpha = 0.18f)),
+                        .background(Vpn5gTeal.copy(alpha = 0.25f)),
                 )
                 Row(modifier = Modifier.fillMaxWidth()) {
                     destinations.forEach { (target, labelRes) ->
                         val selected = target == destination
-                        val iconColor = if (selected) Vpn5gCyan else Vpn5gOnDarkMuted
+                        val iconColor = if (selected) Vpn5gTealLight else Vpn5gOnDarkMuted
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
@@ -3994,7 +4189,7 @@ private fun Vpn5gUpdateCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(Vpn5gCyan.copy(alpha = 0.18f))
+            .background(Vpn5gTeal.copy(alpha = 0.25f))
             .padding(16.dp),
     ) {
         Text(
@@ -4014,7 +4209,7 @@ private fun Vpn5gUpdateCard(
             LinearProgressIndicator(
                 progress = { progress },
                 modifier = Modifier.fillMaxWidth(),
-                color = Vpn5gCyan,
+                color = Vpn5gTealLight,
                 trackColor = Vpn5gOnDark.copy(alpha = 0.15f),
             )
             Spacer(Modifier.height(8.dp))
@@ -4035,8 +4230,8 @@ private fun Vpn5gUpdateCard(
                 Button(
                     onClick = onUpdate,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Vpn5gCyan,
-                        contentColor = Color.Black,
+                        containerColor = Vpn5gTeal,
+                        contentColor = Color.White,
                     ),
                     modifier = Modifier.weight(1f),
                 ) {
@@ -4062,15 +4257,18 @@ fun Vpn5gHomeScreen(
     state: Vpn5gHomeUiState,
     onRefresh: () -> Unit,
     onToggleConnect: () -> Unit,
-    onServerTap: (String) -> Unit,
-    onAutoConnect: () -> Unit,
-    onSelectManualServer: (String) -> Boolean,
+    onOpenDrawer: () -> Unit,
+    onOpenServerSelect: () -> Unit,
+    onOpenRouting: () -> Unit,
+    onOpenPerAppBypass: () -> Unit,
+    onBellClick: () -> Unit,
+    onRetryConnect: () -> Unit,
+    // Manual-failure card (v1.1.5 §3): the pick is made on the server
+    // screen, but the failure surfaces on home — returning to auto and
+    // clearing the failure are still home actions.
     onSelectAutoMode: () -> Unit,
     onClearManualFailure: () -> Unit,
-    onRetryConnect: () -> Unit,
-    onLockedCountryTap: (String) -> Unit,
     onOpenPremium: () -> Unit,
-    onOpenGiftCode: () -> Unit,
     onOpenUrl: (String) -> Unit,
     onConsumeAutoFailoverNotice: () -> Unit,
     onUpdateDownload: () -> Unit,
@@ -4081,66 +4279,7 @@ fun Vpn5gHomeScreen(
     onDismissCrashReport: () -> Unit = {},
 ) {
     var entered by remember { mutableStateOf(false) }
-    var serverTab by rememberSaveable { mutableStateOf(Vpn5gServerTab.FREE) }
-    var searchQuery by rememberSaveable { mutableStateOf("") }
-    // Free-servers picker (v1.1.5 §3): the row expands to a country
-    // list, then to that country's servers. Transient presentation
-    // state only; the pick itself lives in the ViewModel.
-    var freePickerExpanded by rememberSaveable { mutableStateOf(false) }
-    var pickerCountry by rememberSaveable { mutableStateOf<String?>(null) }
-    // Auto-row info panel (v1.1.5 §4). Transient presentation state only.
-    var autoInfoExpanded by rememberSaveable { mutableStateOf(false) }
-    // Premium tab (v1.1.2): country groups start collapsed; tapping a
-    // country reveals its servers. Transient presentation state only.
-    var specialExpanded by remember { mutableStateOf(setOf<String>()) }
     LaunchedEffect(Unit) { entered = true }
-
-    val displayCountries = state.countries
-    val searchedCountries = if (searchQuery.isBlank()) {
-        displayCountries
-    } else {
-        displayCountries.mapNotNull { section ->
-            val labelMatch = section.label.contains(searchQuery, ignoreCase = true)
-            val servers = if (labelMatch) {
-                section.servers
-            } else {
-                section.servers.filter {
-                    it.name.contains(searchQuery, ignoreCase = true) ||
-                        it.countryNameFa.contains(searchQuery, ignoreCase = true)
-                }
-            }
-            if (servers.isEmpty()) null else section.copy(servers = servers)
-        }
-    }
-    // Split each country into a free copy (top-20 by ping only) and a
-    // locked copy (everything else), so a section never mixes tiers and
-    // free counts are per-server, never per-section.
-    val splitSections = searchedCountries.flatMap { section ->
-        val free = section.servers.filter { it.isFree }
-        val locked = section.servers.filter { !it.isFree }
-        listOfNotNull(
-            if (free.isNotEmpty()) section.copy(servers = free, isFree = true) else null,
-            if (locked.isNotEmpty()) section.copy(servers = locked, isFree = false) else null,
-        )
-    }
-    val freeSections = splitSections.filter { it.isFree }
-    val lockedSections = splitSections.filter { !it.isFree }
-    val freeCount = freeSections.sumOf { it.servers.size }
-    // Free servers always have a real through-the-proxy ping (v1.1.7
-    // top-20 selection), so the fastest free server is the best one;
-    // never fall back to a TCP-only, no-ping or locked server.
-    // v1.1.14: servers that verified on the CURRENT operator sort
-    // first — the operator's own history beats raw ping; with no
-    // history for the operator this is exactly the ping order.
-    val bestServer = run {
-        val pool = freeSections.flatMap { it.servers }
-            .filter { it.hasRealPing && it.pingMillis > 0 }
-        val preferred = pool.filter { it.operatorVerified }.ifEmpty { pool }
-        preferred.minByOrNull { it.pingMillis }
-    }
-    // ALL-tab filter pills (v1.1.14): null = show both, subscription
-    // first; SUB = subscription only; FREE = free only.
-    var allFilter by rememberSaveable { mutableStateOf<String?>(null) }
 
     // The home text comes from the connect state machine only (v1.1.4
     // §1, v1.1.5 §2): "connected" appears only after real traffic passed
@@ -4165,10 +4304,20 @@ fun Vpn5gHomeScreen(
         Vpn5gConnectState.FAILED -> colorPingRed
         Vpn5gConnectState.IDLE -> Vpn5gOnDarkMuted
         // RETRYING is a connecting state, not a failure: the chain is
-        // switching servers, so it reads cyan like the other
+        // switching servers, so it reads teal like the other
         // connecting states (v1.1.5 refinement).
-        else -> Vpn5gCyan
+        else -> Vpn5gTealLight
     }
+
+    // Best free server (v1.1.21): the canonical auto pick, for the
+    // status card's smart-location row — the same pick auto-connect
+    // uses, so the row never promises a server the engine would not
+    // try first. A config with no ping result is never returned.
+    val bestServer = Vpn5gAutoConnect.pickBestServer(state.countries)
+    // Split tunnel is live only under Smart routing with direct-first
+    // on — the single tested rule in [Vpn5gRouting.isSplitTunnelActive];
+    // the row shows that derived state, never a separate stored flag.
+    val splitActive = Vpn5gRouting.isSplitTunnelActive(state.routingMode, state.directFirst)
 
     PullToRefreshBox(
         isRefreshing = state.isRefreshing,
@@ -4184,50 +4333,40 @@ fun Vpn5gHomeScreen(
         ) {
             item {
                 Spacer(Modifier.height(8.dp))
-                // Header: shield logo + brand + status pill.
+                // Top bar (Lantern, v1.1.21): hamburger + bell on the
+                // sides, the shield logo + red-5G wordmark centred.
                 Vpn5gStaggeredItem(index = 0, visible = entered) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Vpn5gPulsingLogo(size = 48.dp)
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = stringResource(R.string.vpn5g_home_brand),
-                                color = Vpn5gOnDark,
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        IconButton(
+                            onClick = onOpenDrawer,
+                            modifier = Modifier.align(Alignment.CenterStart),
+                        ) {
+                            Vpn5gMenuIcon(color = Vpn5gOnDark, size = 26.dp)
+                        }
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.align(Alignment.Center),
+                        ) {
+                            Vpn5gShieldLogo(width = 44.dp)
+                            Vpn5gBrandText(fontSize = 20.sp)
                             Text(
                                 text = stringResource(R.string.vpn5g_app_tagline),
                                 color = Vpn5gOnDarkMuted,
                                 fontSize = 12.sp,
                             )
                         }
-                        Spacer(Modifier.weight(1f))
-                        // Premium pill (v1.1.12): subscribers only.
-                        if (state.isSubscriber) {
-                            Vpn5gPremiumPill()
-                            Spacer(Modifier.width(8.dp))
-                        }
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    if (state.connectState == Vpn5gConnectState.CONNECTED) colorPing else Vpn5gOnDarkMuted.copy(alpha = 0.4f)
-                                )
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.align(Alignment.CenterEnd),
                         ) {
-                            Text(
-                                text = stringResource(
-                                    if (state.connectState == Vpn5gConnectState.CONNECTED) R.string.vpn5g_connected
-                                    else R.string.vpn5g_disconnected
-                                ),
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
+                            // Premium pill (v1.1.12): subscribers only.
+                            if (state.isSubscriber) {
+                                Vpn5gPremiumPill()
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            IconButton(onClick = onBellClick) {
+                                Vpn5gBellIcon(color = Vpn5gOnDark, size = 26.dp)
+                            }
                         }
                     }
                 }
@@ -4264,13 +4403,36 @@ fun Vpn5gHomeScreen(
             }
 
             item {
-                // Big circular power button with a cyan ring.
+                // Big circular power button with a blue glow ring.
                 Vpn5gStaggeredItem(index = 2, visible = entered) {
                     Vpn5gPowerButton(
                         connectState = state.connectState,
                         remainingFraction = state.remainingMillis
                             ?.let { (it / (30L * 60_000L).toFloat()).coerceIn(0f, 1f) },
                         onClick = onToggleConnect,
+                    )
+                }
+            }
+
+            // Tap hint under the button: connect when idle, disconnect
+            // when connected. Intermediate states already say what is
+            // happening in the status text above.
+            if (state.connectState == Vpn5gConnectState.IDLE ||
+                state.connectState == Vpn5gConnectState.CONNECTED
+            ) {
+                item {
+                    Text(
+                        text = stringResource(
+                            if (state.connectState == Vpn5gConnectState.CONNECTED) {
+                                R.string.vpn5g_tap_to_disconnect
+                            } else {
+                                R.string.vpn5g_tap_to_connect
+                            }
+                        ),
+                        color = Vpn5gOnDarkMuted,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
             }
@@ -4290,35 +4452,143 @@ fun Vpn5gHomeScreen(
                 }
             }
 
-            if (state.isRunning) {
-                item {
-                    // Current server + exit IP + ping + 30-minute countdown.
-                    Vpn5gStaggeredItem(index = 3, visible = entered) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    if (state.isSubscriber) Vpn5gGold.copy(alpha = 0.12f)
-                                    else Vpn5gOnDark.copy(alpha = 0.08f)
-                                )
-                                .border(
-                                    width = if (state.isSubscriber) 1.dp else 0.dp,
-                                    color = Vpn5gGold.copy(alpha = 0.5f),
-                                    shape = RoundedCornerShape(16.dp),
-                                )
-                                .padding(16.dp)
+            // VPN status card (Lantern, v1.1.21): the current server,
+            // smart location, routing and split tunnel in one card.
+            // The current-server row only exists while a session runs;
+            // the other three rows are settings and always apply.
+            item {
+                Vpn5gStaggeredItem(index = 3, visible = entered) {
+                    Vpn5gGlassCard {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
-                                text = stringResource(R.string.vpn5g_current_server),
-                                color = Vpn5gOnDarkMuted,
-                                fontSize = 13.sp,
-                            )
-                            Text(
-                                text = state.currentServerName
-                                    ?: stringResource(R.string.value_unknown),
+                                text = stringResource(R.string.vpn5g_vpn_status_title),
                                 color = Vpn5gOnDark,
-                                fontSize = 17.sp,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(
+                                        if (state.connectState == Vpn5gConnectState.CONNECTED) colorPing
+                                        else Vpn5gOnDarkMuted.copy(alpha = 0.4f)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(
+                                        if (state.connectState == Vpn5gConnectState.CONNECTED) R.string.vpn5g_connected
+                                        else R.string.vpn5g_disconnected
+                                    ),
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                        if (state.isRunning && state.currentServerName != null) {
+                            val currentPingText =
+                                if (state.currentHasRealPing && state.currentPingMillis > 0L) {
+                                    stringResource(
+                                        R.string.vpn5g_ping_ms,
+                                        state.currentPingMillis,
+                                    )
+                                } else {
+                                    "—"
+                                }
+                            val protocol = state.currentServerProtocol
+                                .uppercase().ifBlank { null }
+                            Vpn5gStatusRow(
+                                title = state.currentServerName,
+                                subtitle = listOfNotNull(protocol, currentPingText)
+                                    .joinToString(" · "),
+                                onClick = onOpenServerSelect,
+                                leading = {
+                                    Text(
+                                        text = state.currentServerFlag,
+                                        fontSize = 22.sp,
+                                    )
+                                },
+                            )
+                        }
+                        Vpn5gStatusRow(
+                            title = stringResource(R.string.vpn5g_smart_location),
+                            subtitle = bestServer?.let { server ->
+                                val pingText =
+                                    if (server.hasRealPing && server.pingMillis > 0L) {
+                                        stringResource(
+                                            R.string.vpn5g_ping_ms,
+                                            server.pingMillis,
+                                        )
+                                    } else {
+                                        "—"
+                                    }
+                                server.flag + " " + displayCountryName(
+                                    server,
+                                    stringResource(R.string.vpn5g_country_unknown),
+                                ) + " · " + pingText
+                            } ?: stringResource(R.string.vpn5g_empty_list),
+                            onClick = onOpenServerSelect,
+                            leading = {
+                                Vpn5gGlobeIcon(color = Vpn5gTeal, size = 24.dp)
+                            },
+                        )
+                        Vpn5gStatusRow(
+                            title = stringResource(R.string.vpn5g_routing_title),
+                            subtitle = when (state.routingMode) {
+                                Vpn5gRoutingMode.SMART -> stringResource(
+                                    R.string.vpn5g_routing_smart
+                                ) + " · " + stringResource(
+                                    if (state.directFirst) R.string.vpn5g_split_on
+                                    else R.string.vpn5g_split_off
+                                )
+                                Vpn5gRoutingMode.FULL -> stringResource(
+                                    R.string.vpn5g_routing_full
+                                )
+                            },
+                            onClick = onOpenRouting,
+                            leading = {
+                                Vpn5gRoutesIcon(color = Vpn5gTeal, size = 24.dp)
+                            },
+                        )
+                        Vpn5gStatusRow(
+                            title = stringResource(R.string.vpn5g_split_tunnel_title),
+                            subtitle = stringResource(
+                                if (splitActive) R.string.vpn5g_split_on
+                                else R.string.vpn5g_split_off
+                            ),
+                            onClick = onOpenPerAppBypass,
+                            leading = {
+                                Vpn5gAppsIcon(color = Vpn5gTeal, size = 24.dp)
+                            },
+                        )
+                        // Session footer (v1.1.11/1.1.14): subscribers
+                        // have no 30-minute timer; the gift tier shows
+                        // its remaining hours; free shows the countdown.
+                        // The verified exit IP shows only after the
+                        // tunnel proved real traffic.
+                        if (state.isRunning) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = when {
+                                    state.isSubscriber -> stringResource(
+                                        R.string.vpn5g_session_unlimited
+                                    )
+                                    state.isGift -> stringResource(
+                                        R.string.vpn5g_gift_remaining_hours,
+                                        state.giftRemainingHours,
+                                    )
+                                    else -> stringResource(
+                                        R.string.vpn5g_remaining_time,
+                                        formatRemaining(state.remainingMillis),
+                                    )
+                                },
+                                color = Vpn5gOnDark,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                             )
                             if (state.tunnelState == Vpn5gTunnelState.VERIFIED &&
@@ -4334,89 +4604,64 @@ fun Vpn5gHomeScreen(
                                     fontSize = 14.sp,
                                 )
                             }
-                            Spacer(Modifier.height(4.dp))
-                            Row {
-                                Text(
-                                    // v1.1.7: a TCP-only ping is never shown
-                                    // as a number — only a real
-                                    // through-the-proxy delay is.
-                                    text = if (state.currentHasRealPing) {
-                                        stringResource(
-                                            R.string.vpn5g_ping_ms,
-                                            state.currentPingMillis,
-                                        )
-                                    } else {
-                                        "—"
-                                    },
-                                    color = if (state.currentPingMillis < 0L) colorPingRed else colorPing,
-                                    fontSize = 14.sp,
-                                )
-                                Spacer(Modifier.weight(1f))
-                                Text(
-                                    // v1.1.11: subscribers have no
-                                    // 30-minute timer — no countdown.
-                                    // v1.1.14: same for the gift tier;
-                                    // its remaining hours are shown.
-                                    text = when {
-                                        state.isSubscriber -> stringResource(
-                                            R.string.vpn5g_session_unlimited
-                                        )
-                                        state.isGift -> stringResource(
-                                            R.string.vpn5g_gift_remaining_hours,
-                                            state.giftRemainingHours,
-                                        )
-                                        else -> stringResource(
-                                            R.string.vpn5g_remaining_time,
-                                            formatRemaining(state.remainingMillis),
-                                        )
-                                    },
-                                    color = Vpn5gOnDark,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            }
-                            // Live tunnel speeds (v1.1.14): tunnel-only
-                            // (proxy) rates, ~1 s poll; dashes while the
-                            // counter has no data yet — never a made-up
-                            // number.
-                            Spacer(Modifier.height(4.dp))
-                            Row {
-                                Text(
-                                    text = stringResource(R.string.vpn5g_speed_download),
-                                    color = Vpn5gOnDarkMuted,
-                                    fontSize = 14.sp,
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = if (state.downloadSpeedBps > 0L) {
-                                        state.downloadSpeedBps.toSpeedString()
-                                    } else {
-                                        "—"
-                                    },
-                                    color = colorPing,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                                Spacer(Modifier.width(16.dp))
-                                Text(
-                                    text = stringResource(R.string.vpn5g_speed_upload),
-                                    color = Vpn5gOnDarkMuted,
-                                    fontSize = 14.sp,
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = if (state.uploadSpeedBps > 0L) {
-                                        state.uploadSpeedBps.toSpeedString()
-                                    } else {
-                                        "—"
-                                    },
-                                    color = colorPing,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            }
                         }
                     }
+                }
+            }
+
+            // Live tunnel speeds (v1.1.14): tunnel-only (proxy) rates,
+            // ~1 s poll; dashes while the counter has no data yet —
+            // never a made-up number.
+            if (state.isRunning) {
+                item {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Vpn5gGlassCard(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.vpn5g_speed_download),
+                                color = Vpn5gOnDarkMuted,
+                                fontSize = 13.sp,
+                            )
+                            Text(
+                                text = if (state.downloadSpeedBps > 0L) {
+                                    state.downloadSpeedBps.toSpeedString()
+                                } else {
+                                    "—"
+                                },
+                                color = colorPing,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        Vpn5gGlassCard(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.vpn5g_speed_upload),
+                                color = Vpn5gOnDarkMuted,
+                                fontSize = 13.sp,
+                            )
+                            Text(
+                                text = if (state.uploadSpeedBps > 0L) {
+                                    state.uploadSpeedBps.toSpeedString()
+                                } else {
+                                    "—"
+                                },
+                                color = colorPing,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Pro upgrade card (Lantern, v1.1.21): replaces the old
+            // premium + redeem banners — one gold-bordered card to
+            // Premium, where the plans and the code boxes live.
+            if (!state.isSubscriber) {
+                item {
+                    Vpn5gProUpgradeCard(onOpenPremium = onOpenPremium)
                 }
             }
 
@@ -4430,7 +4675,7 @@ fun Vpn5gHomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .background(Vpn5gAccent.copy(alpha = 0.25f))
+                            .background(Vpn5gTeal.copy(alpha = 0.2f))
                             .padding(12.dp),
                     )
                 }
@@ -4448,7 +4693,7 @@ fun Vpn5gHomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .background(Vpn5gCyan.copy(alpha = 0.2f))
+                            .background(Vpn5gTeal.copy(alpha = 0.2f))
                             .padding(12.dp),
                     )
                     // Inside item{} so LaunchedEffect runs in a @Composable context.
@@ -4512,7 +4757,7 @@ fun Vpn5gHomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .background(Vpn5gAccent.copy(alpha = 0.25f))
+                            .background(Vpn5gTeal.copy(alpha = 0.2f))
                             .padding(12.dp),
                     )
                 }
@@ -4565,616 +4810,6 @@ fun Vpn5gHomeScreen(
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-
-            if (displayCountries.isEmpty() && !state.isLoading && !state.isRefreshing) {
-                item {
-                    Text(
-                        text = stringResource(R.string.vpn5g_empty_list),
-                        color = Vpn5gOnDarkMuted,
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-
-            // "Free Servers" picker (v1.1.5 §3): a real dropdown — tap
-            // the row for the country list (flag + server count + best
-            // ping), tap a country for its servers with health + real
-            // ping, tap a server to pick it by hand. The pick is
-            // persisted and validated exactly like the auto pick; a bad
-            // pick is refused with the precise reason, never silently
-            // replaced. The list below (tabs + sections) is untouched.
-            if (freeSections.isNotEmpty() && serverTab != Vpn5gServerTab.SPECIAL) {
-                item(key = "free_servers_row") {
-                    val manualServer = state.manualGuid?.let { guid ->
-                        freeSections.flatMap { it.servers }
-                            .firstOrNull { it.guid == guid }
-                    }
-                    val manualSubtitle =
-                        if (state.connectMode == Vpn5gConnectMode.MANUAL && manualServer != null) {
-                            // v1.1.7: the ping suffix is shown only for a
-                            // real through-the-proxy delay, never for a
-                            // TCP-only one.
-                            stringResource(R.string.vpn5g_manual_label) + ": " +
-                                manualServer.flag + " " + displayCountryName(
-                                manualServer,
-                                stringResource(R.string.vpn5g_country_unknown),
-                            ) + if (manualServer.hasRealPing) {
-                                " — " + stringResource(
-                                    R.string.vpn5g_ping_ms, manualServer.pingMillis
-                                )
-                            } else {
-                                ""
-                            }
-                        } else {
-                            null
-                        }
-                    Vpn5gExpandableSection(
-                        title = stringResource(R.string.vpn5g_free_servers),
-                        subtitle = manualSubtitle,
-                        badge = stringResource(R.string.vpn5g_servers_count, freeCount),
-                        leading = { Vpn5gBoltIcon(color = Vpn5gCyan, size = 26.dp) },
-                        expanded = freePickerExpanded,
-                        onToggleExpand = {
-                            freePickerExpanded = !freePickerExpanded
-                            if (!freePickerExpanded) pickerCountry = null
-                        },
-                    ) {
-                        if (pickerCountry == null) {
-                            freeSections.forEach { section ->
-                                val bestPing = section.servers
-                                    .filter { it.hasRealPing && it.pingMillis > 0 }
-                                    .minOfOrNull { it.pingMillis }
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .clickable(
-                                            role = Role.Button,
-                                            onClickLabel = section.label,
-                                        ) { pickerCountry = section.label }
-                                        .padding(vertical = 10.dp),
-                                ) {
-                                    Text(
-                                        text = section.label,
-                                        color = Vpn5gOnDark,
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    Text(
-                                        text = stringResource(
-                                            R.string.vpn5g_servers_count,
-                                            section.servers.size,
-                                        ),
-                                        color = Vpn5gOnDarkMuted,
-                                        fontSize = 13.sp,
-                                    )
-                                    if (bestPing != null) {
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(
-                                            text = stringResource(
-                                                R.string.vpn5g_ping_ms, bestPing
-                                            ),
-                                            color = colorPing,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                        )
-                                    }
-                                    Spacer(Modifier.width(8.dp))
-                                    Vpn5gChevronIcon(color = Vpn5gOnDarkMuted)
-                                }
-                            }
-                        } else {
-                            val pickedSection = freeSections
-                                .firstOrNull { it.label == pickerCountry }
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable(
-                                        role = Role.Button,
-                                        onClickLabel = stringResource(
-                                            R.string.vpn5g_picker_back
-                                        ),
-                                    ) { pickerCountry = null }
-                                    .padding(vertical = 10.dp),
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.vpn5g_picker_back),
-                                    color = Vpn5gAccentLight,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            }
-                            pickedSection?.servers?.forEach { server ->
-                                val selected = server.guid == state.manualGuid
-                                val hasPing = server.hasRealPing && server.pingMillis > 0
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(
-                                            if (selected) Vpn5gAccent.copy(alpha = 0.35f)
-                                            else Color.Transparent
-                                        )
-                                        .clickable(
-                                            enabled = hasPing,
-                                            role = Role.Button,
-                                            onClickLabel = displayCountryName(
-                                                server,
-                                                stringResource(
-                                                    R.string.vpn5g_country_unknown
-                                                ),
-                                            ),
-                                        ) {
-                                            if (onSelectManualServer(server.guid)) {
-                                                freePickerExpanded = false
-                                                pickerCountry = null
-                                            }
-                                        }
-                                        .padding(horizontal = 8.dp, vertical = 10.dp),
-                                ) {
-                                    Text(
-                                        text = server.flag,
-                                        fontSize = 22.sp,
-                                        modifier = Modifier.padding(end = 12.dp),
-                                    )
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = displayCountryName(
-                                                server,
-                                                stringResource(
-                                                    R.string.vpn5g_country_unknown
-                                                ),
-                                            ),
-                                            color = Vpn5gOnDark,
-                                            fontSize = 16.sp,
-                                            fontWeight = FontWeight.Bold,
-                                        )
-                                        Text(
-                                            text = if (hasPing) {
-                                                stringResource(
-                                                    R.string.vpn5g_picker_healthy
-                                                )
-                                            } else {
-                                                stringResource(
-                                                    R.string.vpn5g_picker_no_ping
-                                                )
-                                            },
-                                            color = if (hasPing) {
-                                                colorPing
-                                            } else {
-                                                Vpn5gOnDarkMuted
-                                            },
-                                            fontSize = 13.sp,
-                                        )
-                                    }
-                                    Text(
-                                        text = if (hasPing) {
-                                            stringResource(
-                                                R.string.vpn5g_ping_ms,
-                                                server.pingMillis,
-                                            )
-                                        } else {
-                                            "—"
-                                        },
-                                        color = colorPing,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                    )
-                                    if (selected) {
-                                        Spacer(Modifier.width(8.dp))
-                                        Vpn5gCheckIcon(color = Vpn5gCyan, size = 20.dp)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // "Auto" row (v1.1.5 §3–§4): the best free server, one tap to
-            // connect — it works independently of any manual pick (tapping
-            // it clears the manual pick first). The chevron opens an info
-            // panel explaining auto mode and, while a manual pick is
-            // active, offers the return to auto.
-            if (bestServer != null && serverTab != Vpn5gServerTab.SPECIAL) {
-                item(key = "auto_row") {
-                    Vpn5gExpandableSection(
-                        title = stringResource(R.string.vpn5g_auto_server),
-                        subtitle = bestServer.flag + " " + displayCountryName(
-                            bestServer,
-                            stringResource(R.string.vpn5g_country_unknown),
-                        ),
-                        badge = if (bestServer.hasRealPing && bestServer.pingMillis > 0L) {
-                            stringResource(R.string.vpn5g_ping_ms, bestServer.pingMillis)
-                        } else {
-                            "—"
-                        },
-                        leading = { Vpn5gRoutesIcon(color = Vpn5gCyan, size = 26.dp) },
-                        expanded = autoInfoExpanded,
-                        onToggleExpand = { autoInfoExpanded = !autoInfoExpanded },
-                        onHeaderClick = onAutoConnect,
-                    ) {
-                        Text(
-                            text = stringResource(R.string.vpn5g_auto_info_body),
-                            color = Vpn5gOnDarkMuted,
-                            fontSize = 14.sp,
-                        )
-                        if (state.connectMode == Vpn5gConnectMode.MANUAL) {
-                            Spacer(Modifier.height(12.dp))
-                            Button(
-                                onClick = {
-                                    onSelectAutoMode()
-                                    autoInfoExpanded = false
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Vpn5gAccent,
-                                    contentColor = Color.White,
-                                ),
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(
-                                    text = stringResource(
-                                        R.string.vpn5g_manual_back_to_auto
-                                    ),
-                                    fontSize = 15.sp,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Server-list tabs: Free / All locations / Special (X-VPN style).
-            item(key = "server_tabs") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Vpn5gServerTab.entries.forEach { tab ->
-                        val selected = serverTab == tab
-                        val tabLabelRes = when (tab) {
-                            Vpn5gServerTab.FREE -> R.string.vpn5g_tab_free
-                            Vpn5gServerTab.ALL -> R.string.vpn5g_tab_all
-                            Vpn5gServerTab.SPECIAL -> R.string.vpn5g_tab_special
-                        }
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (selected) Vpn5gOnDark.copy(alpha = 0.12f)
-                                    else Color.Transparent
-                                )
-                                .clickable(
-                                    role = Role.Button,
-                                    onClickLabel = stringResource(tabLabelRes),
-                                ) { serverTab = tab }
-                                .padding(vertical = 10.dp),
-                        ) {
-                            Text(
-                                text = stringResource(tabLabelRes),
-                                color = if (selected) Vpn5gCyan else Vpn5gOnDarkMuted,
-                                fontSize = 15.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Premium promo banner (no prices here — plans live on Premium).
-            if (searchQuery.isBlank()) {
-                item(key = "premium_banner") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Vpn5gCyan.copy(alpha = 0.15f))
-                            .clickable(
-                                role = Role.Button,
-                                onClickLabel = stringResource(R.string.vpn5g_premium_banner_title),
-                            ) { onOpenPremium() }
-                            .padding(16.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.vpn5g_premium_banner_title),
-                            color = Vpn5gCyan,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = stringResource(R.string.vpn5g_premium_banner_body),
-                            color = Vpn5gOnDark,
-                            fontSize = 14.sp,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_premium_banner_button),
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-            }
-
-            // Redeem banner (v1.1.12): a visible "activate with code"
-            // entry on the home screen for free users; subscribers
-            // already have a plan, so it hides for them (the Premium
-            // screen keeps its redeem section for a further code).
-            if (searchQuery.isBlank() && !state.isSubscriber) {
-                item(key = "redeem_banner") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Vpn5gGold.copy(alpha = 0.15f))
-                            .clickable(
-                                role = Role.Button,
-                                onClickLabel = stringResource(R.string.vpn5g_redeem_title),
-                            ) { onOpenPremium() }
-                            .padding(16.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.vpn5g_redeem_title),
-                            color = Vpn5gGold,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = stringResource(R.string.vpn5g_redeem_banner_body),
-                            color = Vpn5gOnDark,
-                            fontSize = 14.sp,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vpn5g_redeem_banner_button),
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-            }
-
-            // Recommended: the fastest free server, one tap to connect.
-            // v1.1.14: on the FIRST page (home) — shown on the Free tab
-            // too, not only on All. Hidden on the Special tab only.
-            if (bestServer != null && searchQuery.isBlank() &&
-                serverTab != Vpn5gServerTab.SPECIAL
-            ) {
-                item(key = "recommended_header") {
-                    Text(
-                        text = stringResource(R.string.vpn5g_recommended),
-                        color = Vpn5gOnDarkMuted,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Start,
-                    )
-                }
-                item(key = "recommended_fastest") {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Vpn5gOnDark.copy(alpha = 0.06f))
-                            .clickable(
-                                role = Role.Button,
-                                onClickLabel = displayCountryName(
-                                    bestServer,
-                                    stringResource(R.string.vpn5g_country_unknown),
-                                ),
-                            ) { onServerTap(bestServer.guid) }
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                    ) {
-                        Text(
-                            text = bestServer.flag,
-                            fontSize = 22.sp,
-                            modifier = Modifier.padding(end = 12.dp),
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = displayCountryName(
-                                    bestServer,
-                                    stringResource(R.string.vpn5g_country_unknown),
-                                ),
-                                color = Vpn5gOnDark,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Text(
-                                text = stringResource(R.string.vpn5g_server_subtitle),
-                                color = Vpn5gOnDarkMuted,
-                                fontSize = 13.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Text(
-                            text = if (bestServer.hasRealPing && bestServer.pingMillis > 0L) {
-                                stringResource(R.string.vpn5g_ping_ms, bestServer.pingMillis)
-                            } else {
-                                "—"
-                            },
-                            color = colorPing,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-            }
-
-            // Search by country or server name. Hidden on the Free tab
-            // (v1.1.2): no server list is shown there.
-            if (serverTab != Vpn5gServerTab.FREE) {
-                item(key = "server_search") {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text(stringResource(R.string.vpn5g_search_hint)) },
-                        leadingIcon = { Vpn5gSearchIcon(color = Vpn5gOnDarkMuted, size = 20.dp) },
-                        singleLine = true,
-                        colors = vpn5gSearchFieldColors(),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-
-            // Free tab (v1.1.2): no server rows at all — only the
-            // free-service picker and the auto row above. The list is
-            // always shown on the other tabs (v1.1.5 §3: the free-servers
-            // row is now the picker, not a list toggle).
-            // v1.1.14: on the ALL tab the subscription sections come
-            // FIRST, then free — and the two floating filter pills
-            // (اشتراکی / رایگان, subscription first) narrow the list.
-            if (serverTab == Vpn5gServerTab.ALL) {
-                item(key = "all_filter_pills") {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        listOf(
-                            "sub" to R.string.vpn5g_filter_sub,
-                            "free" to R.string.vpn5g_filter_free,
-                        ).forEach { (key, labelRes) ->
-                            val selected = allFilter == key
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(
-                                        if (selected) Vpn5gCyan.copy(alpha = 0.25f)
-                                        else Vpn5gOnDark.copy(alpha = 0.08f)
-                                    )
-                                    .border(
-                                        width = if (selected) 1.dp else 0.dp,
-                                        color = Vpn5gCyan,
-                                        shape = RoundedCornerShape(20.dp),
-                                    )
-                                    .clickable(
-                                        role = Role.Button,
-                                        onClickLabel = stringResource(labelRes),
-                                    ) {
-                                        allFilter = if (selected) null else key
-                                    }
-                                    .padding(vertical = 10.dp),
-                            ) {
-                                Text(
-                                    text = stringResource(labelRes),
-                                    color = if (selected) Vpn5gCyan else Vpn5gOnDark,
-                                    fontSize = 14.sp,
-                                    fontWeight = if (selected) {
-                                        FontWeight.Bold
-                                    } else {
-                                        FontWeight.Normal
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            // Gift-code button (v1.1.15, C): GIFT codes live in Premium
-            // — this button opens Premium straight at the gift-code
-            // section. It is NOT a buy button; no purchase lives in
-            // All Locations.
-            if (serverTab == Vpn5gServerTab.ALL) {
-                item(key = "all_gift_code") {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Vpn5gGold.copy(alpha = 0.15f))
-                            .border(
-                                width = 1.dp,
-                                color = Vpn5gGold,
-                                shape = RoundedCornerShape(20.dp),
-                            )
-                            .clickable(
-                                role = Role.Button,
-                                onClickLabel = stringResource(R.string.vpn5g_gift_code_button),
-                            ) { onOpenGiftCode() }
-                            .padding(vertical = 10.dp),
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Vpn5gGiftIcon(color = Vpn5gGold, size = 20.dp)
-                            Text(
-                                text = stringResource(R.string.vpn5g_gift_code_button),
-                                color = Vpn5gGold,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                    }
-                }
-            }
-            val ordered = when (serverTab) {
-                Vpn5gServerTab.FREE -> emptyList()
-                Vpn5gServerTab.ALL -> when (allFilter) {
-                    "sub" -> lockedSections.map { it to true }
-                    "free" -> freeSections.map { it to false }
-                    else -> lockedSections.map { it to true } +
-                        freeSections.map { it to false }
-                }
-                Vpn5gServerTab.SPECIAL -> lockedSections.map { it to true }
-            }
-            var promoShown = false
-            ordered.forEach { (country, locked) ->
-                if (serverTab == Vpn5gServerTab.ALL && locked && !promoShown) {
-                    item(key = "bot_promo") {
-                        Vpn5gBotPromoCard(onOpenPremium = onOpenPremium)
-                    }
-                    promoShown = true
-                }
-                item(key = "country_${if (locked) "locked" else "free"}_${country.label}") {
-                    // Premium tab (v1.1.2): fast servers grouped by
-                    // country; tapping a country reveals its servers.
-                    val expandable = serverTab == Vpn5gServerTab.SPECIAL
-                    Vpn5gCountrySection(
-                        country = country,
-                        onServerTap = if (locked) {
-                            {}
-                        } else {
-                            onServerTap
-                        },
-                        onLockedTap = if (locked) {
-                            { onLockedCountryTap(country.label) }
-                        } else {
-                            null
-                        },
-                        expandable = expandable,
-                        expanded = !expandable ||
-                            country.label in specialExpanded,
-                        onToggleExpand = if (expandable) {
-                            {
-                                specialExpanded =
-                                    if (country.label in specialExpanded) {
-                                        specialExpanded - country.label
-                                    } else {
-                                        specialExpanded + country.label
-                                    }
-                            }
-                        } else {
-                            null
-                        },
                     )
                 }
             }
@@ -5292,7 +4927,7 @@ private fun Vpn5gCrashReportCard(
                 Button(
                     onClick = onShare,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Vpn5gAccent,
+                        containerColor = Vpn5gTeal,
                         contentColor = Color.White,
                     ),
                     modifier = Modifier.weight(1f),
@@ -5315,15 +4950,6 @@ private fun Vpn5gCrashReportCard(
             }
         }
     }
-}
-
-/**
- * The only name a server row may show: the Persian country name, the
- * country key when no Persian name is known, or [unknown] when neither
- * exists. The config remark is never displayed anywhere.
- */
-private fun displayCountryName(server: Vpn5gServerUi, unknown: String): String {
-    return server.countryNameFa.ifBlank { server.country }.ifBlank { unknown }
 }
 
 /**
@@ -5368,7 +4994,7 @@ private fun Vpn5gErrorCard(
             Button(
                 onClick = onPrimaryClick,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Vpn5gAccent,
+                    containerColor = Vpn5gTeal,
                     contentColor = Color.White,
                 ),
                 modifier = Modifier.weight(1f),
@@ -5382,7 +5008,7 @@ private fun Vpn5gErrorCard(
                 ) {
                     Text(
                         text = secondaryLabel,
-                        color = Vpn5gAccentLight,
+                        color = Vpn5gTealLight,
                         fontSize = 15.sp,
                     )
                 }
@@ -5391,7 +5017,7 @@ private fun Vpn5gErrorCard(
     }
 }
 
-/** Big circular power button with a cyan ring (X-VPN style). */
+/** Big circular power button with a blue ring (Lantern, v1.1.21). */
 @Composable
 private fun Vpn5gPowerButton(
     connectState: Vpn5gConnectState,
@@ -5421,7 +5047,9 @@ private fun Vpn5gPowerButton(
     val connected = connectState == Vpn5gConnectState.CONNECTED
     val ringColor = when {
         isFailed -> colorPingRed
-        connected || isVerifying -> Vpn5gCyan
+        // Lantern (v1.1.21): the ring is electric blue, not cyan —
+        // the blue glow of Aref's phone mockup.
+        connected || isVerifying -> Vpn5gElectricBlue
         else -> Vpn5gOnDarkMuted.copy(alpha = 0.5f)
     }
     val glyphColor = when {
@@ -5479,15 +5107,37 @@ private fun Vpn5gPowerButton(
     }
     Box(
         contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(220.dp)
-            .clip(CircleShape)
-            .background(Color(0xFF1A1A1A))
-            .clickable(role = Role.Button, onClickLabel = stringResource(R.string.vpn5g_connect)) {
-                onClick()
-            }
-            .padding(10.dp),
+        modifier = Modifier.size(260.dp),
     ) {
+        // Blue glow (Lantern, v1.1.21): a soft radial halo around the
+        // button while connected or connecting; off when idle/failed.
+        if (connected || isVerifying) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Vpn5gElectricBlue.copy(alpha = 0.35f),
+                                Vpn5gElectricBlue.copy(alpha = 0.08f),
+                                Color.Transparent,
+                            ),
+                        ),
+                        shape = CircleShape,
+                    ),
+            )
+        }
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(220.dp)
+                .clip(CircleShape)
+                .background(Vpn5gCard)
+                .clickable(role = Role.Button, onClickLabel = stringResource(R.string.vpn5g_connect)) {
+                    onClick()
+                }
+                .padding(10.dp),
+        ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val stroke = size.width * 0.035f
             // Track ring.
@@ -5569,199 +5219,6 @@ private fun Vpn5gPowerButton(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun Vpn5gCountrySection(
-    country: Vpn5gCountryUi,
-    onServerTap: (String) -> Unit,
-    onLockedTap: (() -> Unit)?,
-    /** Premium tab (v1.1.2): the country header toggles the group. */
-    expandable: Boolean = false,
-    /** Collapsed groups hide their servers until tapped. */
-    expanded: Boolean = true,
-    onToggleExpand: (() -> Unit)? = null,
-) {
-    Column {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp)
-                .then(
-                    when {
-                        onToggleExpand != null -> Modifier.clickable(
-                            role = Role.Button,
-                            onClickLabel = country.label,
-                        ) { onToggleExpand() }
-                        onLockedTap != null -> Modifier.clickable(
-                            role = Role.Button,
-                            onClickLabel = stringResource(R.string.vpn5g_needs_subscription),
-                        ) { onLockedTap() }
-                        else -> Modifier
-                    }
-                ),
-        ) {
-            Text(
-                text = country.label,
-                color = Vpn5gOnDark,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = stringResource(R.string.vpn5g_servers_count, country.servers.size),
-                color = Vpn5gOnDarkMuted,
-                fontSize = 13.sp,
-            )
-            if (!country.isFree) {
-                Spacer(Modifier.weight(1f))
-                Text(
-                    text = stringResource(R.string.vpn5g_needs_subscription),
-                    color = Vpn5gAccentLight,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-            if (expandable) {
-                Spacer(Modifier.width(8.dp))
-                Vpn5gChevronIcon(
-                    color = Vpn5gOnDarkMuted,
-                    modifier = Modifier.graphicsLayer {
-                        rotationZ = if (expanded) 90f else 0f
-                    },
-                )
-            }
         }
-        if (!expanded) return@Column
-        country.servers.forEach { server ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 2.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (server.isSelected) Vpn5gAccent.copy(alpha = 0.35f)
-                        else Vpn5gOnDark.copy(alpha = 0.06f)
-                    )
-                    .clickable(
-                        enabled = country.isFree || (expandable && onLockedTap != null),
-                        role = Role.Button,
-                        onClickLabel = displayCountryName(
-                            server,
-                            stringResource(R.string.vpn5g_country_unknown),
-                        ),
-                    ) {
-                        if (country.isFree) {
-                            onServerTap(server.guid)
-                        } else {
-                            // Locked row in an expandable group opens the
-                            // subscription dialog (the header now toggles).
-                            onLockedTap?.invoke()
-                        }
-                    }
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-            ) {
-                Text(
-                    text = server.flag,
-                    fontSize = 20.sp,
-                    modifier = Modifier.padding(end = 8.dp),
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    // Never the config remark: country name only.
-                    Text(
-                        text = displayCountryName(
-                            server,
-                            stringResource(R.string.vpn5g_country_unknown),
-                        ),
-                        color = Vpn5gOnDark,
-                        fontSize = 15.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = stringResource(R.string.vpn5g_server_subtitle),
-                        color = Vpn5gOnDarkMuted,
-                        fontSize = 12.sp,
-                    )
-                }
-                // VIP badge on every locked row (v1.1.2).
-                if (!country.isFree) {
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.vpn5g_vip),
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Vpn5gAccent)
-                            .padding(horizontal = 8.dp, vertical = 3.dp),
-                    )
-                }
-                Text(
-                    // v1.1.7: a TCP-only ping is never shown as a number.
-                    text = if (server.hasRealPing && server.pingMillis > 0L) {
-                        stringResource(R.string.vpn5g_ping_ms, server.pingMillis)
-                    } else {
-                        "—"
-                    },
-                    color = if (server.pingMillis < 0L) colorPingRed else colorPing,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun vpn5gSearchFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedTextColor = Vpn5gOnDark,
-    unfocusedTextColor = Vpn5gOnDark,
-    focusedPlaceholderColor = Vpn5gOnDarkMuted,
-    unfocusedPlaceholderColor = Vpn5gOnDarkMuted,
-    focusedBorderColor = Vpn5gCyan,
-    unfocusedBorderColor = Vpn5gOnDarkMuted,
-    cursorColor = Vpn5gCyan,
-)
-
-@Composable
-private fun Vpn5gBotPromoCard(onOpenPremium: () -> Unit) {
-    // v1.1.15: the ALL-tab promo card opens Premium (no buy button in
-    // All Locations); buying stays inside Premium.
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Vpn5gAccent.copy(alpha = 0.3f))
-            .clickable(
-                role = Role.Button,
-                onClickLabel = stringResource(R.string.vpn5g_premium_banner_button),
-            ) {
-                onOpenPremium()
-            }
-            .padding(16.dp)
-    ) {
-        Text(
-            text = stringResource(R.string.vpn5g_bot_promo_title),
-            color = Vpn5gOnDark,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            text = stringResource(R.string.vpn5g_bot_promo_body),
-            color = Vpn5gOnDarkMuted,
-            fontSize = 13.sp,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = stringResource(R.string.vpn5g_premium_banner_button),
-            color = Color.White,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-        )
     }
 }

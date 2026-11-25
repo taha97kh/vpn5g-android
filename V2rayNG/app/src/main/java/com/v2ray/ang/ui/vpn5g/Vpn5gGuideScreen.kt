@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -42,6 +43,8 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 fun Vpn5gGuideScreen(
     onBack: () -> Unit,
     onOpenUrl: (String) -> Unit,
+    /** v1.1.21: the features-preview card opens the Features page. */
+    onOpenFeatures: () -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
     var expandedSections by remember { mutableStateOf(setOf<Int>()) }
@@ -62,6 +65,42 @@ fun Vpn5gGuideScreen(
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
             )
+        }
+        // Features preview (v1.1.21, Lantern): a card linking to the
+        // Features page — the same real features, listed there.
+        Vpn5gStaggeredItem(index = 1, visible = entered) {
+            Vpn5gGlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        role = Role.Button,
+                        onClickLabel = stringResource(R.string.vpn5g_features_title),
+                    ) { onOpenFeatures() },
+            ) {
+                Text(
+                    text = stringResource(R.string.vpn5g_features_title),
+                    color = Vpn5gOnDark,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_features_headline),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.vpn5g_features_more),
+                        color = Vpn5gTealLight,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Vpn5gChevronIcon(color = Vpn5gTealLight)
+                }
+            }
         }
         guideSections.forEachIndexed { i, (titleRes, bodyRes) ->
             // Stagger delay caps at 500 ms (index 5); the 20 sections
@@ -148,7 +187,7 @@ fun Vpn5gGuideScreen(
             TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = stringResource(R.string.vpn5g_nav_home),
-                    color = Vpn5gAccentLight,
+                    color = Vpn5gTealLight,
                     fontSize = 14.sp,
                 )
             }
@@ -204,7 +243,7 @@ private fun GuideLinkRow(label: String, onClick: () -> Unit) {
     ) {
         Text(
             text = label,
-            color = Vpn5gAccentLight,
+            color = Vpn5gTealLight,
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
         )

@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -340,5 +341,73 @@ fun Vpn5gGiftIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier)
             size = androidx.compose.ui.geometry.Size(w * 0.24f, h * 0.28f),
             style = Stroke(width = stroke, cap = StrokeCap.Round),
         )
+    }
+}
+
+/** Hamburger for the side menu (v1.1.21): three horizontal lines. */
+@Composable
+fun Vpn5gMenuIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.10f
+        listOf(0.26f, 0.50f, 0.74f).forEach { fraction ->
+            drawLine(
+                color,
+                Offset(w * 0.16f, h * fraction),
+                Offset(w * 0.84f, h * fraction),
+                stroke,
+                StrokeCap.Round,
+            )
+        }
+    }
+}
+
+/** Bell for the announcements button (v1.1.21): dome + skirt + clapper. */
+@Composable
+fun Vpn5gBellIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.10f
+        // Dome: open-bottom arc.
+        drawArc(
+            color = color,
+            startAngle = 180f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(w * 0.22f, h * 0.10f),
+            size = androidx.compose.ui.geometry.Size(w * 0.56f, h * 0.56f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+        // Skirt: flared base under the dome.
+        drawLine(color, Offset(w * 0.14f, h * 0.72f), Offset(w * 0.86f, h * 0.72f), stroke, StrokeCap.Round)
+        // Clapper: small dot below the skirt.
+        drawCircle(color = color, radius = w * 0.07f, center = Offset(w * 0.5f, h * 0.86f))
+    }
+}
+
+/** Apps grid for the split-tunnel row (v1.1.21): 2×2 rounded squares. */
+@Composable
+fun Vpn5gAppsIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val gap = w * 0.08f
+        val cell = (w - gap) / 2f
+        val radius = cell * 0.28f
+        listOf(
+            Offset(0f, 0f),
+            Offset(cell + gap, 0f),
+            Offset(0f, cell + gap),
+            Offset(cell + gap, cell + gap),
+        ).forEach { topLeft ->
+            drawRoundRect(
+                color = color,
+                topLeft = topLeft,
+                size = androidx.compose.ui.geometry.Size(cell, cell),
+                cornerRadius = CornerRadius(radius, radius),
+            )
+        }
     }
 }
