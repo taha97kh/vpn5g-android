@@ -238,10 +238,12 @@ object Vpn5gAutoConnect {
         // a build-time verified seed server is the best available pick.
         // The connect chain still verifies the tunnel, and a dead seed
         // fails over to the next candidate — the seed is a starting
-        // point, never proof.
+        // point, never proof. A seed the real probe failed (ping -1)
+        // is dead and is never picked, even if a caller still marks it
+        // a seed.
         return sections
             .flatMap { it.servers }
-            .filter { it.isFree && it.isSeed && it.guid !in excluding }
+            .filter { it.isFree && it.isSeed && it.pingMillis >= 0 && it.guid !in excluding }
             .firstOrNull()
     }
 
