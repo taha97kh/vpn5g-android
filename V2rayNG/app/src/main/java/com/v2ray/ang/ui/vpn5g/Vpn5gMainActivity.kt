@@ -472,12 +472,6 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     // without a tunnel-verification failure, the app reconnects to the
     // best server in another country (bounded attempts) and shows a notice.
     private var userStopRequested = false
-    /**
-     * v1.1.17: the one startup auto-connect has fired (or was
-     * disarmed by a manual connect/disconnect). See
-     * [maybeStartupAutoConnect].
-     */
-    private var startupAutoConnectDone = false
     private var suppressAutoFailover = false
     private var sessionActive = false
     private var sessionStartedAtMs = 0L
@@ -853,11 +847,26 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         // never overlapping a refresh. Bounded batch + budget in
         // Vpn5gSync.warmProbeStoredProfiles keep battery/data sane.
         viewModelScope.launch(Dispatchers.IO) {
+            // v1.1.25: the FIRST warm batch runs immediately on entry
+            // (no leading 120 s delay), so behind the scenes the
+            // verified pool is already building while the user reads
+            // the home screen and the first tap connects fast. Later
+            // batches keep the bounded interval.
+            var firstWarmBatch = true
             while (isActive) {
-                delay(Vpn5gConstants.WARM_PROBE_INTERVAL_MS)
-                if (!isActive) break
+                if (!firstWarmBatch) {
+                    delay(Vpn5gConstants.WARM_PROBE_INTERVAL_MS)
+                    if (!isActive) break
+                }
                 val state = _uiState.value
-                if (state.isRunning || state.isRefreshing) continue
+                if (state.isRunning || state.isRefreshing) {
+                    // Busy (startup refresh in flight): retry the
+                    // first batch shortly instead of waiting a full
+                    // interval, so the pool still warms on entry.
+                    if (firstWarmBatch) delay(5_000L)
+                    continue
+                }
+                firstWarmBatch = false
                 val verified = runCatching {
                     Vpn5gSync.warmProbeStoredProfiles(getApplication())
                 }.getOrDefault(0)
@@ -1178,9 +1187,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 _uiState.update {
                     it.copy(startupProgress = 1f, startupDone = true)
                 }
-                // v1.1.17: a cached list means a pickable server may
-                // already exist — connect to the best one now.
-                maybeStartupAutoConnect()
+                // v1.1.25: NO startup auto-connect — the app connects
+                // only when the user taps the switch (Aref's order).
                 refreshInternal(onProgress = null, finishStartup = false)
                 return@launch
             }
@@ -1220,9 +1228,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
             refreshSelection()
             enrichCountries()
-            // v1.1.17: whatever the quick refresh verified may
-            // already be pickable — connect to the best server now.
-            maybeStartupAutoConnect()
+            // v1.1.25: no startup auto-connect (user tap only).
             // The full refresh still runs in the background so the rest
             // of the pool (all 8 sources) arrives without another tap.
             refreshInternal(onProgress = null, finishStartup = false)
@@ -1349,11 +1355,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 refreshSelection()
                 enrichCountries()
-                // v1.1.17: a refresh that finally populates the list
-                // (the background full refresh after an empty quick
-                // path) must connect to the best server now — the
-                // 1.1.16 app waited for a tap that never came.
-                maybeStartupAutoConnect()
+                // v1.1.25: no startup auto-connect (user tap only).
             } catch (e: Exception) {
                 LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: refresh failed", e)
                 _uiState.update {
@@ -1607,9 +1609,6 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      * runs at a time; a new tap cancels the previous one.
      */
     fun beginConnect(userInitiated: Boolean = false) {
-        // v1.1.17: any connect (auto or manual) disarms the one
-        // startup auto-connect — it must never fire twice.
-        startupAutoConnectDone = true
         // v1.1.15 (forced-ad rule): count user-initiated connects only.
         if (userInitiated) completedSessions += 1
         connectChainJob?.cancel()
@@ -2041,10 +2040,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     /** Manual disconnect from the power button: never auto-fail over. */
     fun userDisconnect() {
         userStopRequested = true
-        // v1.1.17: a manual disconnect must never be followed by an
-        // auto re-connect (the 5-minute ticker refresh calls
-        // maybeStartupAutoConnect too).
-        startupAutoConnectDone = true
+        // v1.1.25: no startup auto-connect exists, so a manual
+        // disconnect is never followed by an auto re-connect.
         connectChainJob?.cancel()
         connectChainJob = null
         autoFailoverJob?.cancel()
@@ -2135,6 +2132,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // [ensureRegistrationRowIfMissing]) — otherwise a later
             // redeem burns the code server-side with no grant.
             if (session != null) ensureRegistrationRowIfMissing(session)
+            // v1.1.25 (subscription recovery on login): link the auth
+            // UUID to the registration row BEFORE the re-read —
+            // fetchOwnRow queries by user_id, and a row created via
+            // the bot (by email) has a NULL user_id until linked, so
+            // without this the login refresh found "no row" and the
+            // user's subscription never came back after an update.
+            if (session != null) {
+                runCatching { Vpn5gSubscriptionStatus.linkOwnUserId(session) }
+            }
             val subscription = runCatching {
                 Vpn5gSubscriptionStatus.refresh(session)
             }.getOrNull()
@@ -2232,33 +2238,6 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 _uiState.update { it.copy(subCodeStatus = status) }
             },
         )
-    }
-
-    /**
-     * v1.1.17: fires the one startup auto-connect when a pickable
-     * free server exists (see
-     * [Vpn5gAutoConnect.shouldStartupAutoConnect]). Called after
-     * every list rebuild that can make a server pickable — the
-     * cached startup list, the quick refresh, and each background
-     * refresh — so the app connects to the best server as soon as
-     * one exists, like 1.1.14 felt, instead of waiting for a tap
-     * after the list lands. The connect is userInitiated = false,
-     * so the forced-ad rule never shows an interstitial for it.
-     */
-    private fun maybeStartupAutoConnect() {
-        if (!Vpn5gAutoConnect.shouldStartupAutoConnect(
-                startupAutoConnectDone = startupAutoConnectDone,
-                isRunning = _uiState.value.isRunning,
-                userStopRequested = userStopRequested,
-                connectState = _uiState.value.connectState,
-                hasPickableServer = Vpn5gAutoConnect.pickBestServer(
-                    _uiState.value.countries,
-                    healthScores = Vpn5gHealthScore.currentScores(),
-                ) != null,
-            )
-        ) return
-        startupAutoConnectDone = true
-        beginConnect(userInitiated = false)
     }
 
     /**
@@ -3909,16 +3888,12 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             }
         }
 
-        // Carrier-name permission (v1.1.14, per-operator adaptation):
-        // requested once, only for this feature; denied = the operator
-        // just shows as "mobile" and nothing else changes. The
-        // notification permission (moved here from the hidden
-        // MainActivity) is requested alongside it.
+        // v1.1.25: the phone-state permission request was REMOVED
+        // (Aref: no Phone permission). The operator label degrades
+        // to "mobile" without it (Vpn5gOperator try/catch). Only the
+        // notification permission is requested here now.
         LaunchedEffect(Unit) {
             checkAndRequestPermission(PermissionType.POST_NOTIFICATIONS) {}
-            checkAndRequestPermission(PermissionType.READ_PHONE_STATE) {
-                viewModel.refreshOperator()
-            }
         }
 
         // Bot→app sync (v1.1.14): entering Premium re-fetches ONLY

@@ -50,9 +50,8 @@
          distributed through GitHub releases, not Google Play. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- v1.1.14: carrier-name detection for the per-operator adaptation.
-         Requested at runtime only for that feature; denied = "mobile". -->
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <!-- v1.1.25: phone-state permission removed (Aref: no Phone
+         permission). The per-operator label degrades to "mobile". -->
 
     <application
         android:name=".AngApplication"

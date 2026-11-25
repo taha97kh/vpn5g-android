@@ -396,9 +396,14 @@ object Vpn5gSubscriptionStatus {
                 capped
             }
             FetchResult.NoRow -> {
-                val none = Vpn5gUserSubscription(status = "none")
-                saveCached(none)
-                none
+                // v1.1.25: do NOT overwrite the cache with "none" yet.
+                // "No row" here only means no row is linked to this
+                // user_id (or the row read is still blocked) — the
+                // get_subscription_status RPC below may still know
+                // the grant, and clobbering the cache first made the
+                // subscription vanish after an update + login. The
+                // cache is written after the merge (see below).
+                Vpn5gUserSubscription(status = "none")
             }
             FetchResult.Failed -> loadCached()
         }
@@ -425,7 +430,27 @@ object Vpn5gSubscriptionStatus {
         // bytes measured under one grant never end another.
         val volume = Vpn5gVolumeStore.consumedState()
         val merged = effectiveSubscription(rowCandidate, serverSub, nowSeconds, volume)
-        return effectiveSubscription(merged, trustedRedeemed, nowSeconds, volume)
+        val result = effectiveSubscription(merged, trustedRedeemed, nowSeconds, volume)
+        // v1.1.25 (recovery persistence): an ACTIVE grant recovered
+        // from the RPC (or the merge) is saved to the row cache, so
+        // it survives a restart and loadEffective() keeps showing
+        // it even while the registrations row read still 403s
+        // (GRANT still bot-side). A definitive server "none" with
+        // no row and no live grant clears the cache to "none" so a
+        // stale active entry cannot linger; an Unavailable RPC
+        // never demotes anything.
+        if (result != null &&
+            (isSubscriber(result, nowSeconds, volume) ||
+                isGiftTier(result, nowSeconds, volume))
+        ) {
+            saveCached(result)
+        } else if (rowCandidate?.status == "none" &&
+            serverResult is Vpn5gAuthService.ServerSubscriptionResult.None &&
+            trustedRedeemed == null
+        ) {
+            saveCached(Vpn5gUserSubscription(status = "none"))
+        }
+        return result
     }
 
     /**

@@ -22,10 +22,12 @@ import com.v2ray.ang.util.LogUtil
  * recorded under the current operator key. With no history for an
  * operator the order is exactly today's (fastest real ping first).
  *
- * Permissions: the carrier name comes from
- * `TelephonyManager.networkOperatorName`, which needs READ_PHONE_STATE.
- * The read is best-effort inside try/catch — when the permission is
- * denied (or the name is blank) the operator is just "mobile" and
+ * Permissions: NONE (v1.1.25 — the phone-state permission and its
+ * runtime request were removed by Aref's order, so Android no
+ * longer lists a Phone permission for the app). The carrier name
+ * read (`TelephonyManager.networkOperatorName`) stays best-effort
+ * inside try/catch: without the permission the system returns null
+ * (or throws SecurityException) and the operator is just "mobile" —
  * nothing else changes. Wi-Fi vs mobile needs no permission.
  */
 object Vpn5gOperator {
@@ -102,7 +104,7 @@ object Vpn5gOperator {
                             as? TelephonyManager
                         telephony?.networkOperatorName?.takeIf { it.isNotBlank() }
                     } catch (_: SecurityException) {
-                        // READ_PHONE_STATE denied: degrade to "mobile".
+                        // No phone permission (v1.1.25): degrade to "mobile".
                         null
                     } catch (_: Exception) {
                         null

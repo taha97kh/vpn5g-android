@@ -640,92 +640,10 @@ class Vpn5gAutoConnectTest {
         assertEquals(setOf("fresh"), pruned.keys)
     }
 
-    // -- Startup auto-connect decision (v1.1.17, pure) ------------------------
-
-    @Test
-    fun test_startup_auto_connect_fires_when_a_server_is_pickable() {
-        assertTrue(
-            Vpn5gAutoConnect.shouldStartupAutoConnect(
-                startupAutoConnectDone = false,
-                isRunning = false,
-                userStopRequested = false,
-                connectState = Vpn5gConnectState.IDLE,
-                hasPickableServer = true,
-            )
-        )
-    }
-
-    @Test
-    fun test_startup_auto_connect_never_fires_twice() {
-        assertFalse(
-            Vpn5gAutoConnect.shouldStartupAutoConnect(
-                startupAutoConnectDone = true,
-                isRunning = false,
-                userStopRequested = false,
-                connectState = Vpn5gConnectState.IDLE,
-                hasPickableServer = true,
-            )
-        )
-    }
-
-    @Test
-    fun test_startup_auto_connect_blocked_while_running_or_stopping() {
-        // Already connected: no second chain.
-        assertFalse(
-            Vpn5gAutoConnect.shouldStartupAutoConnect(
-                startupAutoConnectDone = false,
-                isRunning = true,
-                userStopRequested = false,
-                connectState = Vpn5gConnectState.IDLE,
-                hasPickableServer = true,
-            )
-        )
-        // The user asked to stop: a later refresh must not reconnect.
-        assertFalse(
-            Vpn5gAutoConnect.shouldStartupAutoConnect(
-                startupAutoConnectDone = false,
-                isRunning = false,
-                userStopRequested = true,
-                connectState = Vpn5gConnectState.IDLE,
-                hasPickableServer = true,
-            )
-        )
-    }
-
-    @Test
-    fun test_startup_auto_connect_blocked_when_chain_busy_or_failed() {
-        for (state in listOf(
-            Vpn5gConnectState.CHECKING_INTERNET,
-            Vpn5gConnectState.FINDING_SERVER,
-            Vpn5gConnectState.CONNECTING,
-            Vpn5gConnectState.CONNECTED,
-            Vpn5gConnectState.RETRYING,
-            Vpn5gConnectState.FAILED,
-            Vpn5gConnectState.DISCONNECTING,
-        )) {
-            assertFalse(
-                Vpn5gAutoConnect.shouldStartupAutoConnect(
-                    startupAutoConnectDone = false,
-                    isRunning = false,
-                    userStopRequested = false,
-                    connectState = state,
-                    hasPickableServer = true,
-                ),
-                "state=$state",
-            )
-        }
-    }
-
-    @Test
-    fun test_startup_auto_connect_blocked_without_a_pickable_server() {
-        assertFalse(
-            Vpn5gAutoConnect.shouldStartupAutoConnect(
-                startupAutoConnectDone = false,
-                isRunning = false,
-                userStopRequested = false,
-                connectState = Vpn5gConnectState.IDLE,
-                hasPickableServer = false,
-            )
-        )
-    }
+    // -- Startup auto-connect REMOVED (v1.1.25) ------------------------------
+    // The v1.1.17 startup-auto-connect decision and its tests were
+    // removed with the feature: the app no longer connects by itself on
+    // entry. Connection starts only from the user's switch tap
+    // (beginConnect); pickBestServer on that tap path is covered by the
+    // picker tests above.
 }

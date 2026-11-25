@@ -197,4 +197,40 @@ class Vpn5gTopFreeTest {
             Vpn5gSync.freeGuidsFor(servers, Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER).size,
         )
     }
+    // -- v1.1.25: 20 free configs ready on entry ---------------------------
+    // Aref's order: on entry every user must already have 20 free
+    // configs ready. The bundled seed (32 build-time verified
+    // entries) is that pool on a fresh install: seed servers are
+    // free-eligible with an unknown ping, so the free tier is full
+    // (20 pickable) before any live probe finishes.
+
+    @Test
+    fun test_seed_pool_gives_20_pickable_free_on_entry() {
+        val servers = (1..32).map { i ->
+            server(guid = "seed$i", pingMillis = 0L, realPing = false, isSeed = true)
+        }
+        assertEquals(20, Vpn5gSync.selectFreeGuids(servers).size)
+        assertEquals(
+            20,
+            Vpn5gSync.freeGuidsFor(
+                servers,
+                Vpn5gSubscriptionStatus.Vpn5gTier.FREE,
+            ).size,
+        )
+    }
+
+    @Test
+    fun test_seed_plus_real_pinged_still_caps_free_at_20() {
+        val seeds = (1..32).map { i ->
+            server(guid = "seed$i", pingMillis = 0L, realPing = false, isSeed = true)
+        }
+        val real = (1..10).map { i ->
+            server(guid = "real$i", pingMillis = i * 10L, realPing = true)
+        }
+        val free = Vpn5gSync.selectFreeGuids(seeds + real)
+        assertEquals(20, free.size)
+        // Real-pinged servers sort first, so all 10 are inside the 20.
+        assertTrue(free.containsAll((1..10).map { "real$it" }.toSet()))
+    }
+
 }

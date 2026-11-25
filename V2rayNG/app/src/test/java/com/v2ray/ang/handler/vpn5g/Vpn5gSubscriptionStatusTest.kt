@@ -439,4 +439,42 @@ class Vpn5gSubscriptionStatusTest {
             Vpn5gSubscriptionStatus.effectiveSubscription(row, redeemed, now),
         )
     }
+    // -- Login recovery via get_subscription_status (v1.1.25) ---------------
+    // After an update + login the registrations row read can still
+    // 403 (GRANT bot-side) or find no linked row ("none" candidate).
+    // The RPC answer must win the merge so the subscription comes
+    // back immediately, without a restart and without re-entering a
+    // code. refresh() also persists this merged grant now.
+
+    @Test
+    fun test_rpc_active_recovers_subscription_over_none_row() {
+        val parsed = Vpn5gAuthService.parseServerSubscription(
+            """{"status":"active","plan":"sub_1","expires_at":"2027-02-14T00:00:00+00:00"}"""
+        )
+        val found = parsed as Vpn5gAuthService.ServerSubscriptionResult.Found
+        val merged = Vpn5gSubscriptionStatus.effectiveSubscription(
+            Vpn5gUserSubscription("none", null, null), found.subscription, now
+        )
+        assertEquals(found.subscription, merged)
+        assertTrue(Vpn5gSubscriptionStatus.isSubscriber(merged, now))
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
+            Vpn5gSubscriptionStatus.tierOf(merged, now),
+        )
+    }
+
+    @Test
+    fun test_rpc_none_never_grants() {
+        val parsed = Vpn5gAuthService.parseServerSubscription("""{"status":"none"}""")
+        assertEquals(Vpn5gAuthService.ServerSubscriptionResult.None, parsed)
+        val merged = Vpn5gSubscriptionStatus.effectiveSubscription(
+            Vpn5gUserSubscription("none", null, null), null, now
+        )
+        assertFalse(Vpn5gSubscriptionStatus.isSubscriber(merged, now))
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.FREE,
+            Vpn5gSubscriptionStatus.tierOf(merged, now),
+        )
+    }
+
 }
