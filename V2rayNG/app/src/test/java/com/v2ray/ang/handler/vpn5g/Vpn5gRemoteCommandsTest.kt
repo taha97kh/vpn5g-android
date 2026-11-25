@@ -3,11 +3,11 @@ package com.v2ray.ang.handler.vpn5g
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.v2ray.ang.handler.vpn5g.Vpn5gRemoteCommands.Action
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
 
 /**
  * Remote-control contract v1 (v1.1.26): command planning —

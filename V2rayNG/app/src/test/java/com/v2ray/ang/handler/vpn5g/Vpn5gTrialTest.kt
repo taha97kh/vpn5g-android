@@ -1,11 +1,11 @@
 package com.v2ray.ang.handler.vpn5g
 
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.GIFT_TIER_PLAN_ID
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
 
 /**
  * Free trial logic (v1.1.26, contract v1): start rules, grant
