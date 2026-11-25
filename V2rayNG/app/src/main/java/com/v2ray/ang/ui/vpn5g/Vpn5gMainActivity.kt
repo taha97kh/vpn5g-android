@@ -1936,8 +1936,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             }
             val app = getApplication<Application>()
-            // Strip any stored forced QUIC block before the tunnel is built.
-            Vpn5gNetworkProfile.removeForcedQuicBlock()
+            // Fast-reject UDP 443 (QUIC) before the tunnel is built (v1.1.27).
+            Vpn5gNetworkProfile.ensureQuicFastReject()
             if (!Vpn5gAutoConnect.hasInternet(app)) {
                 // v1.1.23: the chain ends here — land in FAILED, not
                 // RETRYING. RETRYING renders as the blue CONNECTING

@@ -90,6 +90,14 @@
           "type": "http"
         }
       }
+    },
+    {
+      "tag": "reject",
+      "protocol": "socks",
+      "settings": {
+        "address": "127.0.0.1",
+        "port": 9
+      }
     }
   ],
   "routing": {

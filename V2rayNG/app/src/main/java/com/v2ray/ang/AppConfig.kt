@@ -112,6 +112,10 @@ object AppConfig {
     const val TAG_PROXY = "proxy"
     const val TAG_DIRECT = "direct"
     const val TAG_BLOCKED = "block"
+
+    /** Fast-reject outbound (v1.1.27): SOCKS to a closed loopback port so
+     *  UDP 443 (QUIC) sessions fail immediately instead of being swallowed. */
+    const val TAG_REJECT = "reject"
     const val TAG_FRAGMENT = "fragment"
     const val TAG_DNS = "dns-module"
     const val TAG_DOMESTIC_DNS = "domestic-dns"
@@ -355,6 +359,7 @@ object AppConfig {
         TAG_PROXY,
         TAG_DIRECT,
         TAG_BLOCKED,
+        TAG_REJECT,
     )
 
     val OBSERVATORY_DURATION_PATTERN = Regex("""[1-9]\d*(ms|s|m|h)""")
