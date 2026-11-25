@@ -308,39 +308,103 @@ object Vpn5gConstants {
     const val DROP_FAILOVER_DEBOUNCE_MS = 800L
 
     /**
-     * In-session tunnel watchdog (v1.1.11): while CONNECTED, a light
-     * single-fetch exit-IP probe runs every [WATCHDOG_PROBE_INTERVAL_TICKS]
-     * seconds (the 1-second ticker counts them). One failed probe is a
-     * blip, not a drop; [WATCHDOG_MAX_CONSECUTIVE_FAILURES] failed
-     * probes in a row drop the tunnel so the drop detector can fail over
-     * to another server. The full 60-second re-verification still runs
-     * alongside this as the deeper check.
+     * In-session tunnel watchdog (v1.1.11; fast detection v1.1.29):
+     * while CONNECTED, a light single-fetch exit-IP probe runs every
+     * [WATCHDOG_PROBE_INTERVAL_TICKS] seconds (the 1-second ticker
+     * counts them). Probe verdicts feed a leaky-bucket score (see
+     * [Vpn5gWatchdogScore]): a FAILED probe adds 1.0, an UNKNOWN adds
+     * 0.5 (capped so UNKNOWN alone never drops), a VERIFIED decays
+     * 1.0; at [WATCHDOG_DROP_SCORE] the tunnel drops so the drop
+     * detector can fail over. On the first failure a confirm probe
+     * runs after [WATCHDOG_CONFIRM_DELAY_MS] instead of waiting for
+     * the next tick. Worst-case detection: death just after a probe
+     * → next probe ≤5 s (≤3 s timeout) → confirm +2 s (≤3 s) → drop
+     * at ≤ ~13 s (typical ~7–10 s), vs ~60–81 s before 1.1.29. The
+     * full 60-second re-verification still runs alongside this as
+     * the deeper check.
      */
-    const val WATCHDOG_PROBE_INTERVAL_TICKS = 20
-    const val WATCHDOG_MAX_CONSECUTIVE_FAILURES = 3
+    const val WATCHDOG_PROBE_INTERVAL_TICKS = 5
+    /** Legacy name kept for the drop threshold count (v1.1.29: score-based, see [WATCHDOG_DROP_SCORE]). */
+    const val WATCHDOG_MAX_CONSECUTIVE_FAILURES = 2
+    /** Leaky-bucket score at which the watchdog drops the tunnel (v1.1.29). */
+    const val WATCHDOG_DROP_SCORE = 2.0
+    /** Delay before the confirm probe after a first failed watchdog probe (v1.1.29). */
+    const val WATCHDOG_CONFIRM_DELAY_MS = 2_000L
 
     /**
-     * Drop failover bound (v1.1.11): how many no-candidate refresh
-     * rounds (empty pool, 60 s backoff each) the drop failover runs
-     * before giving up with a clear error instead of looping forever
-     * on a dead network. This bounds only the "no server at all"
-     * case; when candidates exist the chain keeps trying until a
-     * tunnel verifies (v1.1.7).
+     * Drop failover rounds (v1.1.11; never-give-up v1.1.29): the
+     * no-candidate refresh rounds are NO LONGER bounded — while the
+     * switch is ON the failover keeps retrying with growing backoff
+     * (see [Vpn5gAutoConnect.failoverRetryBackoffMs]) until a tunnel
+     * verifies or the user disconnects. [MAX_DROP_FAILOVER_ROUNDS]
+     * is kept only as the round count after which the backoff stops
+     * growing (it reaches the [EMPTY_POOL_BACKOFF_MS] cap).
      */
     const val MAX_DROP_FAILOVER_ROUNDS = 3
 
     /**
-     * Persistent-connection reconnect (v1.1.12): when the service stops
-     * unexpectedly — not a manual disconnect, not the 30-minute timer,
-     * not a tunnel-check stop — the app re-runs the connect chain with
-     * exponential backoff, at most [MAX_PERSISTENT_RECONNECT_ATTEMPTS]
-     * times, then gives up with a clear error instead of looping
-     * forever on a dead network. A manual disconnect cancels the
-     * pending reconnect immediately.
+     * Persistent-connection reconnect (v1.1.12; never-give-up
+     * v1.1.29): when the service stops unexpectedly — not a manual
+     * disconnect, not the 30-minute timer, not a tunnel-check stop —
+     * the app re-runs the connect chain with exponential backoff.
+     * Since 1.1.29 there is NO attempt cap while the switch is ON:
+     * the backoff caps at [PERSISTENT_RECONNECT_MAX_BACKOFF_MS] and
+     * the chain keeps retrying until a tunnel verifies or the user
+     * disconnects. [MAX_PERSISTENT_RECONNECT_ATTEMPTS] is kept as
+     * the counter value at which the backoff stops growing. A manual
+     * disconnect cancels the pending reconnect immediately.
      */
     const val MAX_PERSISTENT_RECONNECT_ATTEMPTS = 5
     const val PERSISTENT_RECONNECT_BASE_BACKOFF_MS = 2_000L
     const val PERSISTENT_RECONNECT_MAX_BACKOFF_MS = 30_000L
+
+    /**
+     * Standby liveness during a session (v1.1.29): while CONNECTED,
+     * the top [STANDBY_PROBE_K] standby candidates get a direct
+     * TCP (+TLS when applicable) handshake probe on this interval —
+     * no second core, the app process is excluded from the tunnel so
+     * the socket measures the server from the device network. The
+     * pre-ranked replacement queue keeps the best
+     * [STANDBY_QUEUE_SIZE] guids so a drop switches with zero list
+     * rebuild.
+     */
+    const val STANDBY_LIVENESS_INTERVAL_MS = 30_000L
+    const val STANDBY_PROBE_K = 8
+    const val STANDBY_QUEUE_SIZE = 5
+    /** Per-candidate standby handshake timeout (v1.1.29). */
+    const val STANDBY_PROBE_TIMEOUT_MS = 2_000
+
+    /**
+     * MMKV SETTING key holding the guid of a failover restart that
+     * was requested but not yet confirmed running (v1.1.29). Set
+     * before every failover emit, cleared when the tunnel verifies
+     * or the user disconnects — so a lost SharedFlow emit or a
+     * process death resumes the failover instead of stranding the
+     * session on «در حال تغییر سرور...» forever.
+     */
+    const val KEY_PENDING_FAILOVER_GUID = "vpn5g_pending_failover_guid"
+
+    /**
+     * Daemon watchdog heartbeat (v1.1.29): the :daemon process
+     * writes this epoch-millis stamp on every watchdog probe. The
+     * UI process treats a heartbeat younger than
+     * [DAEMON_HEARTBEAT_FRESH_MS] as "the daemon owns drop
+     * detection" and stands its own watchdog/re-verify down (they
+     * stay as backup for a dead daemon). Cross-process MMKV is
+     * already the speed-publish channel (v1.1.15), so this reuses
+     * a proven path.
+     */
+    const val KEY_DAEMON_WATCHDOG_HEARTBEAT_MS = "vpn5g_daemon_watchdog_heartbeat_ms"
+    const val DAEMON_HEARTBEAT_FRESH_MS = 15_000L
+
+    /**
+     * Daemon failover stamp (v1.1.29): written by the daemon when
+     * it starts a failover restart. While younger than
+     * [DAEMON_FAILOVER_FRESH_MS] the UI verify loop must not pick
+     * or emit its own failover — the daemon owns the pick.
+     */
+    const val KEY_DAEMON_FAILOVER_AT_MS = "vpn5g_daemon_failover_at_ms"
+    const val DAEMON_FAILOVER_FRESH_MS = 90_000L
 
     /** Dismiss key of the app announcement the user closed (\"\" = none). */
     const val KEY_ANNOUNCEMENT_DISMISSED = "vpn5g_announcement_dismissed"

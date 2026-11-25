@@ -115,4 +115,39 @@ class Vpn5gQuickSyncTest {
             ).isEmpty()
         )
     }
+
+    // -- v1.1.29 guid stability across republishes ---------------------------
+    // publishLiveProfiles used to mint fresh UUIDs on every publish,
+    // killing every in-memory guid (failover candidates, tried sets,
+    // the selected server) -> «کانفیگ معتبر نیست». assignGuids must
+    // reuse the existing guid for a known dedupeKey.
+
+    @Test
+    fun test_assign_guids_reuses_existing_guid_by_key() {
+        var minted = 0
+        val assigned = Vpn5gSync.assignGuids(
+            keys = listOf("k1", "k2", "k3"),
+            existingByKey = mapOf("k1" to "guid-1", "k3" to "guid-3"),
+        ) { "new-${++minted}" }
+        assertEquals(listOf("guid-1", "new-1", "guid-3"), assigned)
+        assertEquals(1, minted)
+    }
+
+    @Test
+    fun test_assign_guids_same_key_same_guid_within_one_publish() {
+        var minted = 0
+        val assigned = Vpn5gSync.assignGuids(
+            keys = listOf("k1", "k1"),
+            existingByKey = emptyMap(),
+        ) { "new-${++minted}" }
+        assertEquals(listOf("new-1", "new-1"), assigned)
+        assertEquals(1, minted)
+    }
+
+    @Test
+    fun test_assign_guids_empty_keys() {
+        assertTrue(
+            Vpn5gSync.assignGuids(emptyList(), mapOf("k" to "g")) { "x" }.isEmpty()
+        )
+    }
 }

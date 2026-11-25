@@ -24,6 +24,18 @@ import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.NotificationManager
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.handler.SpeedtestManager
+import com.v2ray.ang.handler.vpn5g.Vpn5gAutoConnect
+import com.v2ray.ang.handler.vpn5g.Vpn5gConnectionPersistence
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
+import com.v2ray.ang.handler.vpn5g.Vpn5gDaemonHeartbeat
+import com.v2ray.ang.handler.vpn5g.Vpn5gDaemonPick
+import com.v2ray.ang.handler.vpn5g.Vpn5gFailedServers
+import com.v2ray.ang.handler.vpn5g.Vpn5gHealthScore
+import com.v2ray.ang.handler.vpn5g.Vpn5gRealPing
+import com.v2ray.ang.handler.vpn5g.Vpn5gServerValidator
+import com.v2ray.ang.handler.vpn5g.Vpn5gSync
+import com.v2ray.ang.handler.vpn5g.Vpn5gTunnelCheck
+import com.v2ray.ang.handler.vpn5g.Vpn5gWatchdogScore
 import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.service.DialerNativeService
 import com.v2ray.ang.service.DialerWebviewService
@@ -33,9 +45,12 @@ import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import libv2ray.CoreCallbackHandler
@@ -70,6 +85,32 @@ object CoreServiceManager {
 
     /** Tun descriptor the core was started with, null in the proxy only and root run modes. */
     private var currentVpnInterface: ParcelFileDescriptor? = null
+
+    /**
+     * Daemon watchdog (v1.1.29): drop detection + failover decision
+     * live HERE, in the daemon process, so recovery works with the
+     * screen off and the UI process dead — the UI-process watchdog
+     * alone stranded sessions on «در حال تغییر سرور...» whenever
+     * the UI was frozen or killed (Aref's 2026-11-25 device
+     * report). The job is a child of [daemonWatchdogScope], started
+     * after every successful core start and cancelled first thing
+     * in [stopCoreLoop] (teardown prevents new work). It only acts
+     * for VPN 5G persistent sessions in AUTO mode (see
+     * [daemonWatchdogGateOpen]); every other usage of this manager
+     * is untouched. The UI watchdog stays as backup and stands
+     * down while the daemon heartbeat is fresh.
+     */
+    private val daemonWatchdogScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var daemonWatchdogJob: Job? = null
+
+    @Volatile
+    private var daemonWatchdogScore = 0.0
+
+    @Volatile
+    private var daemonBaselineIp: String? = null
+
+    /** Guids already tried by the in-flight daemon failover. */
+    private val daemonTriedGuids = mutableSetOf<String>()
 
     var serviceControl: SoftReference<ServiceControl>? = null
         set(value) {
@@ -194,6 +235,10 @@ object CoreServiceManager {
         // v1.1.14: the VPN 5G flow always shows live tunnel speeds.
         NotificationManager.startSpeedNotification(force = true)
         LogUtil.i(AppConfig.TAG, "StartCore-Manager: Core started successfully")
+        // v1.1.29: the daemon watchdog owns drop detection for VPN 5G
+        // persistent sessions from here on (no-op when already running,
+        // e.g. across a reload).
+        startDaemonWatchdog()
     }
 
     /**
@@ -202,6 +247,17 @@ object CoreServiceManager {
      * @return True if the core was stopped successfully, false otherwise.
      */
     fun stopCoreLoop(): Boolean {
+        // v1.1.29: teardown prevents new work first — the daemon
+        // watchdog (and any in-flight daemon failover) is cancelled
+        // before anything else, so a user stop, the 30-minute timer
+        // or a revoke can never be fought by a failover restart.
+        // The heartbeat is zeroed so the UI backup knows at once
+        // that the daemon no longer owns detection.
+        daemonWatchdogJob?.cancel()
+        daemonWatchdogJob = null
+        daemonWatchdogScore = 0.0
+        daemonTriedGuids.clear()
+        Vpn5gDaemonHeartbeat.writeHeartbeat(0L)
         connectionTestScope.coroutineContext.cancelChildren()
         val service = getService() ?: return false
 
@@ -393,6 +449,237 @@ object CoreServiceManager {
             if (cause is CancellationException) {
                 MessageHelper.sendMsg2UI(service, AppConfig.MSG_MEASURE_DELAY_CANCEL, "", requestId)
             }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Daemon watchdog (v1.1.29)
+    // -----------------------------------------------------------------
+
+    /**
+     * Whether the daemon watchdog may act right now: only for a
+     * VPN 5G persistent session (the flag the VPN 5G UI sets on
+     * connect and clears on manual disconnect / timer end) in AUTO
+     * mode (a manual pick is never silently replaced — the UI owns
+     * manual failure). Every other consumer of this manager
+     * (upstream UI, proxy-only, root) never sets the flag, so the
+     * watchdog stays inert for them.
+     */
+    private fun daemonWatchdogGateOpen(): Boolean =
+        Vpn5gConnectionPersistence.isPersistentConnection() &&
+            MmkvManager.decodeSettingsString(Vpn5gConstants.KEY_MANUAL_SERVER_GUID)
+                .isNullOrBlank()
+
+    /** Starts the daemon watchdog loop if it is not already running. */
+    private fun startDaemonWatchdog() {
+        if (daemonWatchdogJob?.isActive == true) return
+        daemonWatchdogScore = 0.0
+        daemonWatchdogJob = daemonWatchdogScope.launch {
+            while (isActive) {
+                delay(Vpn5gConstants.WATCHDOG_PROBE_INTERVAL_TICKS * 1_000L)
+                if (!isActive) break
+                if (!isRunning() || isReloading) continue
+                if (!daemonWatchdogGateOpen()) continue
+                Vpn5gDaemonHeartbeat.writeHeartbeat()
+                if (daemonBaselineIp == null) {
+                    daemonBaselineIp = Vpn5gTunnelCheck.publicIpDirect()
+                }
+                val first = Vpn5gTunnelCheck.probeOnce(daemonBaselineIp)
+                daemonWatchdogScore = Vpn5gWatchdogScore.nextScore(
+                    daemonWatchdogScore, first.verdict
+                )
+                if (Vpn5gWatchdogScore.needsConfirm(daemonWatchdogScore)) {
+                    delay(Vpn5gConstants.WATCHDOG_CONFIRM_DELAY_MS)
+                    if (!isActive || !isRunning() || isReloading) continue
+                    val confirm = Vpn5gTunnelCheck.probeOnce(daemonBaselineIp)
+                    daemonWatchdogScore = Vpn5gWatchdogScore.nextScore(
+                        daemonWatchdogScore, confirm.verdict
+                    )
+                }
+                Vpn5gDaemonHeartbeat.writeHeartbeat()
+                if (Vpn5gWatchdogScore.shouldDrop(daemonWatchdogScore)) {
+                    daemonWatchdogScore = 0.0
+                    daemonFailover()
+                }
+            }
+        }
+    }
+
+    /**
+     * Daemon failover: pick the next server from MMKV, restart the
+     * core onto it in place (same stop/start discipline as
+     * [reloadCore] — the service, TUN and notification stay up),
+     * verify through the tunnel, and repeat until a tunnel
+     * verifies or the watchdog job is cancelled by a stop. There
+     * is no give-up while the job lives: the switch is ON, so the
+     * session must recover or keep trying at capped backoff.
+     */
+    private suspend fun daemonFailover() {
+        val service = getService() ?: return
+        val droppedGuid = MmkvManager.getSelectServer()
+        if (droppedGuid != null) {
+            daemonTriedGuids += droppedGuid
+            markDaemonFailed(droppedGuid)
+        }
+        Vpn5gDaemonHeartbeat.writeFailoverStart()
+        LogUtil.i(
+            AppConfig.TAG,
+            "StartCore-Manager: daemon watchdog drop (mode=VPN phase=failover guid=$droppedGuid)",
+        )
+        var round = 0
+        while (daemonWatchdogJob?.isActive == true && getService() != null) {
+            if (!daemonWatchdogGateOpen()) return
+            val next = daemonPickNext()
+            if (next == null) {
+                // No candidate at all: refresh the stored list (fast,
+                // real-probe skipped — the live core must not get a
+                // throwaway sibling) and retry at growing backoff.
+                delay(Vpn5gAutoConnect.failoverRetryBackoffMs(round))
+                round++
+                if (daemonWatchdogJob?.isActive != true) return
+                runCatching {
+                    Vpn5gSync.refresh(service, skipRealProbe = true)
+                }.onFailure {
+                    LogUtil.e(AppConfig.TAG, "StartCore-Manager: daemon failover refresh failed", it)
+                }
+                continue
+            }
+            daemonTriedGuids += next
+            Vpn5gDaemonHeartbeat.writePendingFailoverGuid(next)
+            Vpn5gDaemonHeartbeat.writeFailoverStart()
+            MmkvManager.setSelectServer(next)
+            val restarted = daemonRestartOnto(next)
+            if (!restarted) {
+                markDaemonFailed(next)
+                continue
+            }
+            // Let the UI refresh its selection/state onto the new server.
+            MessageHelper.sendMsg2UI(service, AppConfig.MSG_STATE_START_SUCCESS, "")
+            if (daemonVerifyTunnel()) {
+                Vpn5gDaemonHeartbeat.clearPendingFailoverGuid()
+                daemonTriedGuids.clear()
+                daemonWatchdogScore = 0.0
+                runCatching {
+                    MmkvManager.decodeServerConfig(next)?.let { profile ->
+                        Vpn5gHealthScore.recordOutcome(
+                            Vpn5gServerValidator.dedupeKey(profile), success = true
+                        )
+                    }
+                }
+                LogUtil.i(
+                    AppConfig.TAG,
+                    "StartCore-Manager: daemon failover verified (mode=VPN phase=failover guid=$next)",
+                )
+                return
+            }
+            markDaemonFailed(next)
+            runCatching {
+                MmkvManager.decodeServerConfig(next)?.let { profile ->
+                    Vpn5gHealthScore.recordOutcome(
+                        Vpn5gServerValidator.dedupeKey(profile), success = false
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Restarts the core in place onto the already-selected server
+     * (daemon failover): stop, wait for the actual stop (bounded,
+     * same discipline as the MSG_STATE_RESTART path), start again
+     * with the existing TUN. True when the core is running again.
+     */
+    private suspend fun daemonRestartOnto(guid: String): Boolean {
+        val service = getService() ?: return false
+        return try {
+            isReloading = true
+            connectionTestScope.coroutineContext.cancelChildren()
+            coreController.stopLoop()
+            val stopDeadline = System.currentTimeMillis() + RESTART_STOP_WAIT_MS
+            while (shouldKeepWaitingForCoreStop(
+                    isRunning(), System.currentTimeMillis(), stopDeadline
+                )
+            ) {
+                delay(RESTART_STOP_POLL_MS)
+            }
+            if (daemonWatchdogJob?.isActive != true) return false
+            launchCore(service, currentVpnInterface, isReload = true)
+            isRunning()
+        } catch (e: Exception) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "StartCore-Manager: daemon failover restart failed (mode=VPN phase=failover guid=$guid)",
+                e,
+            )
+            false
+        } finally {
+            isReloading = false
+        }
+    }
+
+    /**
+     * Post-restart daemon verification: probe through the tunnel
+     * until VERIFIED or the fast verify budget runs out. UNKNOWN
+     * (no local proxy port yet — the new core may still be
+     * binding) keeps probing inside the budget instead of failing
+     * the candidate at once.
+     */
+    private suspend fun daemonVerifyTunnel(): Boolean {
+        val deadline = System.currentTimeMillis() + Vpn5gAutoConnect.FAST_VERIFY_TIMEOUT_MS
+        while (daemonWatchdogJob?.isActive == true &&
+            System.currentTimeMillis() < deadline
+        ) {
+            if (!isRunning()) return false
+            val result = Vpn5gTunnelCheck.probeOnce(daemonBaselineIp)
+            if (result.verdict == Vpn5gTunnelCheck.Verdict.VERIFIED) return true
+            delay(500L)
+        }
+        return false
+    }
+
+    /**
+     * Builds the daemon candidate list from MMKV (stored VPN 5G
+     * profiles + stored delays + real-ping identities + health
+     * scores) and picks the next failover target. Null only when
+     * every stored profile is excluded.
+     */
+    private fun daemonPickNext(): String? {
+        val subId = runCatching { Vpn5gSync.ensureSubscriptionId() }.getOrNull()
+            ?: return null
+        val realKeys = Vpn5gRealPing.loadRealPingKeys()
+        val healthScores = Vpn5gHealthScore.currentScores()
+        val candidates = MmkvManager.decodeServerList(subId).mapNotNull { guid ->
+            val profile = MmkvManager.decodeServerConfig(guid) ?: return@mapNotNull null
+            val key = Vpn5gServerValidator.dedupeKey(profile)
+            val delay = MmkvManager.decodeServerAffiliationInfo(guid)?.testDelayMillis ?: 0L
+            Vpn5gDaemonPick.Candidate(
+                guid = guid,
+                delayMs = delay,
+                hasRealPing = key in realKeys,
+                adjustedDelayMs = Vpn5gHealthScore.adjustedPing(
+                    delay, healthScores[key] ?: 0.0
+                ),
+            )
+        }
+        val failed = Vpn5gFailedServers.prune(
+            Vpn5gFailedServers.load(), System.currentTimeMillis()
+        )
+        return Vpn5gDaemonPick.pickNext(
+            candidates = candidates,
+            excluding = daemonTriedGuids,
+            failedGuids = failed.keys,
+        )?.guid
+    }
+
+    /** Records a daemon-side tunnel failure in the 6-hour failed store. */
+    private fun markDaemonFailed(guid: String) {
+        runCatching {
+            val failed = Vpn5gFailedServers.prune(
+                Vpn5gFailedServers.load(), System.currentTimeMillis()
+            )
+            Vpn5gFailedServers.save(
+                Vpn5gFailedServers.mark(failed, guid, System.currentTimeMillis())
+            )
         }
     }
 

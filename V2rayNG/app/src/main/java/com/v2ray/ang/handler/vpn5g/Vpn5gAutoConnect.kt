@@ -297,18 +297,37 @@ object Vpn5gAutoConnect {
 
     /**
      * Verify budget per attempt (v1.1.24, pure): the first three
-     * attempts of a connect chain get a short 15 s budget so a dead
+     * attempts of a connect chain get a short budget so a dead
      * server is rejected fast and the next ranked candidate starts
      * sooner; later attempts keep the full 25 s budget (a slow but
      * real tunnel on a bad network still gets its chance). The
      * single Xray core makes true parallel attempts unsafe — this
      * short-timeout serial order is the fast-failover equivalent.
+     * v1.1.29: the fast budget drops 15 s → 10 s — on the failover
+     * path the first replacement candidate must prove itself
+     * inside ~10 s so a dead standby costs seconds, not a quarter
+     * minute.
      */
     fun verifyTimeoutMsForAttempt(attemptIndex: Int): Int =
         if (attemptIndex < 3) FAST_VERIFY_TIMEOUT_MS else FULL_VERIFY_TIMEOUT_MS
 
-    const val FAST_VERIFY_TIMEOUT_MS = 15_000
+    const val FAST_VERIFY_TIMEOUT_MS = 10_000
     const val FULL_VERIFY_TIMEOUT_MS = 25_000
+
+    /**
+     * Backoff before empty-pool failover retry round [round]
+     * (0-based, v1.1.29, pure): the first retry comes after 10 s
+     * (with a fast, real-probe-skipped list), the second after
+     * 30 s, and every later round after the 60 s cap. There is no
+     * last round — while the switch is ON the failover keeps
+     * retrying at the capped backoff until a tunnel verifies or
+     * the user disconnects.
+     */
+    fun failoverRetryBackoffMs(round: Int): Long = when {
+        round <= 0 -> 10_000L
+        round == 1 -> 30_000L
+        else -> Vpn5gConstants.EMPTY_POOL_BACKOFF_MS
+    }
 
     /**
      * True while a tap on the connect switch must mean "turn OFF"

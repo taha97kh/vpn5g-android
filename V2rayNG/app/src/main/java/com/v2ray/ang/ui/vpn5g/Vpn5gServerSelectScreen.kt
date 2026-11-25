@@ -147,6 +147,8 @@ fun Vpn5gServerSelectScreen(
         ) {
             item {
                 Spacer(Modifier.height(8.dp))
+                // v1.1.29 (Aref's order): visible back button at the top.
+                Vpn5gBackRow(onBack)
                 Vpn5gStaggeredItem(index = 0, visible = entered) {
                     Text(
                         text = stringResource(R.string.vpn5g_server_select_title),

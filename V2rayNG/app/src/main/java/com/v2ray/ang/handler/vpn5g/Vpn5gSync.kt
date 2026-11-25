@@ -133,8 +133,30 @@ object Vpn5gSync {
         val profiles = linkedMapOf<String, ProfileItem>()
         val rawConfigs = mutableMapOf<String, String>()
         val perCountry = mutableMapOf<String, Int>()
-        live.forEach { (profile, _, country) ->
-            val guid = Utils.getUuid()
+        // v1.1.29 (GUID stability): a refresh used to mint a fresh
+        // UUID for every profile and replace the whole group, so
+        // every guid the UI held in memory (candidate lists, tried
+        // sets, the failover queue) died at the next publish — a
+        // failover onto such a guid decoded to nothing and the
+        // start died with «کانفیگ معتبر نیست» while the session
+        // sat on «در حال تغییر سرور...». Reuse the existing guid
+        // for the same server identity (dedupe key) so guids
+        // survive refreshes; only genuinely new servers get a new
+        // UUID.
+        val existingByKey = MmkvManager.decodeServerList(subId)
+            .mapNotNull { guid ->
+                MmkvManager.decodeServerConfig(guid)?.let { existing ->
+                    Vpn5gServerValidator.dedupeKey(existing) to guid
+                }
+            }
+            .toMap()
+        val assignedGuids = assignGuids(
+            keys = live.map { (profile, _, _) -> Vpn5gServerValidator.dedupeKey(profile) },
+            existingByKey = existingByKey,
+            newGuid = { Utils.getUuid() },
+        )
+        live.forEachIndexed { index, (profile, _, country) ->
+            val guid = assignedGuids[index]
             profiles[guid] = profile
             rawConfigs[guid] = ""
             val key = normalizeCountry(country).ifEmpty { "بین‌الملل" }
@@ -435,6 +457,24 @@ object Vpn5gSync {
         return Vpn5gRealPing.selectCandidates(
             candidates, tcpDelays, knownReal, QUICK_PROBE_CANDIDATES,
         )
+    }
+
+    /**
+     * GUID assignment for a publish batch (v1.1.29, pure): each
+     * server identity (dedupe key) keeps its existing guid when
+     * the store already has one, so in-memory candidate lists,
+     * tried sets and the selected server survive a refresh; only
+     * a genuinely new identity gets a fresh guid from [newGuid].
+     * A key repeated inside one batch reuses the guid assigned
+     * for its first occurrence. Covered by JVM unit tests.
+     */
+    fun assignGuids(
+        keys: List<String>,
+        existingByKey: Map<String, String>,
+        newGuid: () -> String,
+    ): List<String> {
+        val assigned = HashMap(existingByKey)
+        return keys.map { key -> assigned.getOrPut(key) { newGuid() } }
     }
 
     /**

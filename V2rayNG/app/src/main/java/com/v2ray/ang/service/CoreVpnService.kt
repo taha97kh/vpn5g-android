@@ -44,6 +44,15 @@ class CoreVpnService : VpnService(), ServiceControl {
 
     override fun onRevoke() {
         LogUtil.w(AppConfig.TAG, "StartCore-VPN: Permission revoked")
+        // v1.1.29: a revoke means the system handed the tunnel to
+        // another VPN app (only one VpnService can run at a time).
+        // End the persistent session too — otherwise the UI's
+        // persistent reconnect would restart our VPN, revoke
+        // theirs, and the two apps would fight over the tunnel.
+        runCatching {
+            com.v2ray.ang.handler.vpn5g.Vpn5gConnectionPersistence
+                .setPersistentConnection(false)
+        }
         stopAllService()
     }
 

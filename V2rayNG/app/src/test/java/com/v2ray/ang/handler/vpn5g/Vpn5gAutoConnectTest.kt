@@ -646,4 +646,29 @@ class Vpn5gAutoConnectTest {
     // entry. Connection starts only from the user's switch tap
     // (beginConnect); pickBestServer on that tap path is covered by the
     // picker tests above.
+
+    // -- v1.1.29 failover backoff: fast first retry, capped, never ends ----
+
+    @Test
+    fun test_failover_retry_backoff_grows_then_caps() {
+        assertEquals(10_000L, Vpn5gAutoConnect.failoverRetryBackoffMs(0))
+        assertEquals(30_000L, Vpn5gAutoConnect.failoverRetryBackoffMs(1))
+        assertEquals(
+            Vpn5gConstants.EMPTY_POOL_BACKOFF_MS,
+            Vpn5gAutoConnect.failoverRetryBackoffMs(2),
+        )
+        assertEquals(
+            Vpn5gConstants.EMPTY_POOL_BACKOFF_MS,
+            Vpn5gAutoConnect.failoverRetryBackoffMs(50),
+        )
+        assertEquals(10_000L, Vpn5gAutoConnect.failoverRetryBackoffMs(-3))
+    }
+
+    @Test
+    fun test_fast_verify_budget_is_ten_seconds() {
+        assertEquals(10_000, Vpn5gAutoConnect.FAST_VERIFY_TIMEOUT_MS)
+        assertEquals(10_000, Vpn5gAutoConnect.verifyTimeoutMsForAttempt(0))
+        assertEquals(10_000, Vpn5gAutoConnect.verifyTimeoutMsForAttempt(2))
+        assertEquals(25_000, Vpn5gAutoConnect.verifyTimeoutMsForAttempt(3))
+    }
 }

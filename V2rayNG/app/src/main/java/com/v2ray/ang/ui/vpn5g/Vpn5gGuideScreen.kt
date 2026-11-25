@@ -58,6 +58,8 @@ fun Vpn5gGuideScreen(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // v1.1.29 (Aref's order): visible back button at the top.
+        Vpn5gBackRow(onBack)
         Vpn5gStaggeredItem(index = 0, visible = entered) {
             Text(
                 text = stringResource(R.string.vpn5g_guide_title),
@@ -134,7 +136,10 @@ fun Vpn5gGuideScreen(
                             onClick = { onOpenUrl(Vpn5gConstants.BOT_URL) },
                         )
                         GuideLinkRow(
-                            label = stringResource(R.string.vpn5g_link_support),
+                            // v1.1.29: this row opens the bot, so it
+                            // carries the bot label; «پشتیبانی آنلاین»
+                            // is Aref's own account (Me + drawer).
+                            label = stringResource(R.string.vpn5g_link_support_bot),
                             // v1.1.14: support goes DIRECTLY to the bot's
                             // support section (start=support); the bot
                             // handles membership (not verifiable app-side).

@@ -741,8 +741,8 @@
     <string name="vpn5g_premium_price_plain">%1$s تومان</string>
     <string name="vpn5g_filter_sub">اشتراکی</string>
     <string name="vpn5g_filter_free">رایگان</string>
-    <string name="vpn5g_per_app_title">برنامه‌های بدون فیلتر</string>
-    <string name="vpn5g_per_app_body">برنامه‌هایی را انتخاب کنید که نباید از تونل استفاده کنند؛ آن‌ها مستقیم و بدون فیلتر باز می‌شوند. تغییر از اتصال بعدی اعمال می‌شود.</string>
+    <string name="vpn5g_per_app_title">برنامه‌های فیلترشکن</string>
+    <string name="vpn5g_per_app_body">به‌صورت پیش‌فرض اینستاگرام و تلگرام از فیلترشکن استفاده می‌کنند. می‌توانید این انتخاب را تغییر دهید؛ تغییر از اتصال بعدی اعمال می‌شود.</string>
     <string name="vpn5g_per_app_open">انتخاب برنامه‌ها</string>
     <string name="vpn5g_startup_text_01">در حال بررسی امنیت اتصال...</string>
     <string name="vpn5g_startup_text_02">در حال آماده‌سازی تونل امن...</string>
@@ -849,7 +849,8 @@
     <string name="vpn5g_link_channel">کانال کانفیگ رایگان</string>
     <string name="vpn5g_link_bot">ربات هوشمند</string>
     <string name="vpn5g_link_support">پشتیبانی آنلاین</string>
-    <string name="vpn5g_link_support_telegram">پشتیبانی آنلاین: @Aref_5G</string>
+    <string name="vpn5g_link_support_telegram">پشتیبانی آنلاین</string>
+    <string name="vpn5g_link_support_bot">پشتیبانی ربات</string>
     <string name="vpn5g_guide_faq_title">سوالات متداول</string>
     <string name="vpn5g_guide_s01_title">۱. اتصال با یک دکمه</string>
     <string name="vpn5g_guide_s01_body">روی کلید بزرگ وسط صفحه بزن. برنامه اول اینترنت را بررسی می‌کند، بعد سریع‌ترین سرور رایگان را انتخاب می‌کند، تونل را می‌سازد و فقط وقتی ترافیک واقعاً از داخل VPN رد شد، «متصل» نشان می‌دهد. اگر سروری کار نکرد، خودکار سراغ سرور بعدی می‌رود.</string>
@@ -960,4 +961,9 @@
     <string name="vpn5g_feature_free_body">هر اتصال رایگان ۳۰ دقیقه است؛ بدون ثبت‌نام و بدون کارت.</string>
     <string name="vpn5g_feature_gift_title">کد هدیه</string>
     <string name="vpn5g_feature_gift_body">با کد هدیه، بدون پرداخت اشتراک بگیر و قفل کشورها را باز کن.</string>
+    <string name="vpn5g_back">برگشت</string>
+    <string name="vpn5g_exit_title">از برنامه خارج می‌شوید؟</string>
+    <string name="vpn5g_exit_yes">آره</string>
+    <string name="vpn5g_exit_no">نه</string>
+    <string name="vpn5g_other_vpn_notice">یک فیلترشکن دیگر روی گوشی شما فعال است. با اتصال VPN 5G آن فیلترشکن متوقف می‌شود تا تداخلی پیش نیاید.</string>
 </resources>

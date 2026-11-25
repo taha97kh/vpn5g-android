@@ -734,8 +734,8 @@
     <string name="vpn5g_premium_price_plain">%1$s Toman</string>
     <string name="vpn5g_filter_sub">Abunəlikli</string>
     <string name="vpn5g_filter_free">Pulsuz</string>
-    <string name="vpn5g_per_app_title">VPN-siz tətbiqlər</string>
-    <string name="vpn5g_per_app_body">Tuneldən istifadə etməməli olan tətbiqləri seçin; onlar birbaşa və VPN-siz açılır. Dəyişiklik növbəti qoşulmadan tətbiq edilir.</string>
+    <string name="vpn5g_per_app_title">VPN istifadə edən tətbiqlər</string>
+    <string name="vpn5g_per_app_body">Standart olaraq Instagram və Telegram VPN-dən istifadə edir. Bu seçimi dəyişə bilərsiniz; dəyişiklik növbəti qoşulmadan tətbiq edilir.</string>
     <string name="vpn5g_per_app_open">Tətbiqləri seç</string>
     <string name="vpn5g_startup_text_01">Qoşulmanın təhlükəsizliyi yoxlanılır...</string>
     <string name="vpn5g_startup_text_02">Təhlükəsiz tunel hazırlanır...</string>
@@ -849,7 +849,8 @@
     <string name="vpn5g_link_channel">Pulsuz konfiq kanalı</string>
     <string name="vpn5g_link_bot">Ağıllı bot</string>
     <string name="vpn5g_link_support">Onlayn dəstək</string>
-    <string name="vpn5g_link_support_telegram">Onlayn dəstək: @Aref_5G</string>
+    <string name="vpn5g_link_support_telegram">Onlayn dəstək</string>
+    <string name="vpn5g_link_support_bot">Bot dəstəyi</string>
     <string name="vpn5g_guide_faq_title">Tez-tez verilən suallar</string>
     <string name="vpn5g_guide_s01_title">1. Bir toxunuşla qoşul</string>
     <string name="vpn5g_guide_s01_body">Ekranın ortasındakı böyük açara toxunun. Tətbiq əvvəlcə interneti yoxlayır, sonra ən sürətli pulsuz serveri seçir, tuneli qurur və yalnız trafik həqiqətən VPN-dən keçəndə “Qoşulub” göstərir. Server işləməsə, avtomatik növbəti serverə keçir.</string>
@@ -960,4 +961,9 @@
     <string name="vpn5g_feature_free_body">Hər pulsuz qoşulma 30 dəqiqədir; qeydiyyatsız və kartsız.</string>
     <string name="vpn5g_feature_gift_title">Hədiyyə kodu</string>
     <string name="vpn5g_feature_gift_body">Hədiyyə kodu ilə ödənişsiz abunəlik alın və ölkələrin kilidini açın.</string>
+    <string name="vpn5g_back">Geri</string>
+    <string name="vpn5g_exit_title">Tətbiqdən çıxırsınız?</string>
+    <string name="vpn5g_exit_yes">Bəli</string>
+    <string name="vpn5g_exit_no">Xeyr</string>
+    <string name="vpn5g_other_vpn_notice">Telefonunuzda başqa bir VPN aktivdir. VPN 5G ilə qoşulanda o VPN dayanacaq ki, qarışmasınlar.</string>
 </resources>

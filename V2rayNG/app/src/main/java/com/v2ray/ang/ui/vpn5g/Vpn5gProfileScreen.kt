@@ -77,6 +77,8 @@ fun Vpn5gProfileScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // v1.1.29 (Aref's order): visible back button at the top.
+        Vpn5gBackRow(onBack)
         Vpn5gStaggeredItem(index = 0, visible = entered) {
             Vpn5gPulsingLogo(size = 96.dp)
         }
@@ -245,14 +247,16 @@ fun Vpn5gProfileScreen(
             }
         }
 
-        // Per-app bypass (v1.1.14): pick apps that must NOT use the
-        // tunnel, so they open without filter (direct connection). The
+        // Per-app selection (v1.1.14, default changed v1.1.29): the
         // mechanism already exists upstream (PerAppProxyActivity +
-        // CoreVpnService.configurePerAppProxy, applied with
-        // addDisallowedApplication at service setup and taking effect
-        // on the next connect) — it was only reachable through the
-        // hidden upstream MainActivity, so it is surfaced here as its
-        // own section. The selection persists in the upstream settings.
+        // CoreVpnService.configurePerAppProxy, applied at service
+        // setup and taking effect on the next connect) — it was only
+        // reachable through the hidden upstream MainActivity, so it
+        // is surfaced here as its own section. The selection persists
+        // in the upstream settings. v1.1.29 default (Aref's order):
+        // Instagram + Telegram use the VPN (allowlist seed in
+        // Vpn5gRouting.seedPerAppDefaultsIfNeeded); the picker still
+        // offers both directions.
         Vpn5gStaggeredItem(index = 4, visible = entered) {
             Vpn5gExpandableSection(
                 title = stringResource(R.string.vpn5g_per_app_title),
@@ -297,7 +301,10 @@ fun Vpn5gProfileScreen(
                 )
                 Spacer(Modifier.height(12.dp))
                 NeuLinkButton(
-                    label = stringResource(R.string.vpn5g_link_support),
+                    // v1.1.29 (Aref's order): «پشتیبانی آنلاین» is his
+                    // own account (button below); the bot entry stays
+                    // as «پشتیبانی ربات» so the two are distinct.
+                    label = stringResource(R.string.vpn5g_link_support_bot),
                     // v1.1.14: support goes DIRECTLY to the bot's support
                     // section (start=support). Bot membership cannot be
                     // verified app-side — the bot handles it.
@@ -306,7 +313,8 @@ fun Vpn5gProfileScreen(
                 Spacer(Modifier.height(12.dp))
                 // v1.1.28 (Aref's order): his personal Telegram
                 // account next to the bot support entry — "هم" (also),
-                // the bot entry above stays.
+                // the bot entry above stays. v1.1.29: label is plain
+                // «پشتیبانی آنلاین» (no @handle on the button).
                 NeuLinkButton(
                     label = stringResource(R.string.vpn5g_link_support_telegram),
                     onClick = { onOpenUrl(SUPPORT_URL) },

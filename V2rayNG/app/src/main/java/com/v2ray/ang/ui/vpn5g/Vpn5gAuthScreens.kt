@@ -106,6 +106,8 @@ fun Vpn5gAuthScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // v1.1.29 (Aref's order): visible back button at the top.
+        Vpn5gBackRow(onBack)
         Vpn5gStaggeredItem(index = 0, visible = entered) {
             Vpn5gPulsingLogo(size = 96.dp)
         }

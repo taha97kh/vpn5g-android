@@ -130,14 +130,16 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConnectState
 import com.v2ray.ang.handler.vpn5g.Vpn5gConnectionPersistence
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_BOT_URL
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CONFIG_SCHEMES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.DROP_FAILOVER_DEBOUNCE_MS
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.EMPTY_POOL_BACKOFF_MS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_UPDATE_LAST_CHECK_MS
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.MAX_DROP_FAILOVER_ROUNDS
-import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.WATCHDOG_MAX_CONSECUTIVE_FAILURES
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.WATCHDOG_CONFIRM_DELAY_MS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.WATCHDOG_PROBE_INTERVAL_TICKS
+import com.v2ray.ang.handler.vpn5g.Vpn5gDaemonHeartbeat
+import com.v2ray.ang.handler.vpn5g.Vpn5gFailoverPick
+import com.v2ray.ang.handler.vpn5g.Vpn5gStandbyLiveness
+import com.v2ray.ang.handler.vpn5g.Vpn5gWatchdogScore
 import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gCrashHandler
 import com.v2ray.ang.handler.vpn5g.Vpn5gFailedServers
@@ -145,6 +147,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
 import com.v2ray.ang.handler.vpn5g.Vpn5gHealthScore
 import com.v2ray.ang.handler.vpn5g.Vpn5gManualServer
 import com.v2ray.ang.handler.vpn5g.Vpn5gNetworkProfile
+import com.v2ray.ang.handler.vpn5g.Vpn5gOtherVpn
 import com.v2ray.ang.handler.vpn5g.Vpn5gOperator
 import com.v2ray.ang.handler.vpn5g.Vpn5gPromoCodes
 import com.v2ray.ang.handler.vpn5g.Vpn5gRecoveryLink
@@ -176,6 +179,8 @@ import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -236,6 +241,14 @@ data class Vpn5gHomeUiState(
     val lastError: String? = null,
     val offline: Boolean = false,
     val notice: String? = null,
+    /**
+     * v1.1.29 (Aref's order): another app's VPN is active on the
+     * phone (VPN transport present while our core is not running).
+     * Home shows an informational banner — connecting with VPN 5G
+     * makes Android stop the other VPN (only one VpnService can
+     * run at a time), so this never blocks our own connect.
+     */
+    val otherVpnActive: Boolean = false,
     /** Admin-published app announcement (v1.1.5); null = none to show. */
     val announcement: AnnouncementRemote? = null,
     /**
@@ -438,15 +451,36 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     /** In-session tunnel watchdog (v1.1.11): light exit-IP probe. */
     private var watchdogJob: Job? = null
     private var watchdogTicks = 0
-    private var watchdogFailures = 0
+
+    /**
+     * Leaky-bucket watchdog failure score (v1.1.29, see
+     * [Vpn5gWatchdogScore]) — replaces the old consecutive-failure
+     * counter whose hard reset let flapping servers stay
+     * "connected" while unusable. This UI watchdog is the BACKUP:
+     * while the daemon heartbeat is fresh the daemon owns drop
+     * detection and this score is not fed.
+     */
+    private var watchdogScore = 0.0
 
     /**
      * Drop-failover rounds with an empty pool (v1.1.11): counts the
-     * no-candidate refresh rounds in [attemptAutoFailover]; after
-     * [MAX_DROP_FAILOVER_ROUNDS] the chain gives up with a clear
-     * error instead of looping forever on a dead network.
+     * no-candidate refresh rounds in [attemptAutoFailover] and
+     * drives the growing retry backoff. Since v1.1.29 the rounds
+     * are unbounded — while the switch is ON the failover never
+     * gives up.
      */
     private var dropFailoverRounds = 0
+
+    /**
+     * Pre-ranked standby replacement queue (v1.1.29): guids of the
+     * best standby servers, kept fresh by the in-session liveness
+     * probes ([standbyJob]) so a drop switches with zero list
+     * rebuild. Read by [attemptAutoFailover] / [nextBestServer]
+     * through [Vpn5gFailoverPick].
+     */
+    @Volatile
+    private var standbyQueue: List<String> = emptyList()
+    private var standbyJob: Job? = null
 
     /** Persistent-connection reconnect (v1.1.12): bounded re-runs of the connect chain after an unexpected stop. */
     private var persistentReconnectJob: Job? = null
@@ -802,9 +836,31 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         // the next connect sees even if the app was killed mid-change.
         // Language is the MMKV PREF_LANGUAGE value ("auto" = system);
         // theme is the ThemeManager flow's current value.
+        // v1.1.29 (Aref's order): one-time default per-app seed —
+        // Instagram + Telegram use the VPN by default (allowlist),
+        // only when installed and only if the user never customized
+        // the selection/routing. Runs BEFORE the routing restore so
+        // the seeded prefs are what the next connect sees.
+        Vpn5gRouting.seedPerAppDefaultsIfNeeded { pkg ->
+            try {
+                getApplication<Application>().packageManager.getPackageInfo(pkg, 0)
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+        // v1.1.29 (Aref's order): entering the app with another
+        // VPN active must be visible at once (Home banner).
+        checkOtherVpn()
         val savedMode = Vpn5gRouting.loadMode()
         val savedDirectFirst = Vpn5gRouting.loadDirectFirst()
-        Vpn5gRouting.apply(savedMode, savedDirectFirst)
+        // Re-apply the routing mapping only when a mode was actually
+        // chosen (stored). With no stored mode the raw per-app prefs
+        // stand — that is what keeps the seeded allowlist (and any
+        // per-app-screen edits) from being overwritten on startup.
+        if (MmkvManager.decodeSettingsString(Vpn5gRouting.KEY_ROUTING_MODE) != null) {
+            Vpn5gRouting.apply(savedMode, savedDirectFirst)
+        }
         _uiState.update {
             it.copy(
                 routingMode = savedMode,
@@ -899,6 +955,86 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
 
+        // Standby liveness during a session (v1.1.29): while
+        // CONNECTED, keep the top standby candidates' reachability
+        // fresh with direct TCP(+TLS) handshake probes — no second
+        // core (the app process is excluded from the tunnel, so
+        // the socket measures the server from the device network)
+        // — and maintain the pre-ranked replacement queue so a
+        // drop switches with zero list rebuild. The warm pool
+        // above only runs while idle; before 1.1.29 the standby
+        // list simply aged during a session and failover burned
+        // full verify budgets on long-dead servers.
+        standbyJob = viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(Vpn5gConstants.STANDBY_LIVENESS_INTERVAL_MS)
+                val state = _uiState.value
+                if (!state.isRunning ||
+                    state.connectState != Vpn5gConnectState.CONNECTED
+                ) {
+                    continue
+                }
+                val currentGuid = MmkvManager.getSelectServer()
+                val candidates = state.countries
+                    .flatMap { it.servers }
+                    .filter { it.guid != currentGuid }
+                    .sortedWith(
+                        compareBy({ !it.hasRealPing }, { it.pingMillis })
+                    )
+                    .take(Vpn5gConstants.STANDBY_PROBE_K)
+                if (candidates.isEmpty()) continue
+                val results = candidates.map { server ->
+                    async {
+                        val profile = MmkvManager.decodeServerConfig(server.guid)
+                        if (profile == null) {
+                            Vpn5gStandbyLiveness.Result(server.guid, -1L, false)
+                        } else {
+                            Vpn5gStandbyLiveness.probe(server.guid, profile)
+                        }
+                    }
+                }.awaitAll()
+                standbyQueue = Vpn5gStandbyLiveness.rankQueue(results)
+                // Refresh the shown TCP delays for probed servers so
+                // the ranking the user sees is not minutes old.
+                val delays = results.filter { it.alive }
+                    .associate { it.guid to it.tcpDelayMs }
+                if (delays.isNotEmpty()) {
+                    _uiState.update { current ->
+                        current.copy(
+                            countries = current.countries.map { country ->
+                                country.copy(
+                                    servers = country.servers.map { server ->
+                                        delays[server.guid]?.let { delay ->
+                                            server.copy(pingMillis = delay)
+                                        } ?: server
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Pending-failover resume (v1.1.29): a failover restart was
+        // requested but the process died (or the emit was lost)
+        // before the tunnel verified. If the session is still
+        // persistent (the user never disconnected) and the service
+        // is not running, resume the failover instead of stranding
+        // the session. A fresh entry with no live session has no
+        // pending guid, so the 1.1.25 no-auto-connect rule stands.
+        viewModelScope.launch {
+            delay(DROP_FAILOVER_DEBOUNCE_MS)
+            if (!isActive || userStopRequested) return@launch
+            if (_uiState.value.isRunning) return@launch
+            if (!Vpn5gConnectionPersistence.isPersistentConnection()) return@launch
+            if (Vpn5gDaemonHeartbeat.pendingFailoverGuid().isBlank()) return@launch
+            if (Vpn5gDaemonHeartbeat.isHeartbeatFresh()) return@launch
+            LogUtil.i(AppConfig.TAG, "Vpn5gHomeViewModel: resuming pending failover")
+            autoFailoverPending = true
+            attemptAutoFailover()
+        }
+
         // Baseline public IP for the tunnel check (background, best effort).
         viewModelScope.launch(Dispatchers.IO) {
             baselineIp = Vpn5gTunnelCheck.publicIpDirect()
@@ -957,7 +1093,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     } else {
                         ticksSinceReverify = 0
                         watchdogTicks = 0
-                        watchdogFailures = 0
+                        watchdogScore = 0.0
                     }
                 }
             }
@@ -973,6 +1109,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         watchdogJob?.cancel()
         autoFailoverJob?.cancel()
         persistentReconnectJob?.cancel()
+        standbyJob?.cancel()
         Vpn5gSpeedMonitor.stop()
         runCatching {
             val manager = getApplication<Application>()
@@ -2150,6 +2287,24 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
+     * Other-VPN check (v1.1.29, Aref's order): on entry and on
+     * every return to the foreground, note whether another app's
+     * VPN is active so Home can tell the user. Informational
+     * only — connecting with VPN 5G makes Android stop the other
+     * VPN by itself (one VpnService at a time); nothing here
+     * blocks or delays our own connect.
+     */
+    fun checkOtherVpn() {
+        val active = Vpn5gOtherVpn.isOtherVpnActive(
+            getApplication<Application>(),
+            _uiState.value.isRunning,
+        )
+        if (active != _uiState.value.otherVpnActive) {
+            _uiState.update { it.copy(otherVpnActive = active) }
+        }
+    }
+
+    /**
      * The server to actually connect to when the user taps [guid]: the
      * tapped server itself when it has a real through-the-proxy ping;
      * otherwise the next best free server in a different country, switched
@@ -2284,7 +2439,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         watchdogJob?.cancel()
         watchdogJob = null
         watchdogTicks = 0
-        watchdogFailures = 0
+        watchdogScore = 0.0
         dropFailoverRounds = 0
         _uiState.update {
             it.copy(
@@ -2318,6 +2473,17 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         connectChainJob = null
         autoFailoverJob?.cancel()
         autoFailoverJob = null
+        // v1.1.29: a manual disconnect ends EVERY recovery loop at
+        // once — no pending failover may resume, no standby queue
+        // may be acted on, and no start may be emitted after this
+        // (the post-disconnect «کانفیگ معتبر نیست» spam came from
+        // loops that outlived the disconnect and kept starting
+        // stale guids). The daemon watchdog is cancelled by the
+        // stop itself (stopCoreLoop) and its gate reads the
+        // persistent flag cleared below.
+        Vpn5gDaemonHeartbeat.clearPendingFailoverGuid()
+        standbyQueue = emptyList()
+        watchdogScore = 0.0
         // v1.1.12: a manual disconnect ends the persistent session —
         // no reconnect may follow it.
         Vpn5gConnectionPersistence.setPersistentConnection(false)
@@ -3150,7 +3316,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             Vpn5gSpeedMonitor.start()
             dropFailoverRounds = 0
             watchdogTicks = 0
-            watchdogFailures = 0
+            watchdogScore = 0.0
             sessionActive = true
             sessionStartedAtMs = System.currentTimeMillis()
             userStopRequested = false
@@ -3335,30 +3501,20 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Bounded reconnect after an unexpected stop (v1.1.12): re-runs
-     * the full connect chain with exponential backoff, at most
-     * [Vpn5gConnectionPersistence.maxAttempts] times, then gives up
-     * with a clear error. Cancelled immediately by a manual
-     * disconnect ([userDisconnect]) or by the service coming back.
+     * Reconnect after an unexpected stop (v1.1.12; never-give-up
+     * v1.1.29): re-runs the full connect chain with exponential
+     * backoff. Since 1.1.29 there is NO attempt cap while the
+     * switch is ON — the backoff caps at
+     * [Vpn5gConnectionPersistence.nextBackoffMs]'s ceiling and the
+     * chain keeps retrying until a tunnel verifies or the user
+     * disconnects. (Before, five attempts ended in FAILED and the
+     * session sat dead until a manual toggle — Aref's 2026-11-25
+     * report.) Cancelled immediately by a manual disconnect
+     * ([userDisconnect]) or by the service coming back.
      */
     private fun schedulePersistentReconnect() {
         persistentReconnectJob?.cancel()
         val attempt = persistentReconnectAttempts
-        if (attempt >= Vpn5gConnectionPersistence.maxAttempts()) {
-            persistentReconnectAttempts = 0
-            val reason = getApplication<Application>().getString(
-                R.string.vpn5g_persistent_reconnect_failed
-            )
-            _uiState.update {
-                it.copy(
-                    connectState = Vpn5gAutoConnect.transition(
-                        it.connectState, Vpn5gConnectEvent.GIVE_UP
-                    ),
-                    lastError = reason,
-                )
-            }
-            return
-        }
         persistentReconnectAttempts = attempt + 1
         persistentReconnectJob = viewModelScope.launch {
             delay(Vpn5gConnectionPersistence.nextBackoffMs(attempt))
@@ -3401,75 +3557,38 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         val failed = Vpn5gFailedServers.prune(
             Vpn5gFailedServers.load(), System.currentTimeMillis()
         )
-        // v1.1.23: tier-pool ordering like pickBestServer —
-        // real-pinged first, then TCP-pinged pool servers, so a
-        // subscriber fails over onto unlocked servers too.
-        // v1.1.24: within each group, health-adjusted ping (a
-        // server that carried a tunnel before wins over an
-        // equally fast stranger).
-        val healthScores = Vpn5gHealthScore.currentScores()
-        fun healthAdjusted(server: Vpn5gServerUi): Long =
-            Vpn5gHealthScore.adjustedPing(
-                server.pingMillis, healthScores[server.dedupeKey] ?: 0.0
-            )
-        val pool = _uiState.value.countries
-            .flatMap { it.servers }
-            .filter {
-                it.isFree && it.guid != droppedGuid &&
-                    it.guid !in failed && it.pingMillis > 0
-            }
-            .sortedWith(
-                compareBy({ !it.hasRealPing }, { healthAdjusted(it) })
-            )
-        val candidates = if (pool.isNotEmpty()) pool else _uiState.value.countries
-            .flatMap { it.servers }
-            .filter {
-                it.guid != droppedGuid && it.guid !in failed && it.pingMillis > 0
-            }
-            .sortedWith(
-                compareBy({ !it.hasRealPing }, { healthAdjusted(it) })
-            )
-        val next = candidates
-            .firstOrNull { it.country != droppedCountry }
-            ?: candidates.firstOrNull()
+        // v1.1.29: one shared pick with relaxation tiers
+        // (Vpn5gFailoverPick) — standby queue first, then the
+        // tier-pool ordering (real-pinged first, health-adjusted
+        // ping), relaxing ping/failed filters tier by tier so the
+        // FREE pool can never be filtered into a dead end. A
+        // candidate whose stored profile no longer decodes (stale
+        // guid from before the GUID-stability fix) is skipped, not
+        // started — starting it only produced «کانفیگ معتبر نیست».
+        val excluding = buildSet {
+            if (droppedGuid != null) add(droppedGuid)
+            addAll(triedGuids)
+        }
+        val ranked = Vpn5gFailoverPick.ranked(
+            servers = _uiState.value.countries.flatMap { it.servers },
+            excluding = excluding,
+            failedGuids = failed.keys,
+            standbyQueue = standbyQueue,
+            healthScores = Vpn5gHealthScore.currentScores(),
+        ).filter { MmkvManager.decodeServerConfig(it.guid) != null }
+        val next = ranked.firstOrNull { it.country != droppedCountry }
+            ?: ranked.firstOrNull()
         if (next == null) {
-            // v1.1.11: an empty pool means the network (or the sources)
-            // is dead, not just a bad server. Refresh + backoff a few
-            // rounds, then give up with a clear error instead of
-            // looping forever on a dead network. When candidates exist
-            // the chain still never gives up (v1.1.7).
+            // v1.1.29 (never give up while the switch is ON): an
+            // empty pool means the network (or the sources) is
+            // dead, not just a bad server — but the session must
+            // not strand on «در حال تغییر سرور...». Stay in
+            // RETRYING and keep refreshing at growing backoff
+            // (first retry fast with a real-probe-skipped list)
+            // until a candidate appears or the user disconnects.
+            // (Before 1.1.29 three 60 s rounds ended in FAILED /
+            // bounded reconnect and the session sat dead.)
             dropFailoverRounds++
-            if (dropFailoverRounds > MAX_DROP_FAILOVER_ROUNDS) {
-                dropFailoverRounds = 0
-                autoFailoverPending = false
-                // v1.1.13: a persistent session is rescued by the
-                // bounded persistent reconnect instead of ending
-                // FAILED here — the persistent flag is still set, so
-                // the session must not die on an empty pool.
-                if (Vpn5gConnectionPersistence.failoverGiveUpAction(
-                        Vpn5gConnectionPersistence.isPersistentConnection()
-                    ) == Vpn5gConnectionPersistence.FailoverGiveUpAction.PERSISTENT_RECONNECT
-                ) {
-                    schedulePersistentReconnect()
-                    return
-                }
-                val reason = app.getString(R.string.vpn5g_failover_no_server)
-                _uiState.update {
-                    it.copy(
-                        connectState = Vpn5gAutoConnect.transition(
-                            it.connectState, Vpn5gConnectEvent.GIVE_UP
-                        ),
-                        lastError = reason,
-                    )
-                }
-                return
-            }
-            // v1.1.7: no untried real-pinged server right now — the chain
-            // does NOT give up. Stay in RETRYING, refresh the list after
-            // a backoff, and try again; the user can still disconnect.
-            // (The minimal refresh here duplicates the server-list part
-            // of refresh(): the failover retry only needs fresh servers,
-            // not the remote config / auth state that refresh() also loads.)
             autoFailoverPending = true
             _uiState.update {
                 it.copy(
@@ -3477,12 +3596,19 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     autoFailoverNotice = app.getString(R.string.vpn5g_refreshing_servers),
                 )
             }
+            val round = dropFailoverRounds - 1
             autoFailoverJob?.cancel()
             autoFailoverJob = viewModelScope.launch(Dispatchers.IO) {
-                delay(EMPTY_POOL_BACKOFF_MS)
+                delay(Vpn5gAutoConnect.failoverRetryBackoffMs(round))
                 if (!isActive || userStopRequested || suppressAutoFailover) return@launch
                 runCatching {
-                    Vpn5gSync.refresh(getApplication<Application>(), skipRealProbe = false)
+                    Vpn5gSync.refresh(
+                        getApplication<Application>(),
+                        // First retry: fast list now, real-probe in
+                        // the background warm pool. Later rounds run
+                        // the full probe.
+                        skipRealProbe = round == 0,
+                    )
                 }
                 if (!isActive || userStopRequested || suppressAutoFailover) return@launch
                 val countries = Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
@@ -3520,6 +3646,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 ),
             )
         }
+        // v1.1.29: persist the pending target BEFORE the emit — if
+        // the SharedFlow event is lost (Activity gone) or the
+        // process dies, the pending guid lets the next launch /
+        // drop check resume this failover instead of stranding.
+        Vpn5gDaemonHeartbeat.writePendingFailoverGuid(next.guid)
         viewModelScope.launch { _failoverEvent.emit(next.guid) }
     }
 
@@ -3558,7 +3689,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // per-attempt timeouts, the 6h failed store and the 30-minute
             // session timer — never by a count.
             while (isActive) {
-                delay(1_500L)
+                // v1.1.29: the first attempt keeps the 1.5 s core
+                // warm-up; failover attempts (a server already
+                // tried) go almost immediately — the restart wait
+                // below already proves the new core is up.
+                delay(if (triedGuids.isEmpty()) 1_500L else 300L)
                 if (!_uiState.value.isRunning) return@launch
                 val guid = MmkvManager.getSelectServer() ?: return@launch
                 _uiState.update {
@@ -3607,6 +3742,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         }.orEmpty()
                         Vpn5gSounds.playConnected()
                         ticksSinceReverify = 0
+                        // v1.1.29: the failover (if any) landed —
+                        // the pending target is no longer pending.
+                        Vpn5gDaemonHeartbeat.clearPendingFailoverGuid()
                         _uiState.update {
                             it.copy(
                                 connectState = Vpn5gAutoConnect.transition(
@@ -3688,6 +3826,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                             }
                             return@launch
                         }
+                        // v1.1.29: a daemon failover is already in
+                        // flight — the daemon owns the pick and the
+                        // restart; this loop only re-verifies
+                        // whatever the daemon lands on. Emitting a
+                        // competing UI failover here would fight it.
+                        if (Vpn5gDaemonHeartbeat.isFailoverFresh()) {
+                            delay(2_000L)
+                            continue
+                        }
                         val failedCountry = _uiState.value.countries
                             .flatMap { it.servers }
                             .firstOrNull { it.guid == guid }?.country
@@ -3706,6 +3853,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                             // wait with backoff in RETRYING and refresh
                             // again — never a FAILED state while the user
                             // has not disconnected.
+                            // v1.1.29: the first refresh is fast
+                            // (real-probe skipped, list shows at once)
+                            // and the backoff grows 10 s → 30 s → 60 s
+                            // instead of a flat 60 s.
                             _uiState.update {
                                 it.copy(
                                     connectState = Vpn5gConnectState.RETRYING,
@@ -3714,10 +3865,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                                         .getString(R.string.vpn5g_refreshing_servers),
                                 )
                             }
+                            var refreshRound = 0
                             while (isActive && next == null) {
                                 runCatching {
                                     Vpn5gSync.refresh(
-                                        getApplication<Application>(), skipRealProbe = false
+                                        getApplication<Application>(),
+                                        skipRealProbe = refreshRound == 0,
                                     )
                                 }
                                 _uiState.update {
@@ -3729,61 +3882,98 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                                 )
                                 if (next == null) {
                                     if (!_uiState.value.isRunning) return@launch
-                                    delay(EMPTY_POOL_BACKOFF_MS)
+                                    delay(Vpn5gAutoConnect.failoverRetryBackoffMs(refreshRound))
+                                    refreshRound++
                                 }
                             }
                         }
-                        val target = next ?: return@launch
-                        _uiState.update {
-                            it.copy(
-                                connectState = Vpn5gAutoConnect.transition(
-                                    it.connectState, Vpn5gConnectEvent.SWITCHING
-                                ),
-                                tunnelState = Vpn5gTunnelState.SWITCHING,
-                                tunnelMessage = getApplication<Application>()
-                                    .getString(R.string.vpn5g_tunnel_failed_retry),
-                            )
-                        }
-                        // The restart below is intentional: do not let the
-                        // drop detector treat it as an unexpected disconnect,
-                        // and do not let the daemon stop cancel this job —
-                        // the job waits for the restart to come back with
-                        // the next server.
-                        suppressAutoFailover = true
-                        failoverRestartInProgress = true
-                        _failoverEvent.emit(target.guid)
-                        // Switch immediately: wait only until the restart
-                        // actually happens (service stops, then runs again
-                        // with the new server), in short polls — not a
-                        // fixed multi-second sleep. The next attempt must
-                        // start fast.
-                        val stopDeadline = System.currentTimeMillis() + 5_000L
-                        while (isActive && _uiState.value.isRunning &&
-                            System.currentTimeMillis() < stopDeadline
-                        ) {
-                            delay(200L)
-                        }
-                        val startDeadline = System.currentTimeMillis() + 10_000L
-                        while (isActive && !_uiState.value.isRunning &&
-                            System.currentTimeMillis() < startDeadline
-                        ) {
-                            delay(200L)
-                        }
-                        failoverRestartInProgress = false
-                        if (!_uiState.value.isRunning) {
-                            val reason = getApplication<Application>()
-                                .getString(R.string.vpn5g_error_restart_failed)
+                        var target = next ?: return@launch
+                        // v1.1.29 (never give up while the switch is
+                        // ON): a restart that does not come back is
+                        // no longer terminal. The target is marked
+                        // tried/failed, the next candidate is picked
+                        // (refreshing the list when none is left),
+                        // and the restart is re-emitted — the old
+                        // GIVE_UP here was one of the paths that
+                        // stranded sessions on «در حال تغییر سرور...».
+                        var restartRound = 0
+                        while (isActive) {
+                            if (userStopRequested) return@launch
                             _uiState.update {
                                 it.copy(
                                     connectState = Vpn5gAutoConnect.transition(
-                                        it.connectState, Vpn5gConnectEvent.GIVE_UP
+                                        it.connectState, Vpn5gConnectEvent.SWITCHING
                                     ),
-                                    tunnelState = Vpn5gTunnelState.FAILED,
-                                    tunnelMessage = reason,
-                                    lastError = reason,
+                                    tunnelState = Vpn5gTunnelState.SWITCHING,
+                                    tunnelMessage = getApplication<Application>()
+                                        .getString(R.string.vpn5g_tunnel_failed_retry),
                                 )
                             }
-                            return@launch
+                            // The restart below is intentional: do not let the
+                            // drop detector treat it as an unexpected disconnect,
+                            // and do not let the daemon stop cancel this job —
+                            // the job waits for the restart to come back with
+                            // the next server.
+                            suppressAutoFailover = true
+                            failoverRestartInProgress = true
+                            Vpn5gDaemonHeartbeat.writePendingFailoverGuid(target.guid)
+                            _failoverEvent.emit(target.guid)
+                            // Switch immediately: wait only until the restart
+                            // actually happens (service stops, then runs again
+                            // with the new server), in short polls — not a
+                            // fixed multi-second sleep. The next attempt must
+                            // start fast.
+                            val stopDeadline = System.currentTimeMillis() + 5_000L
+                            while (isActive && _uiState.value.isRunning &&
+                                System.currentTimeMillis() < stopDeadline
+                            ) {
+                                delay(200L)
+                            }
+                            val startDeadline = System.currentTimeMillis() + 10_000L
+                            while (isActive && !_uiState.value.isRunning &&
+                                System.currentTimeMillis() < startDeadline
+                            ) {
+                                delay(200L)
+                            }
+                            failoverRestartInProgress = false
+                            if (_uiState.value.isRunning) break
+                            if (userStopRequested) return@launch
+                            LogUtil.i(
+                                AppConfig.TAG,
+                                "Vpn5gHomeViewModel: failover restart did not come back; retrying with next candidate",
+                            )
+                            triedGuids += target.guid
+                            val failedNow = Vpn5gFailedServers.prune(
+                                Vpn5gFailedServers.load(), System.currentTimeMillis()
+                            )
+                            Vpn5gFailedServers.save(
+                                Vpn5gFailedServers.mark(
+                                    failedNow, target.guid, System.currentTimeMillis()
+                                )
+                            )
+                            var following = nextBestServer(
+                                excluding = triedGuids,
+                                differentCountryThan = failedCountry,
+                            )
+                            if (following == null) {
+                                delay(Vpn5gAutoConnect.failoverRetryBackoffMs(restartRound))
+                                restartRound++
+                                if (userStopRequested) return@launch
+                                runCatching {
+                                    Vpn5gSync.refresh(
+                                        getApplication<Application>(),
+                                        skipRealProbe = restartRound <= 1,
+                                    )
+                                }
+                                _uiState.update {
+                                    it.copy(countries = Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected))
+                                }
+                                following = nextBestServer(
+                                    excluding = triedGuids,
+                                    differentCountryThan = failedCountry,
+                                )
+                            }
+                            if (following != null) target = following
                         }
                     }
                 }
@@ -3795,12 +3985,14 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Next best free server with a REAL through-the-proxy ping (v1.1.7),
-     * preferring a DIFFERENT country than [differentCountryThan] (a dead
-     * server's country is avoided first); falls back to the same country
-     * when nothing else is left. Never returns a config with a TCP-only
-     * ping (a middlebox can fake it) or no ping result, and never a server
-     * that failed tunnel verification within the last 6 hours.
+     * Next best server for a failover/switch (v1.1.7; shared pick
+     * v1.1.29): delegates to [Vpn5gFailoverPick] — standby queue
+     * first, then tier-pool ordering (real-pinged first,
+     * health-adjusted ping), relaxing ping/failed filters tier by
+     * tier so the pool can never be filtered into a dead end.
+     * Prefers a DIFFERENT country than [differentCountryThan].
+     * Candidates whose stored profile no longer decodes are
+     * skipped (a stale guid must never be started).
      */
     private fun nextBestServer(
         excluding: Set<String>,
@@ -3809,40 +4001,16 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         val failed = Vpn5gFailedServers.prune(
             Vpn5gFailedServers.load(), System.currentTimeMillis()
         )
-        // v1.1.23: same tier-pool ordering as pickBestServer —
-        // real-pinged pool servers first, then TCP-pinged pool
-        // servers (the subscriber/gift fill pool), so failover and
-        // manual switches can use unlocked servers too. Before
-        // this, only real-pinged servers were candidates and a
-        // subscriber's unlocked pool was invisible here.
-        // v1.1.24: within each group, health-adjusted ping.
-        val healthScores = Vpn5gHealthScore.currentScores()
-        fun healthAdjusted(server: Vpn5gServerUi): Long =
-            Vpn5gHealthScore.adjustedPing(
-                server.pingMillis, healthScores[server.dedupeKey] ?: 0.0
-            )
-        val pool = _uiState.value.countries
-            .flatMap { it.servers }
-            .filter {
-                it.isFree && it.guid !in excluding &&
-                    it.guid !in failed && it.pingMillis > 0
-            }
-            .sortedWith(
-                compareBy({ !it.hasRealPing }, { healthAdjusted(it) })
-            )
-        val candidates = if (pool.isNotEmpty()) pool else _uiState.value.countries
-            .flatMap { it.servers }
-            .filter {
-                it.guid !in excluding && it.guid !in failed && it.pingMillis > 0
-            }
-            .sortedWith(
-                compareBy({ !it.hasRealPing }, { healthAdjusted(it) })
-            )
-        if (differentCountryThan.isNullOrBlank()) {
-            return candidates.firstOrNull()
-        }
-        return candidates.firstOrNull { it.country != differentCountryThan }
-            ?: candidates.firstOrNull()
+        val ranked = Vpn5gFailoverPick.ranked(
+            servers = _uiState.value.countries.flatMap { it.servers },
+            excluding = excluding,
+            failedGuids = failed.keys,
+            standbyQueue = standbyQueue,
+            healthScores = Vpn5gHealthScore.currentScores(),
+        ).filter { MmkvManager.decodeServerConfig(it.guid) != null }
+        if (differentCountryThan.isNullOrBlank()) return ranked.firstOrNull()
+        return ranked.firstOrNull { it.country != differentCountryThan }
+            ?: ranked.firstOrNull()
     }
 
     /**
@@ -3851,6 +4019,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      * another server; a dead tunnel is never left showing "connected".
      */
     private fun reverifyTunnel() {
+        // v1.1.29: while the daemon heartbeat is fresh the daemon
+        // owns drop detection — a UI re-verify failure must not
+        // stop a daemon-managed session out from under its
+        // failover. The 60 s re-verify stays as the backup for a
+        // dead daemon.
+        if (Vpn5gDaemonHeartbeat.isHeartbeatFresh()) return
         reverifyJob?.cancel()
         reverifyJob = viewModelScope.launch(Dispatchers.IO) {
             if (!_uiState.value.isRunning ||
@@ -3881,17 +4055,29 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * One light watchdog probe (v1.1.11): a single exit-IP fetch
-     * through the tunnel. Three consecutive FAILED probes drop the
-     * tunnel — the drop detector then fails over to another server.
-     * A single failure is a blip and is forgiven; UNKNOWN (the check
-     * cannot run) is not a failure. Never runs while a verification
-     * or a failover restart is in flight, and never overlaps itself.
+     * One light watchdog probe (v1.1.11; fast detection v1.1.29):
+     * a single exit-IP fetch through the tunnel, fed into the
+     * leaky-bucket score ([Vpn5gWatchdogScore]). On the first
+     * failure a confirm probe runs after
+     * [WATCHDOG_CONFIRM_DELAY_MS] instead of waiting for the next
+     * tick; at the drop score the tunnel drops so the drop
+     * detector can fail over. This UI watchdog is the BACKUP —
+     * while the daemon heartbeat is fresh the daemon owns drop
+     * detection (it survives screen-off and UI death) and this
+     * probe stands down. Never runs while a verification or a
+     * failover restart is in flight, and never overlaps itself.
      */
     private fun runWatchdogProbe() {
         if (watchdogJob?.isActive == true) return
         if (verifyJob?.isActive == true || reverifyJob?.isActive == true) return
         if (failoverRestartInProgress) return
+        // v1.1.29: the daemon watchdog is authoritative while its
+        // heartbeat is fresh — two detectors dropping the same
+        // tunnel would fight over the failover.
+        if (Vpn5gDaemonHeartbeat.isHeartbeatFresh()) {
+            watchdogScore = 0.0
+            return
+        }
         watchdogJob = viewModelScope.launch(Dispatchers.IO) {
             if (!_uiState.value.isRunning ||
                 _uiState.value.connectState != Vpn5gConnectState.CONNECTED
@@ -3904,28 +4090,31 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             ) {
                 return@launch
             }
-            when (result.verdict) {
-                Vpn5gTunnelCheck.Verdict.VERIFIED,
-                Vpn5gTunnelCheck.Verdict.UNKNOWN -> watchdogFailures = 0
-                Vpn5gTunnelCheck.Verdict.FAILED -> {
-                    watchdogFailures++
-                    if (watchdogFailures >= WATCHDOG_MAX_CONSECUTIVE_FAILURES) {
-                        watchdogFailures = 0
-                        LogUtil.i(
-                            AppConfig.TAG,
-                            "Vpn5gHomeViewModel: watchdog probe failed " +
-                                "$WATCHDOG_MAX_CONSECUTIVE_FAILURES times in a row; dropping",
-                        )
-                        _uiState.update {
-                            it.copy(
-                                connectState = Vpn5gAutoConnect.transition(
-                                    it.connectState, Vpn5gConnectEvent.VERIFY_FAILED
-                                ),
-                            )
-                        }
-                        LauncherManager.stopService(getApplication())
-                    }
+            watchdogScore = Vpn5gWatchdogScore.nextScore(watchdogScore, result.verdict)
+            if (Vpn5gWatchdogScore.needsConfirm(watchdogScore)) {
+                delay(WATCHDOG_CONFIRM_DELAY_MS)
+                if (!_uiState.value.isRunning ||
+                    _uiState.value.connectState != Vpn5gConnectState.CONNECTED
+                ) {
+                    return@launch
                 }
+                val confirm = Vpn5gTunnelCheck.probeOnce(baselineIp)
+                watchdogScore = Vpn5gWatchdogScore.nextScore(watchdogScore, confirm.verdict)
+            }
+            if (Vpn5gWatchdogScore.shouldDrop(watchdogScore)) {
+                watchdogScore = 0.0
+                LogUtil.i(
+                    AppConfig.TAG,
+                    "Vpn5gHomeViewModel: watchdog score reached drop threshold; dropping",
+                )
+                _uiState.update {
+                    it.copy(
+                        connectState = Vpn5gAutoConnect.transition(
+                            it.connectState, Vpn5gConnectEvent.VERIFY_FAILED
+                        ),
+                    )
+                }
+                LauncherManager.stopService(getApplication())
             }
         }
     }
@@ -4047,6 +4236,9 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         // (v1.1.4 §7): a state change while the app was backgrounded
         // must not leave a stale home screen.
         viewModel.refreshDaemonState()
+        // v1.1.29: another VPN may have been started while we were
+        // backgrounded — re-check so the Home notice is current.
+        viewModel.checkOtherVpn()
         // v1.1.22 (fix #4): the subscription status and the locks must
         // never be stale after a return to the app — refresh them
         // (debounced inside; the server row is best-effort).
@@ -4240,6 +4432,49 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         }
         var showBellAnnouncement by remember { mutableStateOf(false) }
 
+        // System Back (v1.1.29, Aref's order): inside the app Back
+        // walks back one step (drawer closes; sub-screens return —
+        // AUTH to ME, everything else to HOME, matching each
+        // screen's onBack). At the root (HOME, drawer closed) Back
+        // asks «از برنامه خارج می‌شوید؟» — «نه» stays, «آره» closes
+        // the app completely: every recovery loop is cancelled
+        // (userDisconnect), the VPN service is stopped (which also
+        // cancels the daemon watchdog and its notification), and
+        // the task finishes — nothing keeps running behind.
+        var showExitDialog by remember { mutableStateOf(false) }
+        androidx.activity.compose.BackHandler {
+            when {
+                showExitDialog -> showExitDialog = false
+                drawerState.isOpen -> drawerScope.launch { drawerState.close() }
+                destination == Vpn5gDestination.AUTH ->
+                    destination = Vpn5gDestination.ME
+                destination != Vpn5gDestination.HOME ->
+                    destination = Vpn5gDestination.HOME
+                else -> showExitDialog = true
+            }
+        }
+        if (showExitDialog) {
+            AlertDialog(
+                onDismissRequest = { showExitDialog = false },
+                title = { Text(stringResource(R.string.vpn5g_exit_title)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showExitDialog = false
+                        viewModel.userDisconnect()
+                        LauncherManager.stopService(this@Vpn5gMainActivity)
+                        finishAffinity()
+                    }) {
+                        Text(stringResource(R.string.vpn5g_exit_yes))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showExitDialog = false }) {
+                        Text(stringResource(R.string.vpn5g_exit_no))
+                    }
+                },
+            )
+        }
+
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
@@ -4260,7 +4495,10 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                     },
                     onOpenSupport = {
                         drawerScope.launch { drawerState.close() }
-                        Utils.openUri(this@Vpn5gMainActivity, SUPPORT_BOT_URL)
+                        // v1.1.29 (Aref's order): the hamburger menu's
+                        // «پشتیبانی آنلاین» opens his own account
+                        // (t.me/Aref_5G), same as the Me screen.
+                        Utils.openUri(this@Vpn5gMainActivity, SUPPORT_URL)
                     },
                     onLanguageChange = { viewModel.setLanguage(it) },
                     onThemeModeChange = { viewModel.setThemeMode(it) },
@@ -4723,12 +4961,26 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
      * the daemon's restart path starts whatever is selected.
      */
     private fun requestServiceRestartOrStart(guid: String) {
+        // v1.1.29: never start a guid whose profile no longer
+        // decodes — LauncherManager would only toast «کانفیگ
+        // معتبر نیست» and the verify loop's restart-retry picks
+        // the next candidate instead. (GUIDs are stable across
+        // refreshes since 1.1.29, so this is a belt-and-braces
+        // guard for stores written by older versions.)
+        if (MmkvManager.decodeServerConfig(guid) == null) {
+            LogUtil.e(AppConfig.TAG, "Vpn5gMainActivity: failover guid no longer decodes; skipping start")
+            return
+        }
         MmkvManager.setSelectServer(guid)
         LauncherManager.restartServiceOrStart(this) { requestServiceStart(guid) }
     }
 
     /** Mirrors MainActivity.requestServiceStart exactly. */
     private fun requestServiceStart(guid: String) {
+        if (MmkvManager.decodeServerConfig(guid) == null) {
+            LogUtil.e(AppConfig.TAG, "Vpn5gMainActivity: connect guid no longer decodes; skipping start")
+            return
+        }
         if (!SettingsManager.isVpnMode()) {
             startV2Ray(guid)
             return
@@ -5450,6 +5702,25 @@ fun Vpn5gHomeScreen(
                         },
                         secondaryLabel = stringResource(R.string.vpn5g_close),
                         onSecondaryClick = onClearManualFailure,
+                    )
+                }
+            }
+
+            // v1.1.29 (Aref's order): another VPN is active on the
+            // phone. Informational only — connecting with VPN 5G
+            // makes Android stop the other VPN by itself, so the
+            // connect switch is never blocked by this.
+            if (state.otherVpnActive && !state.isRunning) {
+                item {
+                    Text(
+                        text = stringResource(R.string.vpn5g_other_vpn_notice),
+                        color = Vpn5gOnDark,
+                        fontSize = 14.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Vpn5gTeal.copy(alpha = 0.2f))
+                            .padding(12.dp),
                     )
                 }
             }

@@ -54,6 +54,43 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gRoutingMode
  * invented feature, no invented city.
  */
 
+/**
+ * Visible top back button (v1.1.29, Aref's order): every screen
+ * reachable from the hamburger menu carries one at the top, so
+ * the way back is seen without scrolling (the older bottom
+ * «خانه» text buttons stay). The chevron follows the layout
+ * direction — back points right in RTL, left in LTR.
+ */
+@Composable
+fun Vpn5gBackRow(onBack: () -> Unit) {
+    val rtl = androidx.compose.ui.platform.LocalLayoutDirection.current ==
+        androidx.compose.ui.unit.LayoutDirection.Rtl
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(50.dp))
+                .border(1.dp, Vpn5gTeal, RoundedCornerShape(50.dp))
+                .clickable(role = Role.Button, onClick = onBack)
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+        ) {
+            Text(
+                text = if (rtl) "›" else "‹",
+                color = Vpn5gTealLight,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_back),
+                color = Vpn5gTealLight,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
 // ---------------------------------------------------------------- drawer
 
 /**
@@ -406,6 +443,8 @@ fun Vpn5gRoutingScreen(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // v1.1.29 (Aref's order): visible back button at the top.
+        Vpn5gBackRow(onBack)
         Vpn5gStaggeredItem(index = 0, visible = entered) {
             Text(
                 text = stringResource(R.string.vpn5g_routing_title),
@@ -603,6 +642,8 @@ fun Vpn5gFeaturesScreen(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // v1.1.29 (Aref's order): visible back button at the top.
+        Vpn5gBackRow(onBack)
         Vpn5gStaggeredItem(index = 0, visible = entered) {
             Text(
                 text = stringResource(R.string.vpn5g_features_title),

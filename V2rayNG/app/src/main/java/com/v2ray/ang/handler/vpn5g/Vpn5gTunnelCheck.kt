@@ -64,8 +64,15 @@ object Vpn5gTunnelCheck {
     private const val TUNNEL_TIMEOUT_MS = 25_000
     /** Per-fetch timeout through the local HTTP proxy. */
     private const val TUNNEL_FETCH_TIMEOUT_MS = 7_000
-    /** Per-probe timeout for the light watchdog probe (v1.1.11). */
-    private const val WATCHDOG_PROBE_TIMEOUT_MS = 7_000
+    /**
+     * Per-probe timeout for the light watchdog probe (v1.1.11;
+     * 3 s since v1.1.29 — the probe now runs every 5 s with a
+     * confirm probe, so a long per-probe budget would eat the
+     * detection budget; a healthy tunnel answers an exit-IP fetch
+     * well inside 3 s, and a slow answer is itself a failure
+     * signal the leaky bucket weighs).
+     */
+    private const val WATCHDOG_PROBE_TIMEOUT_MS = 3_000
     /** How many fetch rounds verify() tries before giving up on a server. */
     private const val MAX_VERIFY_ROUNDS = 3
     /** Pause between fetch rounds. */
@@ -176,13 +183,14 @@ object Vpn5gTunnelCheck {
      * through the tunnel — the primary IP API first, then the ipify
      * fallback when the primary yields nothing (v1.1.13; the same
      * fallback [verify] already had) — bounded by [timeoutMs]. The
-     * ViewModel runs this every 20 s while connected; three
-     * consecutive FAILED results drop the tunnel so the drop
-     * detector can fail over. A single failed probe never kills a
-     * session on its own — a transient blip is not a drop. UNKNOWN
-     * when the local HTTP inbound is unavailable (the check cannot
-     * run); the caller treats that as "no signal", not a failure.
-     * Never throws.
+     * ViewModel runs this every 5 s while connected (v1.1.29) and
+     * feeds the verdict into the leaky-bucket score
+     * ([Vpn5gWatchdogScore]); at the drop score the tunnel drops so
+     * the drop detector can fail over. A single failed probe never
+     * kills a session on its own — a transient blip is not a drop.
+     * UNKNOWN when the local HTTP inbound is unavailable (the check
+     * cannot run); the score treats it as a capped soft failure,
+     * never enough on its own to drop. Never throws.
      */
     suspend fun probeOnce(
         baselineIp: String?,

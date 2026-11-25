@@ -158,8 +158,8 @@
     <string name="vpn5g_premium_price_plain">%1$s Toman</string>
     <string name="vpn5g_filter_sub">Subscription</string>
     <string name="vpn5g_filter_free">Free</string>
-    <string name="vpn5g_per_app_title">Apps without VPN</string>
-    <string name="vpn5g_per_app_body">Choose the apps that must not use the tunnel; they open directly, without the VPN. The change applies from the next connection.</string>
+    <string name="vpn5g_per_app_title">Apps using the VPN</string>
+    <string name="vpn5g_per_app_body">By default, Instagram and Telegram use the VPN. You can change this selection; the change applies from the next connection.</string>
     <string name="vpn5g_per_app_open">Choose apps</string>
     <string name="vpn5g_startup_text_01">Checking the security of the connection...</string>
     <string name="vpn5g_startup_text_02">Preparing the secure tunnel...</string>
@@ -273,7 +273,8 @@
     <string name="vpn5g_link_channel">Free config channel</string>
     <string name="vpn5g_link_bot">Smart bot</string>
     <string name="vpn5g_link_support">Online support</string>
-    <string name="vpn5g_link_support_telegram">Online support: @Aref_5G</string>
+    <string name="vpn5g_link_support_telegram">Online support</string>
+    <string name="vpn5g_link_support_bot">Bot support</string>
     <string name="vpn5g_guide_faq_title">Frequently asked questions</string>
     <string name="vpn5g_guide_s01_title">1. Connect with one tap</string>
     <string name="vpn5g_guide_s01_body">Tap the big switch in the middle of the screen. The app first checks the internet, then picks the fastest free server, builds the tunnel, and only shows “Connected” once traffic really goes through the VPN. If a server does not work, it moves to the next one automatically.</string>
@@ -384,4 +385,9 @@
     <string name="vpn5g_feature_free_body">Every free connection lasts 30 minutes; no registration and no card.</string>
     <string name="vpn5g_feature_gift_title">Gift code</string>
     <string name="vpn5g_feature_gift_body">With a gift code, get a subscription without paying and unlock the countries.</string>
+    <string name="vpn5g_back">Back</string>
+    <string name="vpn5g_exit_title">Exit the app?</string>
+    <string name="vpn5g_exit_yes">Yes</string>
+    <string name="vpn5g_exit_no">No</string>
+    <string name="vpn5g_other_vpn_notice">Another VPN is active on your phone. Connecting with VPN 5G will stop it so the two do not interfere.</string>
 </resources>

@@ -78,4 +78,63 @@ class Vpn5gRoutingTest {
             Vpn5gRouting.isSplitTunnelActive(Vpn5gRoutingMode.FULL, false)
         )
     }
+
+    // -- v1.1.29 default per-app seed (Instagram + Telegram) -----------------
+
+    @Test
+    fun test_default_per_app_selection_only_installed() {
+        assertEquals(
+            setOf("com.instagram.android", "org.telegram.messenger"),
+            Vpn5gRouting.defaultPerAppSelection(
+                setOf("com.instagram.android", "org.telegram.messenger", "com.other.app")
+            ),
+        )
+        assertEquals(
+            setOf("org.telegram.messenger"),
+            Vpn5gRouting.defaultPerAppSelection(setOf("org.telegram.messenger")),
+        )
+        assertTrue(
+            Vpn5gRouting.defaultPerAppSelection(setOf("com.other.app")).isEmpty()
+        )
+        assertTrue(Vpn5gRouting.defaultPerAppSelection(emptySet()).isEmpty())
+    }
+
+    @Test
+    fun test_should_seed_only_when_untouched() {
+        // Fresh install: seed may run.
+        assertTrue(
+            Vpn5gRouting.shouldSeedPerAppDefaults(
+                seeded = false, existingSelection = emptySet(),
+                perAppEnabled = false, routingChosen = false,
+            )
+        )
+        // Already seeded: never again.
+        assertFalse(
+            Vpn5gRouting.shouldSeedPerAppDefaults(
+                seeded = true, existingSelection = emptySet(),
+                perAppEnabled = false, routingChosen = false,
+            )
+        )
+        // User customized the selection: never override.
+        assertFalse(
+            Vpn5gRouting.shouldSeedPerAppDefaults(
+                seeded = false, existingSelection = setOf("com.example.app"),
+                perAppEnabled = false, routingChosen = false,
+            )
+        )
+        // Per-app proxy already enabled by the user: never override.
+        assertFalse(
+            Vpn5gRouting.shouldSeedPerAppDefaults(
+                seeded = false, existingSelection = emptySet(),
+                perAppEnabled = true, routingChosen = false,
+            )
+        )
+        // Routing mode already chosen: never override.
+        assertFalse(
+            Vpn5gRouting.shouldSeedPerAppDefaults(
+                seeded = false, existingSelection = emptySet(),
+                perAppEnabled = false, routingChosen = true,
+            )
+        )
+    }
 }
