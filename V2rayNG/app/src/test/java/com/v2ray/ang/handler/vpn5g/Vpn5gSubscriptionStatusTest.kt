@@ -162,13 +162,23 @@ class Vpn5gSubscriptionStatusTest {
             Vpn5gServerUi("g1", "a", "FR", 50L, false, isFree = false, hasRealPing = true),
             Vpn5gServerUi("g2", "b", "DE", 120L, false, isFree = false, hasRealPing = true),
             Vpn5gServerUi("g3", "c", "NL", 300L, false, isFree = false, hasRealPing = true),
-            // No real ping: never pickable, even for a subscriber.
+            // v1.1.22 (paid-tier fill): a TCP-pinged server with a
+            // POSITIVE ping is now pickable for a subscriber — on a
+            // filtered network the verified set can stay tiny, and a
+            // paid tier that unlocks nothing is a locked tier. The
+            // tunnel verification + failover still guard a dead pick.
+            // A server with no ping at all (g5, 0 ms) stays excluded.
             Vpn5gServerUi("g4", "d", "TR", 10L, false, isFree = false, hasRealPing = false),
             Vpn5gServerUi("g5", "e", "US", 0L, false, isFree = false, hasRealPing = true),
         )
         assertEquals(
-            setOf("g1", "g2", "g3"),
+            setOf("g1", "g2", "g3", "g4"),
             Vpn5gSync.freeGuidsFor(servers, subscriber = true),
+        )
+        // The FREE tier is unchanged: TCP-only servers are never free.
+        assertEquals(
+            setOf("g1", "g2", "g3"),
+            Vpn5gSync.freeGuidsFor(servers, subscriber = false),
         )
         // Free tier with a cap of 2: only the 2 fastest real-pinged
         // servers (the production cap is 20 — same rule, bigger N).

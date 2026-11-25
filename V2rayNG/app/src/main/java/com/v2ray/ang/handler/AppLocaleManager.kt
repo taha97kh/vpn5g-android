@@ -78,8 +78,14 @@ object AppLocaleManager {
         }
     }
 
+    /**
+     * Stored language (v1.1.22): the default is PERSIAN, not the
+     * system locale — the app is Persian-first (Aref 2026-11-25).
+     * An explicit "auto" choice is still honoured: only a MISSING
+     * preference defaults to fa.
+     */
     private fun storedLanguage(): Language = Language.fromCode(
-        MmkvManager.decodeSettingsString(AppConfig.PREF_LANGUAGE) ?: Language.AUTO.code
+        MmkvManager.decodeSettingsString(AppConfig.PREF_LANGUAGE) ?: Language.PERSIAN.code
     )
 
     private fun syncLegacyPreference(languageTag: String?) {

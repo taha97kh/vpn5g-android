@@ -626,6 +626,7 @@
     <string name="vpn5g_subscription_expired">اشتراک شما تمام شده است</string>
     <string name="vpn5g_subscription_plan">طرح: %1$s</string>
     <string name="vpn5g_subscription_days">روز باقی‌مانده: %1$d</string>
+    <string name="vpn5g_subscription_details_title">مشخصات اشتراک</string>
     <string name="vpn5g_subscription_volume">حجم باقی‌مانده: %1$s گیگابایت</string>
     <!-- v1.1.18: volume (Model B) — measured on-device from real tunnel bytes. -->
     <string name="vpn5g_volume_used_of">مصرف‌شده: %1$s از %2$s گیگابایت</string>
@@ -883,7 +884,7 @@
     <!-- v1.1.5: guide, 20 sections (§5). -->
     <string name="vpn5g_guide_faq_title">سوالات متداول</string>
     <string name="vpn5g_guide_s01_title">۱. اتصال با یک دکمه</string>
-    <string name="vpn5g_guide_s01_body">روی دکمهٔ بزرگ وسط صفحه بزن. برنامه اول اینترنت را بررسی می‌کند، بعد سریع‌ترین سرور رایگان را انتخاب می‌کند، تونل را می‌سازد و فقط وقتی ترافیک واقعاً از داخل VPN رد شد، «متصل» نشان می‌دهد. اگر سروری کار نکرد، خودکار سراغ سرور بعدی می‌رود.</string>
+    <string name="vpn5g_guide_s01_body">روی کلید بزرگ وسط صفحه بزن. برنامه اول اینترنت را بررسی می‌کند، بعد سریع‌ترین سرور رایگان را انتخاب می‌کند، تونل را می‌سازد و فقط وقتی ترافیک واقعاً از داخل VPN رد شد، «متصل» نشان می‌دهد. اگر سروری کار نکرد، خودکار سراغ سرور بعدی می‌رود.</string>
     <string name="vpn5g_guide_s02_title">۲. انتخاب خودکار سرور</string>
     <string name="vpn5g_guide_s02_body">در حالت خودکار، برنامه از بین سرورهای رایگان، سریع‌ترین سروری را که پینگ دارد انتخاب می‌کند. سروری که به‌تازگی تونل نکرده باشد تا ۶ ساعت کنار گذاشته می‌شود و دوباره امتحان نمی‌شود.</string>
     <string name="vpn5g_guide_s03_title">۳. انتخاب دستی سرور</string>

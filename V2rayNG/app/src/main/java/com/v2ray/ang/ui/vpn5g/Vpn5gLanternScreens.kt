@@ -120,27 +120,37 @@ fun Vpn5gDrawerContent(
         }
 
         // Pro upgrade (teal pill with crown, Lantern style).
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(50.dp))
-                .background(Vpn5gTeal)
-                .clickable(
-                    role = Role.Button,
-                    onClickLabel = stringResource(R.string.vpn5g_pro_upgrade_button),
-                ) { onOpenPremium() }
-                .padding(vertical = 12.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Vpn5gCrownIcon(color = Color.White, size = 20.dp)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = stringResource(R.string.vpn5g_pro_upgrade_button),
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                )
+        // v1.1.22 (fix #3): while any subscription is active the pill
+        // becomes the subscription details; when it ends, the upsell
+        // returns.
+        if (hasActiveSubscription(state)) {
+            Vpn5gSubscriptionDetailsPill(
+                state = state,
+                onOpenPremium = onOpenPremium,
+            )
+        } else {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(50.dp))
+                    .background(Vpn5gTeal)
+                    .clickable(
+                        role = Role.Button,
+                        onClickLabel = stringResource(R.string.vpn5g_pro_upgrade_button),
+                    ) { onOpenPremium() }
+                    .padding(vertical = 12.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Vpn5gCrownIcon(color = Color.White, size = 20.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.vpn5g_pro_upgrade_button),
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
 
@@ -547,6 +557,9 @@ private fun Vpn5gRoutingModeCard(
 @Composable
 fun Vpn5gFeaturesScreen(
     onBack: () -> Unit,
+    /** v1.1.22 (fix #3): the bottom card swaps to the subscription
+     * details while a subscription is active. */
+    state: Vpn5gHomeUiState = Vpn5gHomeUiState(),
     /** v1.1.21: the Pro card at the bottom opens Premium. */
     onOpenPremium: () -> Unit,
 ) {
@@ -616,7 +629,15 @@ fun Vpn5gFeaturesScreen(
             }
         }
         Vpn5gStaggeredItem(index = 5, visible = entered) {
-            Vpn5gProUpgradeCard(onOpenPremium = onOpenPremium)
+            // v1.1.22 (fix #3): same upsell → details swap as home.
+            if (hasActiveSubscription(state)) {
+                Vpn5gSubscriptionDetailsCard(
+                    state = state,
+                    onOpenPremium = onOpenPremium,
+                )
+            } else {
+                Vpn5gProUpgradeCard(onOpenPremium = onOpenPremium)
+            }
         }
         Vpn5gStaggeredItem(index = 5, visible = entered) {
             TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {

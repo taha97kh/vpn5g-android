@@ -17,11 +17,10 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -31,7 +30,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -80,16 +78,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -236,12 +230,18 @@ data class Vpn5gHomeUiState(
     /** Admin-published app announcement (v1.1.5); null = none to show. */
     val announcement: AnnouncementRemote? = null,
     /**
-     * Startup notice (v1.1.21, Aref 2026-11-25): shown on EVERY app
-     * entry until dismissed — then it stays gone for the rest of the
-     * session only. In-memory only, never persisted: the next launch
-     * shows it again.
+     * Startup notice (v1.1.21, Aref 2026-11-25): shown on the FIRST
+     * entry after install only (v1.1.22 correction — never on later
+     * launches). [startupNoticeShownBefore] is the persisted part:
+     * true once the notice was displayed on an earlier launch
+     * (MMKV, loaded at init); it is never changed during the
+     * session, so marking the notice shown on first display does
+     * not hide it mid-session. [startupNoticeDismissed] is the
+     * in-memory part: dismiss hides it for the rest of this session
+     * only.
      */
     val startupNoticeDismissed: Boolean = false,
+    val startupNoticeShownBefore: Boolean = false,
     /**
      * Current page of the startup notice (v1.1.21): 0 = free servers,
      * 1 = gift codes + Premium countries, 2 = Terms & Conditions +
@@ -251,8 +251,7 @@ data class Vpn5gHomeUiState(
     /**
      * Terms & Conditions accepted (v1.1.21): true once the user ticked
      * the checkbox on the notice's last page. PERSISTED in MMKV — the
-     * user is never asked to re-tick on later launches; the notice
-     * itself still shows on every entry.
+     * user is never asked to re-tick on later launches.
      */
     val termsAccepted: Boolean = false,
     val countries: List<Vpn5gCountryUi> = emptyList(),
@@ -354,10 +353,21 @@ data class Vpn5gHomeUiState(
     val routingMode: Vpn5gRoutingMode = Vpn5gRoutingMode.SMART,
     val directFirst: Boolean = true,
     /** Stored language code ("auto" = system), for the drawer (v1.1.21). */
-    val languageCode: String = "auto",
+    /** v1.1.22: default locale is Persian (fa), not "auto". */
+    val languageCode: String = "fa",
     /** Stored theme mode ("0" = system, "1" = light, "2" = dark). */
     val themeMode: String = "0",
 )
+
+/**
+ * Whether the paged startup notice shows (v1.1.22, pure): only on the
+ * first entry after install — never when it was already shown on an
+ * earlier launch ([shownBefore]) and never after this session's
+ * dismiss. JVM-tested in [Vpn5gStartupNoticeTest].
+ */
+internal fun shouldShowStartupNotice(shownBefore: Boolean, dismissed: Boolean): Boolean {
+    return !shownBefore && !dismissed
+}
 
 /**
  * Home-screen ViewModel: owns sync, running state (via the daemon broadcast,
@@ -636,11 +646,26 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Startup notice (v1.1.21): dismiss for the current session
-     * only — the flag lives in memory, so the next launch shows the
-     * notice again.
+     * Startup notice (v1.1.22): persist the shown-flag the FIRST time
+     * the notice is displayed, so it never shows again on later
+     * launches — including after updates, and even if the user kills
+     * the app mid-read. Idempotent; deliberately does NOT touch the
+     * in-memory state, so the current session keeps showing the
+     * notice until it is dismissed or completed.
+     */
+    fun markStartupNoticeShown() {
+        runCatching {
+            MmkvManager.encodeSettings(Vpn5gConstants.KEY_STARTUP_NOTICE_SHOWN, true)
+        }
+    }
+
+    /**
+     * Startup notice (v1.1.21, once-only since v1.1.22): dismiss for
+     * the current session. Also persists the shown-flag, so a dismiss
+     * without a prior display-mark still never shows the notice again.
      */
     fun dismissStartupNotice() {
+        markStartupNoticeShown()
         _uiState.update { it.copy(startupNoticeDismissed = true) }
     }
 
@@ -664,6 +689,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     fun acceptTerms() {
         MmkvManager.encodeSettings(Vpn5gConstants.KEY_TERMS_ACCEPTED, true)
+        markStartupNoticeShown()
         _uiState.update { it.copy(termsAccepted = true) }
     }
 
@@ -772,12 +798,18 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 directFirst = savedDirectFirst,
                 languageCode = MmkvManager.decodeSettingsString(
                     AppConfig.PREF_LANGUAGE
-                ) ?: "auto",
+                ) ?: "fa",
                 themeMode = ThemeManager.themeMode.value,
                 // v1.1.21: T&C acceptance is persisted — a user who
                 // ticked it once is never asked again.
                 termsAccepted = MmkvManager.decodeSettingsBool(
                     Vpn5gConstants.KEY_TERMS_ACCEPTED, false
+                ),
+                // v1.1.22: the notice shows only on the first entry
+                // after install — a user who already saw it on an
+                // earlier launch never sees it again.
+                startupNoticeShownBefore = MmkvManager.decodeSettingsBool(
+                    Vpn5gConstants.KEY_STARTUP_NOTICE_SHOWN, false
                 ),
             )
         }
@@ -2163,9 +2195,22 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         // volume state.
         Vpn5gVolumeStore.ensureGrant(subscription)
         val volume = Vpn5gVolumeStore.consumedState()
-        val tier = Vpn5gSubscriptionStatus.tierOf(subscription, nowSeconds, volume)
+        // v1.1.22: the tier for the lock rebuild comes from the MERGED
+        // subscription (cached effective + this grant), and the
+        // countries are rebuilt with that tier explicitly — the locks
+        // open from the grant itself, never from a stale cache read.
+        // (Aref 2026-11-25 ~06:42: after registering a code the
+        // locked countries stayed shut.)
+        val merged = Vpn5gSubscriptionStatus.effectiveSubscription(
+            Vpn5gSubscriptionStatus.loadEffective(nowSeconds),
+            subscription, nowSeconds, volume,
+        ) ?: subscription
+        val tier = Vpn5gSubscriptionStatus.tierOf(merged, nowSeconds, volume)
         val countries = runCatching {
-            Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
+            Vpn5gSync.loadGroupedServers(
+                forceFreeTier = tamperDetected,
+                tierOverride = tier,
+            )
         }.getOrElse { emptyList() }
         _uiState.update {
             it.copy(
@@ -2257,8 +2302,14 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             Vpn5gVolumeStore.ensureGrant(effective)
             val freshVolume = Vpn5gVolumeStore.consumedState()
             val tier = Vpn5gSubscriptionStatus.tierOf(effective, nowSeconds, freshVolume)
+            // v1.1.22: rebuild the locks from this merged tier
+            // explicitly (see publishRedeemed) — a stale cache must
+            // never re-lock what the redeem just opened.
             val countries = runCatching {
-                Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
+                Vpn5gSync.loadGroupedServers(
+                    forceFreeTier = tamperDetected,
+                    tierOverride = tier,
+                )
             }.getOrElse { _uiState.value.countries }
             _uiState.update {
                 it.copy(
@@ -2278,6 +2329,70 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     } else {
                         Vpn5gSubscriptionStatus.giftRemainingHours(
                             effective, nowSeconds, freshVolume
+                        )
+                    },
+                    volumeConsumedBytes = Vpn5gVolumeStore.consumedBytes(),
+                    countries = countries,
+                )
+            }
+            refreshSelection()
+        }
+    }
+
+    /** Last wall-clock run of [refreshSubscriptionAndLocks]. */
+    private var lastSubscriptionRefreshMs: Long = 0L
+
+    /**
+     * Subscription + locks refresh (v1.1.22, fix #4): re-reads the
+     * subscription (server row when readable — the 403 until the
+     * guard runs GRANT SELECT is tolerated — merged with the local
+     * grant) and rebuilds the country locks from the MERGED tier, so
+     * the status section and the locks are never stale after a redeem
+     * or a return to the app. Called on every entry to the foreground
+     * and on opening Premium; debounced to 30 s unless forced. Runs
+     * on IO; never throws.
+     */
+    fun refreshSubscriptionAndLocks(force: Boolean = false) {
+        val nowMs = System.currentTimeMillis()
+        if (!force && nowMs - lastSubscriptionRefreshMs < 30_000L) return
+        lastSubscriptionRefreshMs = nowMs
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = runCatching {
+                Vpn5gAuthService.currentSession()
+            }.getOrNull()
+            val refreshed = runCatching {
+                Vpn5gSubscriptionStatus.refresh(session)
+            }.getOrNull()
+            val nowSeconds = System.currentTimeMillis() / 1000
+            val effective = refreshed
+                ?: Vpn5gSubscriptionStatus.loadEffective(nowSeconds)
+            if (effective != null) Vpn5gVolumeStore.ensureGrant(effective)
+            val volume = Vpn5gVolumeStore.consumedState()
+            val tier = Vpn5gSubscriptionStatus.tierOf(effective, nowSeconds, volume)
+            val countries = runCatching {
+                Vpn5gSync.loadGroupedServers(
+                    forceFreeTier = tamperDetected,
+                    tierOverride = tier,
+                )
+            }.getOrElse { _uiState.value.countries }
+            _uiState.update {
+                it.copy(
+                    userSubscription = effective,
+                    isSubscriber = if (tamperDetected) {
+                        false
+                    } else {
+                        tier == Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER
+                    },
+                    isGift = if (tamperDetected) {
+                        false
+                    } else {
+                        tier == Vpn5gSubscriptionStatus.Vpn5gTier.GIFT
+                    },
+                    giftRemainingHours = if (tamperDetected) {
+                        0L
+                    } else {
+                        Vpn5gSubscriptionStatus.giftRemainingHours(
+                            effective, nowSeconds, volume
                         )
                     },
                     volumeConsumedBytes = Vpn5gVolumeStore.consumedBytes(),
@@ -3528,6 +3643,10 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         // (v1.1.4 §7): a state change while the app was backgrounded
         // must not leave a stale home screen.
         viewModel.refreshDaemonState()
+        // v1.1.22 (fix #4): the subscription status and the locks must
+        // never be stale after a return to the app — refresh them
+        // (debounced inside; the server row is best-effort).
+        viewModel.refreshSubscriptionAndLocks()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -3798,6 +3917,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onDismissUpdate = { viewModel.dismissUpdate() },
                             onDismissAnnouncement = { viewModel.dismissAnnouncement() },
                             onDismissStartupNotice = { viewModel.dismissStartupNotice() },
+                            onStartupNoticeShown = { viewModel.markStartupNoticeShown() },
                             onNextStartupNotice = { viewModel.advanceStartupNotice() },
                             onAcceptTerms = { viewModel.acceptTerms() },
                             onOpenLogin = { destination = Vpn5gDestination.AUTH },
@@ -3848,11 +3968,13 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                         // v1.1.21: Lantern features page.
                         Vpn5gDestination.FEATURES -> Vpn5gFeaturesScreen(
                             onBack = { destination = Vpn5gDestination.HOME },
+                            state = uiState,
                             onOpenPremium = { destination = Vpn5gDestination.PREMIUM },
                         )
                         Vpn5gDestination.PREMIUM -> Vpn5gSubscriptionScreen(
                             state = uiState,
                             onBack = { destination = Vpn5gDestination.HOME },
+                            onEntered = { viewModel.refreshSubscriptionAndLocks() },
                             onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
                             onOpenBuyBot = { planId ->
                                 Utils.openUri(
@@ -4342,6 +4464,9 @@ fun Vpn5gHomeScreen(
     onDismissAnnouncement: () -> Unit,
     /** Startup notice (v1.1.21): dismiss for the current session only. */
     onDismissStartupNotice: () -> Unit = {},
+    /** Startup notice (v1.1.22): the notice was displayed — persist
+     * the shown-flag so it never shows again on later launches. */
+    onStartupNoticeShown: () -> Unit = {},
     /** Startup notice (v1.1.21): «بعدی» — advance one page. */
     onNextStartupNotice: () -> Unit = {},
     /** Startup notice (v1.1.21): last page — tick the T&C checkbox. */
@@ -4446,14 +4571,22 @@ fun Vpn5gHomeScreen(
                 }
             }
 
-            // Startup notice (v1.1.21, Aref 2026-11-25): paged — one
-            // point per page, shown on EVERY app entry, dismissible
-            // for the current session only from the last page. While
-            // the user reads through the pages (~2 minutes) the server
-            // updates in the background. No stagger: the notice must
-            // be visible on entry, not fade in late.
-            if (!state.startupNoticeDismissed) {
+            // Startup notice (v1.1.21, Aref 2026-11-25; once-only
+            // since v1.1.22): paged — one point per page, shown ONLY
+            // on the first entry after install, dismissible for the
+            // current session from the last page. While the user reads
+            // through the pages (~2 minutes) the server updates in
+            // the background. No stagger: the notice must be visible
+            // on entry, not fade in late. The shown-flag is persisted
+            // the first time this item composes, so it never shows
+            // again on later launches.
+            if (shouldShowStartupNotice(
+                    state.startupNoticeShownBefore,
+                    state.startupNoticeDismissed,
+                )
+            ) {
                 item(key = "startup_notice") {
+                    LaunchedEffect(Unit) { onStartupNoticeShown() }
                     Vpn5gStartupNoticeCard(
                         page = state.startupNoticePage,
                         termsAccepted = state.termsAccepted,
@@ -4496,9 +4629,10 @@ fun Vpn5gHomeScreen(
             }
 
             item {
-                // Big circular power button with a blue glow ring.
+                // Sliding on/off connect switch (v1.1.22): Lantern
+                // style, same states as the old circular button.
                 Vpn5gStaggeredItem(index = 2, visible = entered) {
-                    Vpn5gPowerButton(
+                    Vpn5gConnectSwitch(
                         connectState = state.connectState,
                         remainingFraction = state.remainingMillis
                             ?.let { (it / (30L * 60_000L).toFloat()).coerceIn(0f, 1f) },
@@ -4752,7 +4886,17 @@ fun Vpn5gHomeScreen(
             // Pro upgrade card (Lantern, v1.1.21): replaces the old
             // premium + redeem banners — one gold-bordered card to
             // Premium, where the plans and the code boxes live.
-            if (!state.isSubscriber) {
+            // v1.1.22 (fix #3): while ANY subscription is active
+            // (gift or sub) the upsell becomes the subscription
+            // details card; when it ends, the upsell returns.
+            if (hasActiveSubscription(state)) {
+                item {
+                    Vpn5gSubscriptionDetailsCard(
+                        state = state,
+                        onOpenPremium = onOpenPremium,
+                    )
+                }
+            } else {
                 item {
                     Vpn5gProUpgradeCard(onOpenPremium = onOpenPremium)
                 }
@@ -5261,208 +5405,170 @@ private fun Vpn5gErrorCard(
     }
 }
 
-/** Big circular power button with a blue ring (Lantern, v1.1.21). */
+/**
+ * Visual states of the connect switch (v1.1.22, pure): the same
+ * connect state machine the circular button showed, mapped to a
+ * sliding switch. JVM-tested in [Vpn5gConnectSwitchTest].
+ */
+internal enum class Vpn5gConnectSwitchVisual {
+    OFF,
+    CONNECTING,
+    ON,
+    DISCONNECTING,
+    FAILED,
+}
+
+/** Pure mapping from the tunnel state machine to the switch visual. */
+internal fun connectSwitchVisual(
+    connectState: Vpn5gConnectState,
+): Vpn5gConnectSwitchVisual {
+    return when (connectState) {
+        Vpn5gConnectState.CONNECTED -> Vpn5gConnectSwitchVisual.ON
+        Vpn5gConnectState.FAILED -> Vpn5gConnectSwitchVisual.FAILED
+        Vpn5gConnectState.DISCONNECTING -> Vpn5gConnectSwitchVisual.DISCONNECTING
+        Vpn5gConnectState.CHECKING_INTERNET,
+        Vpn5gConnectState.FINDING_SERVER,
+        Vpn5gConnectState.CONNECTING,
+        Vpn5gConnectState.CREATING_TUNNEL,
+        Vpn5gConnectState.VERIFYING_TUNNEL,
+        Vpn5gConnectState.SWITCHING_SERVER,
+        Vpn5gConnectState.RETRYING -> Vpn5gConnectSwitchVisual.CONNECTING
+        Vpn5gConnectState.IDLE -> Vpn5gConnectSwitchVisual.OFF
+    }
+}
+
+/**
+ * Sliding on/off connect switch (v1.1.22, fix #1, Lantern style):
+ * replaces the circular power button — same tap behaviour
+ * ([onClick] = toggleConnect) and the same state machine, only the
+ * control shape changes. The thumb slides from off (start) to on
+ * (end); while connecting it slides back and forth on a blue track;
+ * while connected the track is green with a soft glow; while failed
+ * the track is red. The 30-minute session progress stays as a thin
+ * bar under the switch while connected. One semantic node
+ * (Role.Switch): the on/off state comes from the toggleable, the
+ * name is the connect/disconnect action label.
+ */
 @Composable
-private fun Vpn5gPowerButton(
+private fun Vpn5gConnectSwitch(
     connectState: Vpn5gConnectState,
     remainingFraction: Float?,
     onClick: () -> Unit,
 ) {
     // Derived from the connect state machine only (v1.1.4 §1, v1.1.5
-    // §2): the ring spins while a tunnel is being created or verified
-    // or while the chain is switching servers or retrying, shows the
-    // session arc only once the tunnel is verified, and turns red only
-    // while failed.
-    val isVerifying = connectState == Vpn5gConnectState.CHECKING_INTERNET ||
-        connectState == Vpn5gConnectState.FINDING_SERVER ||
-        connectState == Vpn5gConnectState.CONNECTING ||
-        connectState == Vpn5gConnectState.CREATING_TUNNEL ||
-        connectState == Vpn5gConnectState.VERIFYING_TUNNEL ||
-        connectState == Vpn5gConnectState.SWITCHING_SERVER ||
-        // RETRYING is a connecting state (v1.1.5 refinement): the ring
-        // spins cyan while the chain switches servers, never red.
-        connectState == Vpn5gConnectState.RETRYING ||
-        // DISCONNECTING (v1.1.18): the ring spins while the daemon
-        // stops, too — a tap then just re-asks for the same
-        // disconnect (toggleConnect guards on isRunning; no second
-        // tunnel can start while one is stopping).
-        connectState == Vpn5gConnectState.DISCONNECTING
-    val isFailed = connectState == Vpn5gConnectState.FAILED
-    val connected = connectState == Vpn5gConnectState.CONNECTED
-    val ringColor = when {
-        isFailed -> colorPingRed
-        // Lantern (v1.1.21): the ring is electric blue, not cyan —
-        // the blue glow of Aref's phone mockup.
-        connected || isVerifying -> Vpn5gElectricBlue
-        else -> Vpn5gOnDarkMuted.copy(alpha = 0.5f)
+    // §2): connecting while a tunnel is being created or verified or
+    // while the chain is switching servers or retrying, on only once
+    // the tunnel is verified, red only while failed. DISCONNECTING
+    // slides the thumb back — a tap then just re-asks for the same
+    // disconnect (toggleConnect guards on isRunning; no second
+    // tunnel can start while one is stopping).
+    val visual = connectSwitchVisual(connectState)
+    val isOn = visual == Vpn5gConnectSwitchVisual.ON
+    val trackWidth = 232.dp
+    val trackHeight = 68.dp
+    val thumbSize = 56.dp
+    // Thumb travel: track width minus thumb minus both side insets.
+    val travel = trackWidth - thumbSize - 12.dp
+    val trackColor = when (visual) {
+        Vpn5gConnectSwitchVisual.ON -> Vpn5gGreen
+        Vpn5gConnectSwitchVisual.CONNECTING -> Vpn5gElectricBlue
+        Vpn5gConnectSwitchVisual.DISCONNECTING ->
+            Vpn5gElectricBlue.copy(alpha = 0.55f)
+        Vpn5gConnectSwitchVisual.FAILED -> colorPingRed
+        Vpn5gConnectSwitchVisual.OFF -> Color(0xFF2A2A2A)
     }
-    val glyphColor = when {
-        isFailed -> colorPingRed
-        connected -> Color.White
-        else -> Vpn5gOnDarkMuted
+    val glyphColor = when (visual) {
+        Vpn5gConnectSwitchVisual.ON -> Vpn5gGreen
+        Vpn5gConnectSwitchVisual.CONNECTING -> Vpn5gElectricBlue
+        Vpn5gConnectSwitchVisual.DISCONNECTING -> Vpn5gElectricBlue
+        Vpn5gConnectSwitchVisual.FAILED -> colorPingRed
+        Vpn5gConnectSwitchVisual.OFF -> Vpn5gOnDarkMuted
     }
-    // "Direct Connect": the 4ref.ai brand sits on the circle itself,
-    // under the power glyph.
-    val brand = stringResource(R.string.vpn5g_connect_brand)
-
-    // Spinning ring while connecting: a 90° arc rotating ~900ms/rev.
-    val spinTransition = rememberInfiniteTransition(label = "vpn5g_connect_spin")
-    val spinAngle by spinTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
+    // The thumb slides back and forth while connecting. The infinite
+    // transition's value is read ONLY while connecting, so it does
+    // not recompose the switch in any other state.
+    val slideTransition = rememberInfiniteTransition(label = "vpn5g_switch_slide")
+    val slideState = slideTransition.animateDp(
+        initialValue = 0.dp,
+        targetValue = travel,
         animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = LinearEasing),
+            animation = tween(900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
         ),
-        label = "vpn5g_connect_spin_angle",
+        label = "vpn5g_switch_slide_offset",
+    )
+    // Settled positions animate once (off ↔ on, on → off while
+    // disconnecting); the connecting slide is direct.
+    val settledOffset by animateDpAsState(
+        targetValue = if (isOn) travel else 0.dp,
+        animationSpec = tween(350, easing = FastOutSlowInEasing),
+        label = "vpn5g_switch_thumb",
+    )
+    val thumbOffset = if (visual == Vpn5gConnectSwitchVisual.CONNECTING) {
+        slideState.value
+    } else {
+        settledOffset
+    }
+    val actionLabel = stringResource(
+        if (isOn) {
+            R.string.vpn5g_tap_to_disconnect
+        } else {
+            R.string.vpn5g_tap_to_connect
+        },
     )
 
-    // Flame sequence, once per connection: the brand briefly catches
-    // fire (orange/red glow + slight scale-up) then fades away, leaving
-    // the normal connected state. Resets on disconnect.
-    var flameDone by remember { mutableStateOf(false) }
-    val flameAlpha = remember { Animatable(0f) }
-    val brandAlpha = remember { Animatable(1f) }
-    val brandScale = remember { Animatable(1f) }
-    LaunchedEffect(connected) {
-        if (connected) {
-            if (!flameDone) {
-                val flameJob = launch { flameAlpha.animateTo(1f, tween(450)) }
-                val scaleJob = launch { brandScale.animateTo(1.15f, tween(450)) }
-                flameJob.join()
-                scaleJob.join()
-                brandAlpha.animateTo(0f, tween(450))
-                flameAlpha.animateTo(0f, tween(300))
-                flameDone = true
-            }
-        } else {
-            flameDone = false
-            flameAlpha.snapTo(0f)
-            brandAlpha.snapTo(1f)
-            brandScale.snapTo(1f)
-        }
-    }
-
-    // While connected the ring shows the 30-minute session as a
-    // progress arc; it never spins once connected.
-    val progressSweep = if (connected) {
-        360f * (remainingFraction ?: 1f)
-    } else {
-        0f
-    }
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier.size(260.dp),
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        // Blue glow (Lantern, v1.1.21): a soft radial halo around the
-        // button while connected or connecting; off when idle/failed.
-        if (connected || isVerifying) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                Vpn5gElectricBlue.copy(alpha = 0.35f),
-                                Vpn5gElectricBlue.copy(alpha = 0.08f),
-                                Color.Transparent,
-                            ),
-                        ),
-                        shape = CircleShape,
-                    ),
-            )
-        }
         Box(
-            contentAlignment = Alignment.Center,
+            contentAlignment = Alignment.CenterStart,
             modifier = Modifier
-                .size(220.dp)
-                .clip(CircleShape)
-                .background(Vpn5gCard)
-                .clickable(role = Role.Button, onClickLabel = stringResource(R.string.vpn5g_connect)) {
-                    onClick()
-                }
-                .padding(10.dp),
+                .shadow(
+                    elevation = if (isOn ||
+                        visual == Vpn5gConnectSwitchVisual.CONNECTING
+                    ) {
+                        16.dp
+                    } else {
+                        0.dp
+                    },
+                    shape = RoundedCornerShape(50.dp),
+                    ambientColor = trackColor.copy(alpha = 0.5f),
+                    spotColor = trackColor.copy(alpha = 0.5f),
+                )
+                .width(trackWidth)
+                .height(trackHeight)
+                .clip(RoundedCornerShape(50.dp))
+                .background(trackColor)
+                .toggleable(
+                    value = isOn,
+                    role = Role.Switch,
+                    onValueChange = { onClick() },
+                )
+                .semantics { contentDescription = actionLabel }
+                .padding(6.dp),
         ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val stroke = size.width * 0.035f
-            // Track ring.
-            drawArc(
-                color = Color(0xFF2A2A2A),
-                startAngle = 0f,
-                sweepAngle = 360f,
-                useCenter = false,
-                topLeft = Offset(stroke / 2, stroke / 2),
-                size = Size(size.width - stroke, size.height - stroke),
-                style = Stroke(width = stroke, cap = StrokeCap.Round),
-            )
-            // Connecting: spinning arc. Connected: session progress arc.
-            if (isVerifying) {
-                drawArc(
-                    color = ringColor,
-                    startAngle = spinAngle - 90f,
-                    sweepAngle = 90f,
-                    useCenter = false,
-                    topLeft = Offset(stroke / 2, stroke / 2),
-                    size = Size(size.width - stroke, size.height - stroke),
-                    style = Stroke(width = stroke, cap = StrokeCap.Round),
-                )
-            } else if (progressSweep > 0f) {
-                drawArc(
-                    color = ringColor,
-                    startAngle = -90f,
-                    sweepAngle = progressSweep,
-                    useCenter = false,
-                    topLeft = Offset(stroke / 2, stroke / 2),
-                    size = Size(size.width - stroke, size.height - stroke),
-                    style = Stroke(width = stroke, cap = StrokeCap.Round),
-                )
-            }
-        }
-        // Power glyph, exactly centered in the circle at all times. The
-        // brand text sits below it and only while it is visible: it
-        // catches fire on connect and fades away, leaving the glyph
-        // exactly centered; it comes back on disconnect.
-        Vpn5gPowerIcon(color = glyphColor, size = 84.dp)
-        if (brandAlpha.value > 0f) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .offset(y = 58.dp)
-                    .graphicsLayer {
-                        alpha = brandAlpha.value
-                        scaleX = brandScale.value
-                        scaleY = brandScale.value
-                    },
+                    .offset(x = thumbOffset)
+                    .size(thumbSize)
+                    .clip(CircleShape)
+                    .background(Color.White),
             ) {
-                // Flame glow: radial orange/red gradient behind the text.
-                Box(
-                    modifier = Modifier
-                        .size(96.dp)
-                        .background(
-                            brush = Brush.radialGradient(
-                                colors = listOf(
-                                    Color(0xFFFF6A00).copy(alpha = flameAlpha.value),
-                                    Color(0xFFFF2200).copy(
-                                        alpha = flameAlpha.value * 0.6f,
-                                    ),
-                                    Color.Transparent,
-                                ),
-                            ),
-                            shape = CircleShape,
-                        ),
-                )
-                Text(
-                    text = brand,
-                    color = lerp(
-                        Vpn5gOnDarkMuted,
-                        Color(0xFFFF7A00),
-                        flameAlpha.value,
-                    ),
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                )
+                Vpn5gPowerIcon(color = glyphColor, size = 28.dp)
             }
         }
+        // While connected the 30-minute session shows as a thin
+        // progress bar under the switch (was the ring arc).
+        if (isOn && remainingFraction != null) {
+            Spacer(Modifier.height(10.dp))
+            LinearProgressIndicator(
+                progress = { remainingFraction.coerceIn(0f, 1f) },
+                modifier = Modifier.width(trackWidth),
+                color = Vpn5gGreen,
+                trackColor = Vpn5gOnDarkMuted.copy(alpha = 0.3f),
+            )
         }
     }
 }

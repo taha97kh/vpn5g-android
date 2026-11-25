@@ -95,6 +95,10 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gVolume
 fun Vpn5gSubscriptionScreen(
     state: Vpn5gHomeUiState,
     onBack: () -> Unit,
+    /** v1.1.22 (fix #4): refresh the subscription + locks on entry,
+     * so the status section is never stale after a redeem or a
+     * return to the app. */
+    onEntered: () -> Unit = {},
     onOpenBot: () -> Unit,
     onOpenAuth: () -> Unit,
     onSignOut: () -> Unit,
@@ -122,6 +126,8 @@ fun Vpn5gSubscriptionScreen(
     onToggleCountryExpanded: (String) -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
+    // v1.1.22: refresh the subscription + locks on entry (fix #4).
+    LaunchedEffect(Unit) { onEntered() }
     // Section expansion is transient presentation state only (v1.1.5
     // §4). v1.1.15: ALL sections start CLOSED — the user opens them.
     // (Before: all open except the comparison table.)
@@ -424,6 +430,20 @@ fun Vpn5gSubscriptionScreen(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                     )
+                    // v1.1.22 (fix #4): the expiry DATE, not just the
+                    // remaining days — the status must show the full
+                    // picture (plan / expiry date / remaining / volume).
+                    ownSubscription.expiresAtEpochSeconds?.let { expiresAt ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.vpn5g_promo_redeemed_expiry,
+                                Vpn5gSubscriptionStatus.formatExpiryDate(expiresAt),
+                            ),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                        )
+                    }
                     // v1.1.18 (Model B): used / remaining volume for
                     // this grant, measured on-device.
                     Vpn5gVolumeBlock(state)
@@ -447,6 +467,19 @@ fun Vpn5gSubscriptionScreen(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                     )
+                    // v1.1.22 (fix #4): the gift's expiry DATE too —
+                    // the 1.1.21 screenshot showed only "23h remaining".
+                    ownSubscription.expiresAtEpochSeconds?.let { expiresAt ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.vpn5g_promo_redeemed_expiry,
+                                Vpn5gSubscriptionStatus.formatExpiryDate(expiresAt),
+                            ),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                        )
+                    }
                     Vpn5gVolumeBlock(state)
                 } else if (ownSubscription?.status == "active") {
                     Text(

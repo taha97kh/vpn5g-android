@@ -306,10 +306,19 @@ object Vpn5gConstants {
     /**
      * Terms & Conditions acceptance (v1.1.21): true once the user
      * ticked the checkbox on the startup notice's last page. Persisted
-     * in MMKV — the user is never asked to re-tick on later launches;
-     * the notice itself still shows on every entry.
+     * in MMKV — the user is never asked to re-tick on later launches.
      */
     const val KEY_TERMS_ACCEPTED = "vpn5g_terms_accepted"
+
+    /**
+     * Startup notice shown (v1.1.22, Aref 2026-11-25): true once the
+     * paged notice was displayed on the first entry after install.
+     * Persisted in MMKV — the notice shows ONLY on that first entry
+     * and never again on later launches, including after updates.
+     * The flag is written on first DISPLAY (not on dismiss), so a
+     * user who kills the app mid-read still never sees it again.
+     */
+    const val KEY_STARTUP_NOTICE_SHOWN = "vpn5g_startup_notice_shown"
 
     /**
      * Live tunnel speeds, published once a second by the :daemon

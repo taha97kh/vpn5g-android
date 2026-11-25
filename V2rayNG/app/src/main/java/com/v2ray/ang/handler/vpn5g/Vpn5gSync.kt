@@ -762,17 +762,35 @@ object Vpn5gSync {
      * v1.1.20: seed servers (build-time verified) count in every tier
      * the same way as in [selectFreeGuids] — a fresh install's pool is
      * the seed until live data replaces it.
+     * v1.1.22 (paid-tier fill): on a filtered network the verified
+     * set can stay tiny (Aref's phone: 2 free servers) — then a gift
+     * or subscription would unlock nothing new and the locks would
+     * stay shut after a redeem. Paid tiers therefore FILL from the
+     * fastest TCP-pinged servers (ping > 0, never real-verified) up
+     * to the tier's count — verified servers always first, so the
+     * auto picker still prefers them and the tunnel verification +
+     * failover still guard a dead pick. Servers whose ping was
+     * withdrawn (-1, failed the real test) are never filled in. The
+     * FREE tier is unchanged: TCP-only servers are never free.
      */
     fun freeGuidsFor(
         servers: List<Vpn5gServerUi>,
         tier: Vpn5gSubscriptionStatus.Vpn5gTier,
     ): Set<String> {
         val eligible = freeEligibleSorted(servers)
+        val eligibleGuids = eligible.map { it.guid }.toSet()
+        // Paid-tier fill (v1.1.22): fastest TCP-pinged servers not
+        // already eligible, so a gift/sub unlocks real countries even
+        // when the verified set is tiny. Failed servers (ping -1)
+        // are never filled in.
+        val fill = servers
+            .filter { it.guid !in eligibleGuids && !it.hasRealPing && it.pingMillis > 0 }
+            .sortedBy { it.pingMillis }
         return when (tier) {
-            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER -> eligible
+            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER -> (eligible + fill)
                 .map { it.guid }
                 .toSet()
-            Vpn5gSubscriptionStatus.Vpn5gTier.GIFT -> eligible
+            Vpn5gSubscriptionStatus.Vpn5gTier.GIFT -> (eligible + fill)
                 .take(Vpn5gConstants.GIFT_SERVER_COUNT)
                 .map { it.guid }
                 .toSet()
@@ -816,7 +834,15 @@ object Vpn5gSync {
      * The cached tier is only a display hint anyway: every privileged
      * action re-checks the server state before it runs.
      */
-    fun loadGroupedServers(forceFreeTier: Boolean = false): List<Vpn5gCountryUi> {
+    fun loadGroupedServers(
+        forceFreeTier: Boolean = false,
+        /** v1.1.22: when given, this tier decides the free flags
+         * instead of the MMKV-cached subscription — the post-redeem
+         * rebuild passes the MERGED tier (cached + just-granted), so
+         * the locks open from the grant itself and never from a stale
+         * cache read. Null = derive from the cache, as before. */
+        tierOverride: Vpn5gSubscriptionStatus.Vpn5gTier? = null,
+    ): List<Vpn5gCountryUi> {
         val subId = MmkvManager.decodeSubscriptions()
             .firstOrNull { it.subscription.url == LIVE_JSON }?.guid
             ?: return emptyList()
@@ -883,6 +909,8 @@ object Vpn5gSync {
         // state, not just the subscription text.
         val tier = if (forceFreeTier) {
             Vpn5gSubscriptionStatus.Vpn5gTier.FREE
+        } else if (tierOverride != null) {
+            tierOverride
         } else {
             val nowSeconds = System.currentTimeMillis() / 1000
             Vpn5gSubscriptionStatus.tierOf(

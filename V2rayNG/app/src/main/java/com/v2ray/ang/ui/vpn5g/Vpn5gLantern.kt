@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
+import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
 
 /**
  * Lantern-style shared components (v1.1.21 restyle): charcoal cards,
@@ -104,6 +105,145 @@ fun Vpn5gProUpgradeCard(onOpenPremium: () -> Unit) {
                     fontWeight = FontWeight.Bold,
                 )
             }
+        }
+    }
+}
+
+/**
+ * Whether any subscription is active (v1.1.22, fix #3): the single
+ * gate for the upsell → details swap — the home card, the drawer
+ * pill and the features page all use it, so the three can never
+ * disagree. A row alone is not enough: an expired row still sits in
+ * the state while isSubscriber/isGift are false.
+ */
+internal fun hasActiveSubscription(state: Vpn5gHomeUiState): Boolean {
+    return state.isSubscriber || state.isGift
+}
+
+/**
+ * Plan display name for the active subscription (v1.1.22): the
+ * published plan's Persian name, falling back to the plan id, or null
+ * when there is no subscription row at all. Shared by the details
+ * card and the drawer pill — the same name the status section shows.
+ */
+internal fun subscriptionPlanDisplayName(state: Vpn5gHomeUiState): String? {
+    val planId = state.userSubscription?.plan ?: return null
+    return state.plans?.firstOrNull { it.id == planId }?.name_fa ?: planId
+}
+
+/**
+ * Subscription details card (v1.1.22, fix #3): while ANY subscription
+ * is active (gift or sub) the «ارتقا به نسخه پرو» upsell is replaced
+ * by this card — «مشخصات اشتراک» with plan / expiry / volume —
+ * tapping it opens Premium, where the full status lives. When the
+ * subscription ends the caller shows the upsell again (gated on
+ * isSubscriber/isGift, never on the row alone). Same gold border as
+ * the upsell card it replaces.
+ */
+@Composable
+fun Vpn5gSubscriptionDetailsCard(
+    state: Vpn5gHomeUiState,
+    onOpenPremium: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Vpn5gCard)
+            .border(1.dp, Vpn5gGold.copy(alpha = 0.8f), RoundedCornerShape(16.dp))
+            .clickable(
+                role = Role.Button,
+                onClickLabel = stringResource(R.string.vpn5g_subscription_details_title),
+            ) { onOpenPremium() }
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Vpn5gCrownIcon(color = Vpn5gGold, size = 20.dp)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_subscription_details_title),
+                color = Vpn5gOnDark,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        subscriptionPlanDisplayName(state)?.let { plan ->
+            Text(
+                text = stringResource(R.string.vpn5g_subscription_plan, plan),
+                color = Vpn5gOnDark,
+                fontSize = 15.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+        }
+        state.userSubscription?.expiresAtEpochSeconds?.let { expiresAt ->
+            Text(
+                text = stringResource(
+                    R.string.vpn5g_promo_redeemed_expiry,
+                    Vpn5gSubscriptionStatus.formatExpiryDate(expiresAt),
+                ),
+                color = Vpn5gOnDark,
+                fontSize = 15.sp,
+            )
+        }
+        // Volume total + used with progress (v1.1.18 Model B) — the
+        // same block the Premium status section shows.
+        Vpn5gVolumeBlock(state)
+    }
+}
+
+/**
+ * Compact subscription details pill (v1.1.22, fix #3): the drawer's
+ * teal «ارتقا به نسخه پرو» pill becomes this gold-bordered pill while
+ * a subscription is active — title + plan and expiry on one line —
+ * tapping it opens Premium.
+ */
+@Composable
+fun Vpn5gSubscriptionDetailsPill(
+    state: Vpn5gHomeUiState,
+    onOpenPremium: () -> Unit,
+) {
+    val subtitle = buildString {
+        subscriptionPlanDisplayName(state)?.let { append(it) }
+        state.userSubscription?.expiresAtEpochSeconds?.let { expiresAt ->
+            if (isNotEmpty()) append(" · ")
+            append(
+                Vpn5gSubscriptionStatus.formatExpiryDate(expiresAt),
+            )
+        }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(50.dp))
+            .background(Vpn5gCard)
+            .border(1.dp, Vpn5gGold.copy(alpha = 0.8f), RoundedCornerShape(50.dp))
+            .clickable(
+                role = Role.Button,
+                onClickLabel = stringResource(R.string.vpn5g_subscription_details_title),
+            ) { onOpenPremium() }
+            .padding(vertical = 12.dp, horizontal = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Vpn5gCrownIcon(color = Vpn5gGold, size = 20.dp)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_subscription_details_title),
+                color = Vpn5gOnDark,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        if (subtitle.isNotEmpty()) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                color = Vpn5gOnDarkMuted,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
