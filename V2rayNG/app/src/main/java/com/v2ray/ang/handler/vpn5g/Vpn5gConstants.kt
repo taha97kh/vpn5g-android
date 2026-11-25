@@ -192,6 +192,34 @@ object Vpn5gConstants {
     const val KEY_FAILED_GUIDS_JSON = "vpn5g_failed_guids_json"
     /** How long a failed server stays out of the auto picker (v1.1.4 §5). */
     const val FAILED_GUID_TTL_MS = 6L * 60L * 60L * 1000L
+
+    /**
+     * Health-score memory (v1.1.24, Lantern-inspired): JSON map of
+     * server dedupeKey → score entry (see Vpn5gHealthScore). A server
+     * that verified a real tunnel before outranks an equally fast
+     * stranger; scores decay toward zero with a 24 h half-life so a
+     * server that was good last week does not win forever.
+     */
+    const val KEY_HEALTH_SCORES_JSON = "vpn5g_health_scores_json"
+    /** Health score half-life: evidence halves every 24 h (v1.1.24). */
+    const val HEALTH_HALF_LIFE_MS = 24L * 60L * 60L * 1000L
+    /** Most health entries kept; oldest-updated are pruned (v1.1.24). */
+    const val HEALTH_MAX_ENTRIES = 500
+    /** Ping bonus per health point when ranking (ms, v1.1.24). */
+    const val HEALTH_PING_BONUS_MS = 40L
+    /** Health score bounds (v1.1.24). */
+    const val HEALTH_SCORE_MIN = -5.0
+    const val HEALTH_SCORE_MAX = 5.0
+
+    /**
+     * Warm standby pool (v1.1.24): while the VPN is idle, stored
+     * profiles are real-probed in bounded batches on this interval so
+     * at tap-time proven servers are already waiting (the 1.1.14
+     * feel). Bounded batch + budget keep battery/data sane.
+     */
+    const val WARM_PROBE_INTERVAL_MS = 120_000L
+    const val WARM_PROBE_BATCH = 12
+    const val WARM_PROBE_BUDGET_MS = 15_000L
     /** Selected protocol filter id ("auto", "vless", "vmess", "trojan", "ss"). */
     const val KEY_PROTOCOL_FILTER = "vpn5g_protocol_filter"
     /** Last successful app-update check, epoch millis (v1.1.3, at most daily). */

@@ -142,6 +142,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gCrashHandler
 import com.v2ray.ang.handler.vpn5g.Vpn5gFailedServers
 import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
+import com.v2ray.ang.handler.vpn5g.Vpn5gHealthScore
 import com.v2ray.ang.handler.vpn5g.Vpn5gManualServer
 import com.v2ray.ang.handler.vpn5g.Vpn5gNetworkProfile
 import com.v2ray.ang.handler.vpn5g.Vpn5gOperator
@@ -844,6 +845,34 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
 
+        // Warm standby pool (v1.1.24, Lantern-inspired): while the
+        // VPN is idle, real-probe a bounded batch of stored
+        // profiles on an interval so proven servers are already
+        // waiting at tap-time (the 1.1.14 feel). Never while the
+        // VPN runs (no throwaway core next to the live one) and
+        // never overlapping a refresh. Bounded batch + budget in
+        // Vpn5gSync.warmProbeStoredProfiles keep battery/data sane.
+        viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(Vpn5gConstants.WARM_PROBE_INTERVAL_MS)
+                if (!isActive) break
+                val state = _uiState.value
+                if (state.isRunning || state.isRefreshing) continue
+                val verified = runCatching {
+                    Vpn5gSync.warmProbeStoredProfiles(getApplication())
+                }.getOrDefault(0)
+                if (verified > 0 && isActive && !_uiState.value.isRunning) {
+                    val countries = runCatching {
+                        Vpn5gSync.loadGroupedServers(forceFreeTier = tamperDetected)
+                    }.getOrElse { emptyList() }
+                    if (countries.isNotEmpty()) {
+                        _uiState.update { it.copy(countries = countries) }
+                        refreshSelection()
+                    }
+                }
+            }
+        }
+
         // Baseline public IP for the tunnel check (background, best effort).
         viewModelScope.launch(Dispatchers.IO) {
             baselineIp = Vpn5gTunnelCheck.publicIpDirect()
@@ -993,6 +1022,30 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         it.copy(operatorLabel = operator.labelFa, countries = countries)
                     }
                     refreshSelection()
+                    // v1.1.24 (network-change recovery, radiance-
+                    // style): the underlying network changed
+                    // (Wi-Fi ↔ mobile / operator switch). While
+                    // CONNECTED, re-verify the tunnel NOW instead
+                    // of waiting for the 20 s watchdog — a tunnel
+                    // the change killed is dropped at once and the
+                    // failover switches server. While idle, the
+                    // baseline (pre-tunnel) IP belongs to the old
+                    // network, so it is re-fetched for the next
+                    // verification. Gated on a real operator-key
+                    // change so capability chatter cannot spam it.
+                    val state = _uiState.value
+                    if (state.isRunning &&
+                        state.connectState == Vpn5gConnectState.CONNECTED
+                    ) {
+                        LogUtil.i(
+                            AppConfig.TAG,
+                            "Vpn5gHomeViewModel: network changed while " +
+                                "connected; re-verifying tunnel now",
+                        )
+                        reverifyTunnel()
+                    } else if (!state.isRunning) {
+                        baselineIp = Vpn5gTunnelCheck.publicIpDirect()
+                    }
                 } else {
                     _uiState.update { it.copy(operatorLabel = operator.labelFa) }
                 }
@@ -1445,7 +1498,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             Vpn5gFailedServers.load(), System.currentTimeMillis()
         )
         return Vpn5gAutoConnect.pickBestServer(
-            _uiState.value.countries, triedGuids + failed.keys
+            _uiState.value.countries, triedGuids + failed.keys,
+            Vpn5gHealthScore.currentScores(),
         )
     }
 
@@ -1673,7 +1727,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     if (manualProblem != Vpn5gManualServer.Problem.NOT_FOUND) break
                 } else {
                     guid = Vpn5gAutoConnect.pickBestServer(
-                        _uiState.value.countries, triedGuids + failed.keys
+                        _uiState.value.countries, triedGuids + failed.keys,
+                        Vpn5gHealthScore.currentScores(),
                     )?.guid
                     if (guid != null) {
                         // v1.1.7 connect-time gate: an auto pick is
@@ -2197,7 +2252,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 userStopRequested = userStopRequested,
                 connectState = _uiState.value.connectState,
                 hasPickableServer = Vpn5gAutoConnect.pickBestServer(
-                    _uiState.value.countries
+                    _uiState.value.countries,
+                    healthScores = Vpn5gHealthScore.currentScores(),
                 ) != null,
             )
         ) return
@@ -3097,6 +3153,14 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         // v1.1.23: tier-pool ordering like pickBestServer —
         // real-pinged first, then TCP-pinged pool servers, so a
         // subscriber fails over onto unlocked servers too.
+        // v1.1.24: within each group, health-adjusted ping (a
+        // server that carried a tunnel before wins over an
+        // equally fast stranger).
+        val healthScores = Vpn5gHealthScore.currentScores()
+        fun healthAdjusted(server: Vpn5gServerUi): Long =
+            Vpn5gHealthScore.adjustedPing(
+                server.pingMillis, healthScores[server.dedupeKey] ?: 0.0
+            )
         val pool = _uiState.value.countries
             .flatMap { it.servers }
             .filter {
@@ -3104,7 +3168,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     it.guid !in failed && it.pingMillis > 0
             }
             .sortedWith(
-                compareBy({ !it.hasRealPing }, { it.pingMillis })
+                compareBy({ !it.hasRealPing }, { healthAdjusted(it) })
             )
         val candidates = if (pool.isNotEmpty()) pool else _uiState.value.countries
             .flatMap { it.servers }
@@ -3112,7 +3176,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 it.guid != droppedGuid && it.guid !in failed && it.pingMillis > 0
             }
             .sortedWith(
-                compareBy({ !it.hasRealPing }, { it.pingMillis })
+                compareBy({ !it.hasRealPing }, { healthAdjusted(it) })
             )
         val next = candidates
             .firstOrNull { it.country != droppedCountry }
@@ -3255,21 +3319,36 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         tunnelMessage = null,
                     )
                 }
-                val result = Vpn5gTunnelCheck.verify(baselineIp)
+                // v1.1.24 (fast serial failover): the first three
+                // attempts get a short verify budget so a dead
+                // server is rejected fast and the next ranked
+                // candidate starts sooner; later attempts keep the
+                // full budget. The single Xray core cannot run two
+                // tunnels at once, so this short-timeout serial
+                // order over the health-ranked list is the honest
+                // equivalent of parallel attempts.
+                val result = Vpn5gTunnelCheck.verify(
+                    baselineIp,
+                    Vpn5gAutoConnect.verifyTimeoutMsForAttempt(triedGuids.size),
+                )
                 when (result.verdict) {
                     Vpn5gTunnelCheck.Verdict.VERIFIED -> {
                         // v1.1.14: this server proved itself on the
                         // CURRENT operator — record it in the
                         // operator's own history so the auto pick
                         // prefers it next time on this operator.
+                        // v1.1.24: also record the health-score
+                        // success, so the picker prefers proven
+                        // servers next time.
                         runCatching {
                             val operatorKey = Vpn5gOperator.currentKey()
                             val profile = MmkvManager.decodeServerConfig(guid)
-                            if (operatorKey != null && profile != null) {
-                                Vpn5gOperator.recordVerified(
-                                    operatorKey,
-                                    Vpn5gServerValidator.dedupeKey(profile),
-                                )
+                            if (profile != null) {
+                                val key = Vpn5gServerValidator.dedupeKey(profile)
+                                if (operatorKey != null) {
+                                    Vpn5gOperator.recordVerified(operatorKey, key)
+                                }
+                                Vpn5gHealthScore.recordOutcome(key, success = true)
                             }
                         }
                         val flag = result.exitIp?.let { ip ->
@@ -3306,6 +3385,17 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                                 "(attempt #$verifyAttempts)",
                         )
                         triedGuids += guid
+                        // v1.1.24: record the health-score failure —
+                        // this server sinks in the ranking even after
+                        // the 6h exclusion expires.
+                        runCatching {
+                            MmkvManager.decodeServerConfig(guid)?.let { profile ->
+                                Vpn5gHealthScore.recordOutcome(
+                                    Vpn5gServerValidator.dedupeKey(profile),
+                                    success = false,
+                                )
+                            }
+                        }
                         // Keep a dead server out of the auto picker for 6h.
                         val failed = Vpn5gFailedServers.prune(
                             Vpn5gFailedServers.load(), System.currentTimeMillis()
@@ -3474,6 +3564,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         // manual switches can use unlocked servers too. Before
         // this, only real-pinged servers were candidates and a
         // subscriber's unlocked pool was invisible here.
+        // v1.1.24: within each group, health-adjusted ping.
+        val healthScores = Vpn5gHealthScore.currentScores()
+        fun healthAdjusted(server: Vpn5gServerUi): Long =
+            Vpn5gHealthScore.adjustedPing(
+                server.pingMillis, healthScores[server.dedupeKey] ?: 0.0
+            )
         val pool = _uiState.value.countries
             .flatMap { it.servers }
             .filter {
@@ -3481,7 +3577,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     it.guid !in failed && it.pingMillis > 0
             }
             .sortedWith(
-                compareBy({ !it.hasRealPing }, { it.pingMillis })
+                compareBy({ !it.hasRealPing }, { healthAdjusted(it) })
             )
         val candidates = if (pool.isNotEmpty()) pool else _uiState.value.countries
             .flatMap { it.servers }
@@ -3489,7 +3585,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 it.guid !in excluding && it.guid !in failed && it.pingMillis > 0
             }
             .sortedWith(
-                compareBy({ !it.hasRealPing }, { it.pingMillis })
+                compareBy({ !it.hasRealPing }, { healthAdjusted(it) })
             )
         if (differentCountryThan.isNullOrBlank()) {
             return candidates.firstOrNull()

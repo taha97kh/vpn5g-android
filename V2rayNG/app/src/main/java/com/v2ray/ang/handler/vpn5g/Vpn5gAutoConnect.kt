@@ -254,24 +254,61 @@ object Vpn5gAutoConnect {
     fun pickBestServer(
         sections: List<Vpn5gCountryUi>,
         excluding: Set<String> = emptySet(),
+        healthScores: Map<String, Double> = emptyMap(),
     ): Vpn5gServerUi? {
+        return rankCandidates(sections, excluding, healthScores).firstOrNull()
+    }
+
+    /**
+     * The auto-pick order as a ranked list (v1.1.24): the same four
+     * tier steps as [pickBestServer], each step ordered by
+     * health-adjusted ping ([Vpn5gHealthScore.adjustedPing]) instead
+     * of raw ping alone. With no health history (empty map) the
+     * order is exactly the 1.1.23 order. The connect chain tries
+     * candidates serially in this order with short verify timeouts
+     * (see [verifyTimeoutMsForAttempt]) — the single Xray core
+     * cannot run two tunnels at once, so true parallel attempts
+     * are impossible; fast serial failover over a pre-ranked list
+     * is the honest equivalent.
+     */
+    fun rankCandidates(
+        sections: List<Vpn5gCountryUi>,
+        excluding: Set<String> = emptySet(),
+        healthScores: Map<String, Double> = emptyMap(),
+    ): List<Vpn5gServerUi> {
         val all = sections.flatMap { it.servers }
+        fun adjusted(server: Vpn5gServerUi): Long =
+            Vpn5gHealthScore.adjustedPing(server.pingMillis, healthScores[server.dedupeKey] ?: 0.0)
         val real = all
             .filter { it.isFree && it.hasRealPing && it.pingMillis > 0 && it.guid !in excluding }
-            .minByOrNull { it.pingMillis }
-        if (real != null) return real
+            .sortedBy { adjusted(it) }
+        if (real.isNotEmpty()) return real
         val seed = all
             .filter { it.isFree && it.isSeed && it.pingMillis >= 0 && it.guid !in excluding }
-            .firstOrNull()
-        if (seed != null) return seed
+        if (seed.isNotEmpty()) return seed
         val tcpInPool = all
             .filter { it.isFree && it.pingMillis > 0 && it.guid !in excluding }
-            .minByOrNull { it.pingMillis }
-        if (tcpInPool != null) return tcpInPool
+            .sortedBy { adjusted(it) }
+        if (tcpInPool.isNotEmpty()) return tcpInPool
         return all
             .filter { it.pingMillis > 0 && it.guid !in excluding }
-            .minByOrNull { it.pingMillis }
+            .sortedBy { adjusted(it) }
     }
+
+    /**
+     * Verify budget per attempt (v1.1.24, pure): the first three
+     * attempts of a connect chain get a short 15 s budget so a dead
+     * server is rejected fast and the next ranked candidate starts
+     * sooner; later attempts keep the full 25 s budget (a slow but
+     * real tunnel on a bad network still gets its chance). The
+     * single Xray core makes true parallel attempts unsafe — this
+     * short-timeout serial order is the fast-failover equivalent.
+     */
+    fun verifyTimeoutMsForAttempt(attemptIndex: Int): Int =
+        if (attemptIndex < 3) FAST_VERIFY_TIMEOUT_MS else FULL_VERIFY_TIMEOUT_MS
+
+    const val FAST_VERIFY_TIMEOUT_MS = 15_000
+    const val FULL_VERIFY_TIMEOUT_MS = 25_000
 
     /**
      * True while a tap on the connect switch must mean "turn OFF"

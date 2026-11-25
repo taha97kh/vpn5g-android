@@ -16,6 +16,7 @@ class Vpn5gAutoConnectTest {
         free: Boolean = true,
         realPing: Boolean = true,
         isSeed: Boolean = false,
+        dedupeKey: String = "",
     ) =
         Vpn5gServerUi(
             guid = guid,
@@ -28,6 +29,7 @@ class Vpn5gAutoConnectTest {
             hasRealPing = realPing,
             // v1.1.20: a build-time verified seed server.
             isSeed = isSeed,
+            dedupeKey = dedupeKey,
         )
 
     private fun section(servers: List<Vpn5gServerUi>) = Vpn5gCountryUi(
@@ -420,6 +422,108 @@ class Vpn5gAutoConnectTest {
         assertEquals(
             "b",
             Vpn5gAutoConnect.pickBestServer(sections, excluding = setOf("a"))?.guid,
+        )
+    }
+
+    // -- v1.1.24: health-score ranking + fast serial failover -----------
+
+    @Test
+    fun test_pick_best_server_health_beats_raw_ping() {
+        // A proven 300 ms server (score 3 -> adjusted 180) beats an
+        // unproven 250 ms stranger.
+        val sections = listOf(
+            section(
+                listOf(
+                    server("stranger", 250L, dedupeKey = "key-stranger"),
+                    server("proven", 300L, dedupeKey = "key-proven"),
+                )
+            ),
+        )
+        val scores = mapOf("key-proven" to 3.0)
+        assertEquals(
+            "proven",
+            Vpn5gAutoConnect.pickBestServer(sections, healthScores = scores)?.guid,
+        )
+        // Without health history the raw fastest still wins (1.1.23 order).
+        assertEquals("stranger", Vpn5gAutoConnect.pickBestServer(sections)?.guid)
+    }
+
+    @Test
+    fun test_pick_best_server_bad_health_sinks() {
+        // A failing 100 ms server (score -3 -> adjusted 220) loses to
+        // a clean 200 ms server.
+        val sections = listOf(
+            section(
+                listOf(
+                    server("flaky", 100L, dedupeKey = "key-flaky"),
+                    server("clean", 200L, dedupeKey = "key-clean"),
+                )
+            ),
+        )
+        val scores = mapOf("key-flaky" to -3.0)
+        assertEquals(
+            "clean",
+            Vpn5gAutoConnect.pickBestServer(sections, healthScores = scores)?.guid,
+        )
+    }
+
+    @Test
+    fun test_rank_candidates_orders_by_health_adjusted_ping() {
+        val sections = listOf(
+            section(
+                listOf(
+                    server("a", 400L, dedupeKey = "key-a"),
+                    server("b", 200L, dedupeKey = "key-b"),
+                    server("c", 300L, dedupeKey = "key-c"),
+                )
+            ),
+        )
+        val scores = mapOf("key-a" to 5.0) // 400 - 200 = 200, ties b on ping, order stable by input
+        val ranked = Vpn5gAutoConnect.rankCandidates(sections, healthScores = scores)
+        assertEquals(listOf("a", "b", "c"), ranked.map { it.guid })
+        // No history: plain ping order.
+        val plain = Vpn5gAutoConnect.rankCandidates(sections)
+        assertEquals(listOf("b", "c", "a"), plain.map { it.guid })
+    }
+
+    @Test
+    fun test_rank_candidates_respects_excluding_and_tier_steps() {
+        // Real-pinged step wins over TCP pool even with health scores.
+        val sections = listOf(
+            section(
+                listOf(
+                    server("tcp-fast", 10L, realPing = false, dedupeKey = "key-tcp"),
+                    server("real-slow", 900L, realPing = true, dedupeKey = "key-real"),
+                )
+            ),
+        )
+        val ranked = Vpn5gAutoConnect.rankCandidates(
+            sections, healthScores = mapOf("key-tcp" to 5.0),
+        )
+        assertEquals(listOf("real-slow"), ranked.map { it.guid })
+        assertTrue(
+            Vpn5gAutoConnect.rankCandidates(sections, excluding = setOf("real-slow", "tcp-fast"))
+                .isEmpty(),
+        )
+    }
+
+    @Test
+    fun test_verify_timeout_short_for_first_attempts() {
+        assertEquals(
+            Vpn5gAutoConnect.FAST_VERIFY_TIMEOUT_MS,
+            Vpn5gAutoConnect.verifyTimeoutMsForAttempt(0),
+        )
+        assertEquals(
+            Vpn5gAutoConnect.FAST_VERIFY_TIMEOUT_MS,
+            Vpn5gAutoConnect.verifyTimeoutMsForAttempt(2),
+        )
+        assertEquals(
+            Vpn5gAutoConnect.FULL_VERIFY_TIMEOUT_MS,
+            Vpn5gAutoConnect.verifyTimeoutMsForAttempt(3),
+        )
+        assertEquals(
+            Vpn5gAutoConnect.FULL_VERIFY_TIMEOUT_MS,
+            Vpn5gAutoConnect.verifyTimeoutMsForAttempt(10),
         )
     }
 

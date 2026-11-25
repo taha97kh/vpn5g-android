@@ -360,6 +360,13 @@ data class Vpn5gServerUi(
      * it for this operator. False with no history — never invented.
      */
     val operatorVerified: Boolean = false,
+    /**
+     * Server identity (scheme://host:port:identity, v1.1.24) — the
+     * stable key the health-score memory and real-ping evidence use
+     * across refreshes (GUIDs are re-issued every refresh). "" when
+     * unknown (tests / legacy constructions).
+     */
+    val dedupeKey: String = "",
 )
 
 /** One country section on the home screen. */

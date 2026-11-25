@@ -192,6 +192,7 @@ object Vpn5gSync {
                     val probe = Vpn5gRealPing.probeCandidates(
                         context, probeCandidates, probeBudgetMs
                     )
+                    recordProbeHealth(probeCandidates, probe)
                     if (probe.verifiedKeys.isNotEmpty()) {
                         Vpn5gRealPing.addRealPingKeys(probe.verifiedKeys)
                     }
@@ -274,17 +275,29 @@ object Vpn5gSync {
             val candidates = mutableListOf<Candidate>()
             var anyFetchOk = false
             val sourceList = sources.toList()
-            for ((sourceIndex, url) in sourceList.withIndex()) {
-                onProgress?.invoke(
-                    Vpn5gStartupProgress.Stage.FETCH_SOURCES,
-                    sourceIndex.toFloat() / sourceList.size.coerceAtLeast(1),
-                )
-                val body = try {
-                    HttpUtil.getUrlContent(UrlContentRequest(url = url, timeout = FETCH_TIMEOUT_MS))
-                } catch (e: Exception) {
-                    LogUtil.e(AppConfig.TAG, "Vpn5gSync: fetch failed for $url", e)
-                    null
-                }
+            // v1.1.24 (racing fetch, Lantern-inspired): the sources
+            // are fetched IN PARALLEL instead of sequentially — one
+            // slow source no longer delays all the others (8 × 10 s
+            // worst case became ~10 s). Every source that answers
+            // contributes; when none answers, the last-good stored
+            // list stays untouched (offline return below). The
+            // quick path already fetched in parallel; the full
+            // refresh now matches it.
+            val bodies = coroutineScope {
+                sourceList.map { url ->
+                    async {
+                        url to try {
+                            HttpUtil.getUrlContent(
+                                UrlContentRequest(url = url, timeout = FETCH_TIMEOUT_MS)
+                            )
+                        } catch (e: Exception) {
+                            LogUtil.e(AppConfig.TAG, "Vpn5gSync: fetch failed for $url", e)
+                            null
+                        }
+                    }
+                }.awaitAll()
+            }
+            for ((url, body) in bodies) {
                 if (body.isNullOrBlank()) continue
                 anyFetchOk = true
                 if (url == LIVE_JSON) {
@@ -455,6 +468,7 @@ object Vpn5gSync {
             val batch = standbyTopUpBatch(candidates, tcpDelays, knownReal, verifiedFree)
             if (batch.isEmpty()) return
             val probe = Vpn5gRealPing.probeCandidates(context, batch, probeBudgetMs)
+            recordProbeHealth(batch, probe)
             if (probe.verifiedKeys.isNotEmpty()) {
                 Vpn5gRealPing.addRealPingKeys(probe.verifiedKeys)
             }
@@ -592,6 +606,51 @@ object Vpn5gSync {
     }
 
     /**
+     * Records probe outcomes into the health-score memory (v1.1.24):
+     * verified identities gain, failed GUIDs (mapped back to their
+     * identity) lose. Best effort; never throws.
+     */
+    private fun recordProbeHealth(
+        candidates: List<Vpn5gRealPing.RealPingCandidate>,
+        probe: Vpn5gRealPing.ProbeResult,
+    ) {
+        val nowMs = System.currentTimeMillis()
+        probe.verifiedKeys.forEach { key ->
+            Vpn5gHealthScore.recordOutcome(key, success = true, nowMs = nowMs)
+        }
+        val keyByGuid = candidates.associate { it.guid to it.dedupeKey }
+        probe.failedGuids.forEach { guid ->
+            keyByGuid[guid]?.let { key ->
+                Vpn5gHealthScore.recordOutcome(key, success = false, nowMs = nowMs)
+            }
+        }
+    }
+
+    /**
+     * Warm standby pool (v1.1.24, Lantern-inspired): while the VPN
+     * is idle, real-probe a bounded batch of the stored profiles so
+     * proven servers are already waiting at tap-time (the 1.1.14
+     * feel — at least [Vpn5gConstants.STANDBY_POOL_MIN] verified
+     * servers ready). Unproven identities go first; when everything
+     * stored is already proven, a spread of proven ones is
+     * re-probed to refresh their delays. Bounded by
+     * [Vpn5gConstants.WARM_PROBE_BATCH] /
+     * [Vpn5gConstants.WARM_PROBE_BUDGET_MS] and called on
+     * [Vpn5gConstants.WARM_PROBE_INTERVAL_MS] from the ViewModel —
+     * never while the VPN runs (no throwaway core next to the live
+     * one). Returns the verified count. Never throws.
+     */
+    suspend fun warmProbeStoredProfiles(context: Context): Int {
+        val subId = ensureSubscriptionId()
+        return probeStoredProfiles(
+            context, subId, skipRealProbe = false,
+            batchSize = Vpn5gConstants.WARM_PROBE_BATCH,
+            budgetMs = Vpn5gConstants.WARM_PROBE_BUDGET_MS,
+            reprobeProven = true,
+        )
+    }
+
+    /**
      * Real-probes the stored profiles (bundled fallback) directly: the
      * first [QUICK_PROBE_CANDIDATES] unproven identities, bounded by
      * [QUICK_PROBE_BUDGET_MS]. Verified identities join the real-ping
@@ -603,6 +662,9 @@ object Vpn5gSync {
         context: Context,
         subId: String,
         skipRealProbe: Boolean,
+        batchSize: Int = QUICK_PROBE_CANDIDATES,
+        budgetMs: Long = QUICK_PROBE_BUDGET_MS,
+        reprobeProven: Boolean = false,
     ): Int {
         if (skipRealProbe) return 0
         return try {
@@ -615,14 +677,33 @@ object Vpn5gSync {
                     Vpn5gServerValidator.dedupeKey(profile),
                 )
             }
-            val batch = Vpn5gRealPing.selectCandidates(
+            val knownReal = Vpn5gRealPing.loadRealPingKeys()
+            var batch = Vpn5gRealPing.selectCandidates(
                 candidates,
                 emptyMap(),
-                Vpn5gRealPing.loadRealPingKeys(),
-                QUICK_PROBE_CANDIDATES,
+                knownReal,
+                batchSize,
             )
+            if (batch.isEmpty() && reprobeProven) {
+                // Warm pool (v1.1.24): everything stored is already
+                // proven — re-probe a spread of proven servers to
+                // refresh their real delays so the standby pool
+                // stays fresh instead of aging out. The spread
+                // rotates by time bucket so the same head of the
+                // list is not re-probed (and re-bonused) every cycle.
+                val proven = candidates.filter { it.dedupeKey in knownReal }
+                val rotated = if (proven.isEmpty()) {
+                    proven
+                } else {
+                    val offset = ((System.currentTimeMillis() /
+                        Vpn5gConstants.WARM_PROBE_INTERVAL_MS) % proven.size).toInt()
+                    proven.drop(offset) + proven.take(offset)
+                }
+                batch = spreadSample(rotated, batchSize)
+            }
             if (batch.isEmpty()) return 0
-            val probe = Vpn5gRealPing.probeCandidates(context, batch, QUICK_PROBE_BUDGET_MS)
+            val probe = Vpn5gRealPing.probeCandidates(context, batch, budgetMs)
+            recordProbeHealth(batch, probe)
             if (probe.verifiedKeys.isNotEmpty()) {
                 Vpn5gRealPing.addRealPingKeys(probe.verifiedKeys)
             }
@@ -893,6 +974,7 @@ object Vpn5gSync {
                         .removeSuffix("://").lowercase(),
                     operatorVerified = dedupeKey
                         in operatorVerifiedKeys,
+                    dedupeKey = dedupeKey,
                 )
             )
         }
