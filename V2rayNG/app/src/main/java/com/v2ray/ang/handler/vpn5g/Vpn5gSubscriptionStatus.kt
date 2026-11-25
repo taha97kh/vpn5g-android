@@ -373,6 +373,24 @@ object Vpn5gSubscriptionStatus {
     }
 
     /**
+     * Whether a definitive RPC "none" may drop the locally redeemed
+     * grant (v1.1.25, recovery safety). Proven live 2026-11-25: the
+     * guard's new `get_subscription_status` returns {"status":"none"}
+     * for a REAL subscriber (gesmat: row active sub_1 until
+     * 2027-01-25) — a server-side bug. Dropping the local grant on
+     * that answer would actively erase a valid subscription in-app.
+     * So "none" only demotes when the registrations row was actually
+     * READABLE (consistent server truth: the row itself was read);
+     * while the row read is unavailable (403 — GRANT still missing
+     * bot-side) or finds no linked row, the local unexpired grant
+     * survives. Pure, JVM-tested.
+     */
+    fun shouldDropRedeemedOnServerNone(
+        serverIsNone: Boolean,
+        rowReadable: Boolean,
+    ): Boolean = serverIsNone && rowReadable
+
+    /**
      * Refreshes the cached subscription for the current session.
      * A successful fetch overwrites the ROW cache (Found → the row;
      * NoRow → an explicit "none" so a stale active entry cannot
@@ -387,7 +405,11 @@ object Vpn5gSubscriptionStatus {
     suspend fun refresh(session: Vpn5gAuthService.Vpn5gAuthSession?): Vpn5gUserSubscription? {
         if (session == null) return null
         val nowSeconds = System.currentTimeMillis() / 1000
-        val rowCandidate = when (val result = fetchOwnRow(session)) {
+        val rowFetch = fetchOwnRow(session)
+        // v1.1.25: only a READ row is consistent server truth (see
+        // shouldDropRedeemedOnServerNone).
+        val rowReadable = rowFetch is FetchResult.Found
+        val rowCandidate = when (val result = rowFetch) {
             is FetchResult.Found -> {
                 // v1.1.18: the row's plan cap is attached before the
                 // cache is saved, so the cached record meters.
@@ -414,14 +436,26 @@ object Vpn5gSubscriptionStatus {
         // Unavailable and the local caches stand (current behavior).
         // Only a DEFINITIVE server answer changes anything: Found
         // merges in as server truth; None drops the local gift.
+        // v1.1.25: that drop now requires a READABLE row as well —
+        // the live RPC returns "none" for a real subscriber (guard
+        // bug, proven 2026-11-25), and while the row read is
+        // unavailable (403 GRANT) an RPC "none" must not erase a
+        // locally stored, unexpired grant.
         val serverResult = session.email?.takeIf { it.isNotBlank() }?.let { email ->
             runCatching { Vpn5gAuthService.fetchServerSubscription(email) }.getOrNull()
         } ?: Vpn5gAuthService.ServerSubscriptionResult.Unavailable
         val serverSub = (serverResult as? Vpn5gAuthService.ServerSubscriptionResult.Found)
             ?.subscription?.let { withVolumeCap(it) }
-        val trustedRedeemed = when (serverResult) {
-            is Vpn5gAuthService.ServerSubscriptionResult.None -> null
-            else -> loadRedeemed()?.let { withVolumeCap(it) }
+        val trustedRedeemed = if (
+            shouldDropRedeemedOnServerNone(
+                serverIsNone =
+                    serverResult is Vpn5gAuthService.ServerSubscriptionResult.None,
+                rowReadable = rowReadable,
+            )
+        ) {
+            null
+        } else {
+            loadRedeemed()?.let { withVolumeCap(it) }
         }
         // v1.1.18 (Model B): the merge is volume-aware — a grant
         // whose cap is reached is not "active", so a live grant with

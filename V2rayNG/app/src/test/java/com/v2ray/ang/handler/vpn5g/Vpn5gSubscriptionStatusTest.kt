@@ -477,4 +477,61 @@ class Vpn5gSubscriptionStatusTest {
         )
     }
 
+    // -- RPC "none" must not erase a local grant (v1.1.25) ------------------
+    // Proven live 2026-11-25: get_subscription_status returns
+    // {"status":"none"} for a REAL subscriber (row active sub_1
+    // until 2027-01-25) — a guard-side bug. While the row read is
+    // unavailable (403 GRANT), that "none" must not drop the locally
+    // stored, unexpired redeemed grant.
+
+    @Test
+    fun test_rpc_none_drops_redeemed_only_when_row_readable() {
+        // Row read unavailable (403) + RPC none -> grant survives.
+        assertFalse(
+            Vpn5gSubscriptionStatus.shouldDropRedeemedOnServerNone(
+                serverIsNone = true, rowReadable = false,
+            )
+        )
+        // Consistent server truth (row actually read) + RPC none -> drop.
+        assertTrue(
+            Vpn5gSubscriptionStatus.shouldDropRedeemedOnServerNone(
+                serverIsNone = true, rowReadable = true,
+            )
+        )
+        // Any non-none server answer never drops, readable or not.
+        assertFalse(
+            Vpn5gSubscriptionStatus.shouldDropRedeemedOnServerNone(
+                serverIsNone = false, rowReadable = true,
+            )
+        )
+        assertFalse(
+            Vpn5gSubscriptionStatus.shouldDropRedeemedOnServerNone(
+                serverIsNone = false, rowReadable = false,
+            )
+        )
+    }
+
+    @Test
+    fun test_local_active_grant_survives_rpc_none_when_row_unavailable() {
+        // Row read failed (403) -> refresh() keeps the cached record
+        // as the row candidate; RPC says "none" (buggy guard
+        // function); the redeemed grant is kept because the row was
+        // not readable. The merged result must stay SUBSCRIBER.
+        val cached = Vpn5gUserSubscription("active", future, "sub_1")
+        val redeemed = Vpn5gUserSubscription("active", future, "sub_1")
+        val keptRedeemed = if (
+            Vpn5gSubscriptionStatus.shouldDropRedeemedOnServerNone(
+                serverIsNone = true, rowReadable = false,
+            )
+        ) null else redeemed
+        val merged = Vpn5gSubscriptionStatus.effectiveSubscription(
+            cached, keptRedeemed, now
+        )
+        assertTrue(Vpn5gSubscriptionStatus.isSubscriber(merged, now))
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
+            Vpn5gSubscriptionStatus.tierOf(merged, now),
+        )
+    }
+
 }
