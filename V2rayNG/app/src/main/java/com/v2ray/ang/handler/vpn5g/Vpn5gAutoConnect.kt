@@ -229,10 +229,20 @@ object Vpn5gAutoConnect {
         // pickable — a TCP-only ping can be faked in-transit by a
         // middlebox (a dead server showing 1 ms), so it must never win
         // the auto pick.
-        return sections
+        val real = sections
             .flatMap { it.servers }
             .filter { it.isFree && it.hasRealPing && it.pingMillis > 0 && it.guid !in excluding }
             .minByOrNull { it.pingMillis }
+        if (real != null) return real
+        // v1.1.20 (seed): no real-pinged server yet (fresh install) —
+        // a build-time verified seed server is the best available pick.
+        // The connect chain still verifies the tunnel, and a dead seed
+        // fails over to the next candidate — the seed is a starting
+        // point, never proof.
+        return sections
+            .flatMap { it.servers }
+            .filter { it.isFree && it.isSeed && it.guid !in excluding }
+            .firstOrNull()
     }
 
     /**
@@ -299,7 +309,11 @@ object Vpn5gManualServer {
         val server = sections.flatMap { it.servers }.firstOrNull { it.guid == manualGuid }
             ?: return Resolution(null, Problem.NOT_FOUND)
         if (!server.isFree) return Resolution(null, Problem.NOT_FREE)
-        if (server.pingMillis <= 0) return Resolution(null, Problem.NO_PING)
+        // v1.1.20 (seed): a seed server has no measured ping yet, but
+        // it is free-eligible (build-time verified) and the connect
+        // chain verifies the tunnel — a manual tap on it must work
+        // like a tap on a real-pinged server.
+        if (server.pingMillis <= 0 && !server.isSeed) return Resolution(null, Problem.NO_PING)
         if (Vpn5gFailedServers.isFailed(failedGuids, manualGuid, nowMs)) {
             return Resolution(null, Problem.FAILED_RECENTLY)
         }

@@ -694,11 +694,14 @@
     <string name="vpn5g_promo_code">کد</string>
     <string name="vpn5g_promo_redeem">فعال کردن کد</string>
     <string name="vpn5g_promo_valid">کد تخفیف ثبت شد؛ برای اعمال تخفیف در ربات ادامه بده.</string>
-    <string name="vpn5g_promo_unknown">این کد شناخته نشد</string>
-    <string name="vpn5g_promo_exhausted">ظرفیت استفاده از این کد تمام شده است</string>
-    <string name="vpn5g_promo_already">این کد قبلاً در این دستگاه استفاده شده است</string>
+    <string name="vpn5g_promo_unknown">کد پیدا نشد؛ کد را دوباره بررسی کن.</string>
+    <string name="vpn5g_promo_exhausted">مصرف این کد تمام شده است.</string>
+    <string name="vpn5g_promo_already">این کد قبلاً با همین اکانت ثبت شده است.</string>
     <string name="vpn5g_promo_invalid">کد معتبر نیست</string>
-    <string name="vpn5g_promo_invalid_email">ایمیل حساب شما مشکل دارد؛ دوباره وارد شوید</string>
+    <string name="vpn5g_promo_invalid_email">ایمیل نامعتبر است.</string>
+    <string name="vpn5g_promo_no_registration">این ایمیل ثبت‌نام نکرده است؛ اول ثبت‌نام کن.</string>
+    <string name="vpn5g_promo_server_unavailable">ارتباط با سرور برقرار نشد؛ دوباره تلاش کن.</string>
+    <string name="vpn5g_promo_not_applied">کد ثبت شد اما اشتراک اعمال نشد؛ دوباره تلاش کن.</string>
     <string name="vpn5g_promo_open_bot">ادامه در ربات</string>
 
     <!-- v1.1.12: in-app gift activation, premium look, persistent connection -->
@@ -707,7 +710,8 @@
     <string name="vpn5g_redeem_banner_body">کد خرید یا هدیه‌ای که از ربات گرفته‌ای را وارد کن؛ اشتراک بلافاصله فعال می‌شود.</string>
     <string name="vpn5g_redeem_banner_button">وارد کردن کد</string>
     <string name="vpn5g_promo_redeemed">اشتراک شما فعال شد</string>
-    <string name="vpn5g_promo_expired">این کد منقضی شده است</string>
+    <string name="vpn5g_promo_redeemed_expiry">تا %1$s فعال است</string>
+    <string name="vpn5g_promo_expired">این کد منقضی شده است.</string>
     <string name="vpn5g_promo_not_yours">این کد برای حساب دیگری صادر شده است</string>
     <string name="vpn5g_promo_not_signed_in">برای فعال کردن کد، اول با ایمیل وارد شوید</string>
     <string name="vpn5g_persistent_reconnect_failed">اتصال پایدار برقرار نشد؛ دوباره وصل شوید</string>

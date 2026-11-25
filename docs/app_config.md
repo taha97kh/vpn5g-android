@@ -84,10 +84,17 @@ Created and updated by the ADMIN through the Telegram bot.
 **(v1.1.15) The app validates an entered code SERVER-side first** (RPC
 `validate_and_redeem_code` — see "Server-side RPCs" below): the server
 checks existence / already-used / expiry / remaining_uses and marks the
-code used atomically. The list below is ONLY the fallback when the RPC
-is unreachable — the app then validates against it (case-insensitive,
-trimmed) and records the redemption locally. The BOT is the authority —
-it applies the benefit centrally and decrements `remaining_uses`.
+code used atomically. **(v1.1.20) The RPC is the ONLY validator — the
+config-list fallback was deleted: when the RPC is unreachable the app
+shows a specific "server unreachable" message and validates nothing
+locally** (a stale `remaining_uses` must never decide a redeem, and a
+local grant without the server's atomic mark would let one code be
+redeemed twice). The list below is still read for two non-validation
+uses only: the gift/subscription section routing (a code typed in the
+wrong section is refused before the RPC marks it used) and the
+recovery that re-derives a grant for a code the server already counts
+as used for this email. The BOT is the authority — it applies the
+benefit centrally and decrements `remaining_uses`.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -230,12 +237,13 @@ still needs", item 11).
 The app calls these PostgREST RPCs on the NEW Supabase project
 (`atvcpfnnmwguhjvhbbfj`); the bot side implements them. Every call is
 best-effort from the app: when an RPC is missing or unreachable, the app
-falls back to its local behavior (config list / local countdown) and never
-hangs or crashes. The app sends only the code / ad id / email — no secrets.
+falls back to its local behavior (local countdown for ads; a specific
+"server unreachable" message for code redeem — v1.1.20, no config-list
+fallback) and never hangs or crashes. The app sends only the code / ad id / email — no secrets.
 
 | RPC | Request body | Response | App behavior |
 |---|---|---|---|
-| `validate_and_redeem_code` | `{"p_code": "<CODE>", "p_email": "<email>"}` | `{"ok": true, "plan": "<plan_id>" \| null, "expires_at": "<ISO-8601>" \| null}` or `{"ok": false, "reason": "not_found" \| "already_used" \| "expired" \| "exhausted" \| "not_yours"}` — the app ALSO accepts the older `{"status": "ok" \| "unknown" \| "already_used" \| "expired" \| "exhausted" \| "not_yours", ...}` shape. (v1.1.17: the real server returns the `{"ok":...}` shape — the 1.1.15/1.1.16 app only parsed `{"status":...}`, so every real answer fell through to the fallback while the server had already marked the code used.) | The server checks existence / already-used / expiry / remaining_uses and marks the code used ATOMICALLY. `ok` + a usable grant activates the gift immediately and unlocks the countries; `ok` without a grant (discount code) shows VALID + the bot deep link. A rejection maps to the exact error message (unknown / already used / expired / exhausted / not yours). `already_used` for this email re-derives the grant from the published entry instead of saying invalid (v1.1.17 recovery). Anything else = `Unavailable` → config-list fallback. |
+| `validate_and_redeem_code` | `{"p_code": "<CODE>", "p_email": "<email>"}` | `{"ok": true, "tier": "<tier>" \| null, "plan": "<plan_id>" \| null, "gift_hours": <n> \| null, "gb_total": <n> \| null, "applied": true \| false, "expires_at": "<ISO-8601>" \| null}` or `{"ok": false, "reason": "not_found" \| "already_used" \| "already_redeemed" \| "expired" \| "exhausted" \| "not_yours" \| "invalid_email" \| "no_registration"}` — the app ALSO accepts the older `{"status": "ok" \| "unknown" \| "already_used" \| "expired" \| "exhausted" \| "not_yours" \| "invalid_email" \| "no_registration", ...}` shape. (v1.1.17: the real server returns the `{"ok":...}` shape — the 1.1.15/1.1.16 app only parsed `{"status":...}`, so every real answer fell through to the fallback while the server had already marked the code used.) (v1.1.20: `no_registration` = the email never registered — the code is NOT consumed; `tier` = `"discount"` for a discount code, `"gift"` or a plan id for a grant; `applied: false` = the code was burned but no grant landed.) | The server checks existence / already-used / expiry / remaining_uses / registration and marks the code used ATOMICALLY. `ok` + a usable grant activates the gift immediately and unlocks the countries, then the subscription is re-read from the server row at once; `ok` with `tier: "discount"` (no grant) shows VALID + the bot deep link; `ok` + `applied: false` (or no usable expiry) re-reads the server row first, then re-derives the grant from the published entry, and only then shows a specific "not applied" error — never "invalid". A rejection maps to its exact error message (not found / already redeemed / expired / exhausted / not yours / invalid email / not registered). `already_used` for this email re-derives the grant from the published entry instead of saying invalid (v1.1.17 recovery). Anything else = `Unavailable` → a specific "server unreachable" message (v1.1.20: NO config-list fallback anymore). |
 | `record_ad_view` | `{"p_ad_id": "<id>", "p_email": "<email>"}` | `true` or `{"verified": true}` | Called on countdown completion, to record/verify the view server-side. If the server is unreachable, the local countdown completion still stands — the VPN starts anyway. |
 | `record_ad_click` | `{"p_ad_id": "<id>", "p_email": "<email>"}` | `true` or `{"verified": true}` | Called when the user taps ad content (best-effort). The tap never ends the countdown. |
 | `get_subscription_status` | `{"p_email": "<email>"}` | `{"status": "active" \| "none" \| "inactive" \| "cancelled", "plan": "<plan_id>" \| null, "expires_at": "<ISO-8601>" \| null}` | The server is the authority for the subscription: the app re-checks it before connecting when the cached tier is premium (bounded to 3 s) and merges it with the cached row on every refresh. A failed/timed-out check keeps the cached tier. |

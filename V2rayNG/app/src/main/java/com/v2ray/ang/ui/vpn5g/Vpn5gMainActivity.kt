@@ -194,7 +194,7 @@ enum class Vpn5gServerTab { FREE, ALL, SPECIAL }
 /** Post-connect tunnel state. The UI must never show a false "connected". */
 enum class Vpn5gTunnelState { IDLE, VERIFYING, VERIFIED, FAILED, UNKNOWN, SWITCHING }
 
-enum class Vpn5gPromoStatus { IDLE, VALID, UNKNOWN_CODE, EXHAUSTED, ALREADY_REDEEMED, INVALID, REDEEMED, EXPIRED, NOT_YOURS, NOT_SIGNED_IN, WRONG_SECTION, INVALID_EMAIL }
+enum class Vpn5gPromoStatus { IDLE, VALID, UNKNOWN_CODE, EXHAUSTED, ALREADY_REDEEMED, INVALID, REDEEMED, EXPIRED, NOT_YOURS, NOT_SIGNED_IN, WRONG_SECTION, INVALID_EMAIL, NO_REGISTRATION, SERVER_UNAVAILABLE, NOT_APPLIED }
 
 /** A manually picked server that turned out unusable (v1.1.5 §3). */
 data class Vpn5gManualFailure(
@@ -2091,6 +2091,13 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // with applied:false. Ensure it before the re-read, so
             // the NEXT redeem applies server-side.
             if (session != null) ensureRegistrationRowIfMissing(session)
+            // v1.1.20: link the auth UUID before the re-read — a row
+            // created after sign-in has a NULL user_id until linked,
+            // so fetchOwnRow (by user_id) would find no row and the
+            // re-read would miss the grant the server just applied.
+            if (session != null) {
+                runCatching { Vpn5gSubscriptionStatus.linkOwnUserId(session) }
+            }
             val refreshed = runCatching {
                 Vpn5gSubscriptionStatus.refresh(session)
             }.getOrNull()
@@ -2134,6 +2141,40 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
+     * Post-redeem server-row grant (v1.1.20): after the RPC said ok but
+     * the answer carried no usable grant (applied:false, or the expiry
+     * was stripped), the server row is the authority — ensure the row
+     * exists, link the auth UUID (a row created after sign-in has a
+     * NULL user_id until linked, so the by-user_id re-read would find
+     * no row), re-read the subscription, and publish it when it is
+     * active. Returns true when a grant was published (and REDEEMED
+     * set). The published grant is persisted by the refresh itself
+     * (row cache) and by publishRedeemed, so it survives a restart.
+     * Never throws.
+     */
+    private suspend fun publishServerRowGrant(
+        email: String,
+        nowSeconds: Long,
+        setStatus: (Vpn5gPromoStatus) -> Unit,
+    ): Boolean {
+        val session = runCatching {
+            Vpn5gAuthService.currentSession()
+        }.getOrNull() ?: return false
+        ensureRegistrationRowIfMissing(session)
+        runCatching { Vpn5gSubscriptionStatus.linkOwnUserId(session) }
+        val refreshed = runCatching {
+            Vpn5gSubscriptionStatus.refresh(session)
+        }.getOrNull() ?: return false
+        val volume = Vpn5gVolumeStore.consumedState()
+        val active = Vpn5gSubscriptionStatus.isSubscriber(refreshed, nowSeconds, volume) ||
+            Vpn5gSubscriptionStatus.isGiftTier(refreshed, nowSeconds, volume)
+        if (!active) return false
+        publishRedeemed(refreshed, null, nowSeconds)
+        setStatus(Vpn5gPromoStatus.REDEEMED)
+        return true
+    }
+
+    /**
      * v1.1.17 (redeem recovery): the code was consumed somewhere —
      * the server said already_used, or the published list shows
      * remaining_uses 0 — but this device holds no grant for it.
@@ -2172,17 +2213,25 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     /**
      * Redeems the entered code (v1.1.12; server-first v1.1.15; separate
-     * gift/subscription sections v1.1.16; recovery v1.1.17): the server
-     * RPC `validate_and_redeem_code` is the authority — it checks
-     * existence / already-used / expiry / remaining_uses and marks the
-     * code used atomically, so a single-use code can never be reused.
-     * The config-list check is ONLY the fallback when the RPC is
-     * unavailable. A GIFT code activates immediately and the countries
-     * unlock at once (the list is rebuilt); a DISCOUNT code still goes
-     * through the bot (VALID + deep link). A code the server already
-     * counts as used is re-granted locally instead of saying invalid
-     * (see [tryRecoverGrant]). [setStatus] reports the outcome to the
-     * section that asked (gift or subscription). Never throws.
+     * gift/subscription sections v1.1.16; recovery v1.1.17; server-only
+     * v1.1.20): the server RPC `validate_and_redeem_code` is the ONLY
+     * validator — it checks existence / already-used / expiry /
+     * remaining_uses / registration and marks the code used atomically,
+     * so a single-use code can never be reused. The published config
+     * list is NEVER a validation decision anymore (its remaining_uses
+     * is stale the moment a code is redeemed anywhere): when the RPC
+     * is unreachable the redeem reports SERVER_UNAVAILABLE and tries
+     * nothing locally, never a false invalid. A GIFT code activates
+     * immediately and the countries unlock at once (the list is
+     * rebuilt); a DISCOUNT code still goes through the bot (VALID +
+     * deep link). A code the server already counts as used is
+     * re-granted locally instead of saying invalid (see
+     * [tryRecoverGrant]). After a successful redeem the subscription
+     * is re-read from the server row at once (see
+     * [publishServerRowGrant] / [refreshSubscriptionAfterRedeem]) so
+     * the panel shows the fresh plan + expiry on the same screen.
+     * [setStatus] reports the outcome to the section that asked (gift
+     * or subscription). Never throws.
      */
     private fun redeemCode(
         kind: Vpn5gPromoCodes.CodeKind,
@@ -2202,6 +2251,13 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             }
             return
         }
+        // v1.1.20: redeeming needs a signed-in email — the server
+        // validates by email, so without one there is nothing to
+        // validate. The sign-in button is offered by the status block.
+        if (email.isNullOrBlank()) {
+            setStatus(Vpn5gPromoStatus.NOT_SIGNED_IN)
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val nowSeconds = System.currentTimeMillis() / 1000
             // v1.1.16 (separate sections): when the LOCAL list knows
@@ -2212,7 +2268,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // it flows through the normal path below (VALID + bot
             // link). When the local list does NOT know the code, the
             // server RPC below is the authority and the grant is
-            // accepted as-is.
+            // accepted as-is. This is a section routing check only —
+            // never a validation decision.
             val localEntry = Vpn5gPromoCodes.findCode(input, _uiState.value.promoCodes)
             if (localEntry != null) {
                 val entryKind = Vpn5gPromoCodes.codeKind(localEntry)
@@ -2224,63 +2281,90 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     return@launch
                 }
             }
-            // Server first (v1.1.15): the RPC is the authority.
+            // v1.1.20 (server-only): the RPC is the ONLY validator.
             val server = runCatching {
-                Vpn5gAuthService.validateAndRedeemCode(input, email.orEmpty())
+                Vpn5gAuthService.validateAndRedeemCode(input, email)
             }.getOrNull()
             when (server) {
                 is Vpn5gAuthService.CodeServerResult.Validated -> {
-                    // v1.1.19: applied:false means the server burned
-                    // the code but granted nothing (no registrations
-                    // row for the email) — its grant must NOT be
-                    // trusted even if an expiry is present. A null
-                    // server grant (no/unparsable expiry) is the
-                    // same case: re-derive from the published entry.
-                    val subscription = if (server.applied == false) {
-                        null
-                    } else {
-                        Vpn5gPromoCodes.activateServerGift(
-                            input, server.plan, server.expiresAtEpochSeconds,
-                            email.orEmpty(), nowSeconds,
-                        )
+                    // A discount code has no grant: the server
+                    // validated it and the bot applies it — VALID +
+                    // bot link, the only case that ever shows one
+                    // (v1.1.20: the tier comes from the RPC itself,
+                    // so no local list is needed to recognise it).
+                    if (server.tier == "discount") {
+                        val link = Vpn5gPromoCodes.redeemLink(input)
+                        _uiState.update { it.copy(promoBotLink = link) }
+                        setStatus(Vpn5gPromoStatus.VALID)
+                        return@launch
                     }
-                    if (subscription != null) {
-                        // v1.1.18: the server-validated grant activates
-                        // in-app at once — no bot confirm step, so no
-                        // bot link is published (the REDEEMED block no
-                        // longer shows one either).
-                        publishRedeemed(subscription, null, nowSeconds)
-                        setStatus(Vpn5gPromoStatus.REDEEMED)
-                    } else {
-                        // v1.1.19: the server validated the code but
-                        // granted nothing (applied:false, or the
-                        // expiry was stripped). Re-derive the grant
-                        // from the published entry — the recovery for
-                        // the burned-code case (242593 / 490013).
-                        // VALID + bot link is ONLY for a true
-                        // DISCOUNT entry; a gift/subscription code
-                        // with no derivable grant is INVALID, never
-                        // VALID — VALID would pretend a discount was
-                        // registered while no plan was granted.
+                    // v1.1.19/1.1.20: applied:false means the server
+                    // said ok but granted nothing in-app (no
+                    // registrations row for the email when it burned
+                    // the code). The server row is the authority
+                    // now — re-read it (it may hold the grant) — then
+                    // re-derive from the published entry. Only when
+                    // both fail is it a specific error, never
+                    // "invalid": the code was consumed.
+                    if (server.applied == false) {
+                        if (publishServerRowGrant(email, nowSeconds, setStatus)) {
+                            return@launch
+                        }
                         val entry = Vpn5gPromoCodes.findCode(
                             input, _uiState.value.promoCodes
                         )
                         if (entry != null && tryRecoverGrant(
-                                entry, email.orEmpty(), nowSeconds, setStatus
+                                entry, email, nowSeconds, setStatus
                             )
                         ) {
-                            // Recovered: the grant is published and
-                            // REDEEMED is set by tryRecoverGrant.
-                        } else if (entry != null &&
-                            Vpn5gPromoCodes.codeKind(entry) ==
-                            Vpn5gPromoCodes.CodeKind.DISCOUNT
-                        ) {
-                            val link = Vpn5gPromoCodes.redeemLink(input)
-                            _uiState.update { it.copy(promoBotLink = link) }
-                            setStatus(Vpn5gPromoStatus.VALID)
-                        } else {
-                            setStatus(Vpn5gPromoStatus.INVALID)
+                            return@launch
                         }
+                        setStatus(Vpn5gPromoStatus.NOT_APPLIED)
+                        return@launch
+                    }
+                    val subscription = Vpn5gPromoCodes.activateServerGift(
+                        input, server.plan, server.expiresAtEpochSeconds,
+                        email, nowSeconds,
+                    )
+                    if (subscription != null) {
+                        // v1.1.18: the server-validated grant activates
+                        // in-app at once — no bot confirm step, so no
+                        // bot link is published (the REDEEMED block no
+                        // longer shows one either). The post-redeem
+                        // re-read inside publishRedeemed refreshes the
+                        // panel from the server row at once.
+                        publishRedeemed(subscription, null, nowSeconds)
+                        setStatus(Vpn5gPromoStatus.REDEEMED)
+                        return@launch
+                    }
+                    // ok:true but no usable expiry in the answer: the
+                    // grant is on the server row, or re-derivable from
+                    // the published entry. VALID + bot link is ONLY
+                    // for a true DISCOUNT entry; a gift/subscription
+                    // code with no derivable grant is NOT_APPLIED,
+                    // never INVALID and never VALID — the server said
+                    // ok, so the code itself is not the problem.
+                    if (publishServerRowGrant(email, nowSeconds, setStatus)) {
+                        return@launch
+                    }
+                    val entry = Vpn5gPromoCodes.findCode(
+                        input, _uiState.value.promoCodes
+                    )
+                    if (entry != null && tryRecoverGrant(
+                            entry, email, nowSeconds, setStatus
+                        )
+                    ) {
+                        // Recovered: the grant is published and
+                        // REDEEMED is set by tryRecoverGrant.
+                    } else if (entry != null &&
+                        Vpn5gPromoCodes.codeKind(entry) ==
+                        Vpn5gPromoCodes.CodeKind.DISCOUNT
+                    ) {
+                        val link = Vpn5gPromoCodes.redeemLink(input)
+                        _uiState.update { it.copy(promoBotLink = link) }
+                        setStatus(Vpn5gPromoStatus.VALID)
+                    } else {
+                        setStatus(Vpn5gPromoStatus.NOT_APPLIED)
                     }
                     return@launch
                 }
@@ -2297,9 +2381,21 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                             input, _uiState.value.promoCodes
                         )
                         if (tryRecoverGrant(
-                                entry, email.orEmpty(), nowSeconds, setStatus
+                                entry, email, nowSeconds, setStatus
                             )
                         ) return@launch
+                    }
+                    // v1.1.20: no_registration means the email never
+                    // registered — the code was NOT consumed. Ensure
+                    // the row right now (best effort) so a re-tap
+                    // after registering works, and tell the user to
+                    // register first instead of calling the code
+                    // invalid.
+                    if (server.status == "no_registration") {
+                        val session = runCatching {
+                            Vpn5gAuthService.currentSession()
+                        }.getOrNull()
+                        if (session != null) ensureRegistrationRowIfMissing(session)
                     }
                     val status = when (server.status) {
                         "unknown" -> Vpn5gPromoStatus.UNKNOWN_CODE
@@ -2311,129 +2407,23 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         // email itself — a distinct red message, not
                         // a generic invalid code.
                         "invalid_email" -> Vpn5gPromoStatus.INVALID_EMAIL
+                        // v1.1.20: the email never registered.
+                        "no_registration" -> Vpn5gPromoStatus.NO_REGISTRATION
                         else -> Vpn5gPromoStatus.INVALID
                     }
                     setStatus(status)
                     return@launch
                 }
                 else -> {
-                    // Unavailable (or the call threw): fall through to
-                    // the config-list fallback below — the RPC being
-                    // down must never block a redeem.
+                    // v1.1.20: the RPC is down (or the call threw) —
+                    // a specific message, never a false invalid, and
+                    // NEVER the config-list fallback: a stale
+                    // remaining_uses must not decide a redeem, and a
+                    // local grant without the server's atomic mark
+                    // would let one code be redeemed twice.
+                    setStatus(Vpn5gPromoStatus.SERVER_UNAVAILABLE)
+                    return@launch
                 }
-            }
-            // Fallback: the config-list check (v1.1.12), unchanged.
-            runCatching { Vpn5gRemoteConfig.fetch() }.onSuccess { fresh ->
-                _uiState.update { it.copy(promoCodes = fresh.codes) }
-            }
-            when (val result = Vpn5gPromoCodes.validateForRedeem(
-                input, _uiState.value.promoCodes, nowSeconds, email
-            )) {
-                is Vpn5gPromoCodes.Validation.Valid -> {
-                    val entry = result.code
-                    val activated = Vpn5gPromoCodes.activateGift(
-                        entry, email.orEmpty(), nowSeconds
-                    )
-                    if (activated != null) {
-                        // v1.1.18: no bot link for a grant (see the
-                        // Validated branch above).
-                        val (subscription, _) = activated
-                        // v1.1.14: report the redemption server-side so
-                        // the bot can enforce the people-limit
-                        // (remaining_uses) when it republishes the code
-                        // list. Best effort — a missing RPC never fails
-                        // or blocks the redeem. Only AFTER the grant
-                        // is saved locally (atomicity: never report a
-                        // code used before the grant exists).
-                        viewModelScope.launch(Dispatchers.IO) {
-                            runCatching {
-                                Vpn5gAuthService.recordCodeRedemption(
-                                    entry.code.orEmpty(), email.orEmpty()
-                                )
-                            }
-                        }
-                        publishRedeemed(subscription, null, nowSeconds)
-                        setStatus(Vpn5gPromoStatus.REDEEMED)
-                    } else {
-                        // v1.1.19 (defense in depth): VALID + bot link
-                        // is ONLY for a true DISCOUNT entry. A gift
-                        // or subscription entry that could not
-                        // activate grants nothing — showing VALID
-                        // would pretend a discount was registered
-                        // while no plan was granted (the 1.1.18
-                        // 242593 / 490013 cases). Such a code is
-                        // INVALID, honestly.
-                        if (Vpn5gPromoCodes.codeKind(entry) ==
-                            Vpn5gPromoCodes.CodeKind.DISCOUNT
-                        ) {
-                            // Discount code: the bot applies it — the
-                            // old VALID + deep-link path.
-                            // v1.1.17 (atomicity): the redemption is
-                            // reported server-side ONLY for a discount
-                            // code. Reporting a gift that failed to
-                            // activate used to mark the code used on
-                            // the server while this device held no grant —
-                            // consumed with no plan, no unlocks, and a
-                            // later re-entry said ALREADY_REDEEMED
-                            // forever. A gift that cannot activate is
-                            // never reported as redeemed.
-                            viewModelScope.launch(Dispatchers.IO) {
-                                runCatching {
-                                    Vpn5gAuthService.recordCodeRedemption(
-                                        entry.code.orEmpty(), email.orEmpty()
-                                    )
-                                }
-                            }
-                            val link = Vpn5gPromoCodes.redeem(entry, email = email)
-                            _uiState.update { it.copy(promoBotLink = link) }
-                            setStatus(Vpn5gPromoStatus.VALID)
-                        } else {
-                            setStatus(Vpn5gPromoStatus.INVALID)
-                        }
-                    }
-                }
-                Vpn5gPromoCodes.Validation.UnknownCode ->
-                    setStatus(Vpn5gPromoStatus.UNKNOWN_CODE)
-                Vpn5gPromoCodes.Validation.Exhausted,
-                Vpn5gPromoCodes.Validation.AlreadyRedeemed -> {
-                    // v1.1.17 (recovery): the list says this code is
-                    // used up, but the grant may never have landed
-                    // on this device (the 1.1.15/1.1.16
-                    // consume-without-grant hole — the server
-                    // consumed it while the app fell through to the
-                    // fallback and saw remaining_uses 0). Re-derive
-                    // the grant from the entry. The server branch
-                    // above is the normal path and verifies ownership
-                    // by email; this fallback runs only when the RPC
-                    // was unreachable, and the user only ever types
-                    // codes the bot gave him — the bot's server-side
-                    // state is unchanged by a local recovery, and
-                    // the grant is re-derived from the published
-                    // entry only.
-                    val entry = Vpn5gPromoCodes.findCode(
-                        input, _uiState.value.promoCodes
-                    )
-                    val recovered = tryRecoverGrant(
-                        entry, email.orEmpty(), nowSeconds, setStatus
-                    )
-                    if (!recovered) {
-                        setStatus(
-                            if (result == Vpn5gPromoCodes.Validation.Exhausted) {
-                                Vpn5gPromoStatus.EXHAUSTED
-                            } else {
-                                Vpn5gPromoStatus.ALREADY_REDEEMED
-                            }
-                        )
-                    }
-                }
-                Vpn5gPromoCodes.Validation.InvalidEntry ->
-                    setStatus(Vpn5gPromoStatus.INVALID)
-                Vpn5gPromoCodes.Validation.Expired ->
-                    setStatus(Vpn5gPromoStatus.EXPIRED)
-                Vpn5gPromoCodes.Validation.NotYours ->
-                    setStatus(Vpn5gPromoStatus.NOT_YOURS)
-                Vpn5gPromoCodes.Validation.NotSignedIn ->
-                    setStatus(Vpn5gPromoStatus.NOT_SIGNED_IN)
             }
         }
     }

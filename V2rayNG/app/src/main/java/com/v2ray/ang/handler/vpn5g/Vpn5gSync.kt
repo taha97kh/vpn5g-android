@@ -148,6 +148,10 @@ object Vpn5gSync {
                 subscriptionId = subId,
                 append = false,
             )
+            // v1.1.20 (seed): live data replaces the seed — the seed
+            // identities are dropped with the group they belonged to,
+            // so a stale seed can never stay free-eligible.
+            clearSeedKeys()
             // Record the measured ping for the home screen.
             live.forEachIndexed { index, (_, delay, _) ->
                 val guid = profiles.keys.elementAt(index)
@@ -703,20 +707,44 @@ object Vpn5gSync {
     }
 
     /**
+     * Free-eligible servers, real-pinged first (v1.1.20): a server is
+     * free-eligible with a REAL through-the-proxy ping, or as a seed
+     * server (build-time verified, ping unknown — never a proven-dead
+     * one, ping -1). Real-pinged servers sort first by delay; seeds
+     * sort after them in list order (unknown ping, never a made-up
+     * number). Pure, JVM-tested.
+     */
+    internal fun freeEligibleSorted(servers: List<Vpn5gServerUi>): List<Vpn5gServerUi> {
+        return servers
+            .filter {
+                (it.hasRealPing && it.pingMillis > 0) ||
+                    (it.isSeed && it.pingMillis >= 0)
+            }
+            .sortedWith(
+                compareBy(
+                    { !(it.hasRealPing && it.pingMillis > 0) },
+                    { if (it.pingMillis <= 0L) Long.MAX_VALUE else it.pingMillis },
+                ),
+            )
+    }
+
+    /**
      * Free tier (v1.1.2, v1.1.7): the [FREE_SERVER_COUNT] fastest-pinging configs
      * are free; every other config is premium-locked. Pure function (no
      * Android APIs) so it is covered by JVM unit tests. Only servers with
      * a REAL through-the-proxy ping (hasRealPing and pingMillis > 0) can
      * be free — a TCP-only ping is never a free server and never tried
      * first, because a middlebox can fake a 1 ms TCP handshake.
+     * v1.1.20: a build-time verified SEED server is free-eligible too
+     * (unknown ping, sorted after the real-pinged ones) — otherwise a
+     * fresh install shows no free server at all until the first real
+     * probe finishes, and the first screen loses the user.
      */
     fun selectFreeGuids(
         servers: List<Vpn5gServerUi>,
         count: Int = FREE_SERVER_COUNT,
     ): Set<String> {
-        return servers
-            .filter { it.hasRealPing && it.pingMillis > 0 }
-            .sortedBy { it.pingMillis }
+        return freeEligibleSorted(servers)
             .take(count)
             .map { it.guid }
             .toSet()
@@ -731,23 +759,27 @@ object Vpn5gSync {
      * JVM-tested. The "free" flag is what the pickers, the manual
      * validation and the failover all gate on, so one flag carries the
      * whole tier benefit.
+     * v1.1.20: seed servers (build-time verified) count in every tier
+     * the same way as in [selectFreeGuids] — a fresh install's pool is
+     * the seed until live data replaces it.
      */
     fun freeGuidsFor(
         servers: List<Vpn5gServerUi>,
         tier: Vpn5gSubscriptionStatus.Vpn5gTier,
     ): Set<String> {
+        val eligible = freeEligibleSorted(servers)
         return when (tier) {
-            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER -> servers
-                .filter { it.hasRealPing && it.pingMillis > 0 }
+            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER -> eligible
                 .map { it.guid }
                 .toSet()
-            Vpn5gSubscriptionStatus.Vpn5gTier.GIFT -> servers
-                .filter { it.hasRealPing && it.pingMillis > 0 }
-                .sortedBy { it.pingMillis }
+            Vpn5gSubscriptionStatus.Vpn5gTier.GIFT -> eligible
                 .take(Vpn5gConstants.GIFT_SERVER_COUNT)
                 .map { it.guid }
                 .toSet()
-            Vpn5gSubscriptionStatus.Vpn5gTier.FREE -> selectFreeGuids(servers)
+            Vpn5gSubscriptionStatus.Vpn5gTier.FREE -> eligible
+                .take(FREE_SERVER_COUNT)
+                .map { it.guid }
+                .toSet()
         }
     }
 
@@ -791,6 +823,10 @@ object Vpn5gSync {
         val guids = MmkvManager.decodeServerList(subId)
         val selected = MmkvManager.getSelectServer()
         val realPingKeys = Vpn5gRealPing.loadRealPingKeys()
+        // v1.1.20 (seed): the bundled snapshot's build-time verified
+        // identities — free-eligible with an unknown ping until the
+        // real probe measures them.
+        val seedKeys = loadSeedKeys()
         val byCountry = linkedMapOf<String, MutableList<Vpn5gServerUi>>()
         val labels = mutableMapOf<String, String>()
         // v1.1.14: declared here, before the mapping below uses it —
@@ -803,6 +839,7 @@ object Vpn5gSync {
             val profile = MmkvManager.decodeServerConfig(guid) ?: return@forEach
             val key = normalizeCountry(profile.country).ifEmpty { "بین‌الملل" }
             val ping = MmkvManager.decodeServerAffiliationInfo(guid)?.testDelayMillis ?: 0L
+            val dedupeKey = Vpn5gServerValidator.dedupeKey(profile)
             val label = profile.country?.trim().orEmpty().ifEmpty { key }
             labels.putIfAbsent(key, label)
             val remarkCountry = Vpn5gGeoIp.countryFromRemark(profile.remarks)
@@ -815,7 +852,12 @@ object Vpn5gSync {
                     isSelected = guid == selected,
                     // v1.1.7: real ping is keyed by server identity, so it
                     // survives the GUID re-issue of every refresh.
-                    hasRealPing = Vpn5gServerValidator.dedupeKey(profile) in realPingKeys,
+                    hasRealPing = dedupeKey in realPingKeys,
+                    // v1.1.20 (seed): a build-time verified seed server
+                    // is free-eligible with an unknown ping; a seed the
+                    // real probe already failed (ping withdrawn to -1)
+                    // loses its seed trust at once.
+                    isSeed = dedupeKey in seedKeys && ping >= 0L,
                     flag = remarkCountry?.flag ?: "🌐",
                     countryNameFa = remarkCountry?.nameFa ?: "",
                     countryCode = remarkCountry?.code ?: "",
@@ -823,7 +865,7 @@ object Vpn5gSync {
                     // EConfigType schemes carry a "://" suffix ("vless://").
                     protocol = profile.configType.protocolScheme
                         .removeSuffix("://").lowercase(),
-                    operatorVerified = Vpn5gServerValidator.dedupeKey(profile)
+                    operatorVerified = dedupeKey
                         in operatorVerifiedKeys,
                 )
             )
@@ -922,6 +964,35 @@ object Vpn5gSync {
     }
 
     /**
+     * The bundled seed's server identities (v1.1.20): the dedupe keys
+     * of the servers imported from assets/vpn5g/fallback_servers.json.
+     * Stored as a comma-separated list in MMKV, same pattern as the
+     * real-ping keys. A seed server is free-eligible with an unknown
+     * ping until the real probe measures it; the first live publish
+     * clears the set, so the seed never outlives the live data that
+     * replaces it.
+     */
+    fun loadSeedKeys(): Set<String> {
+        val csv = MmkvManager.decodeSettingsString(Vpn5gConstants.KEY_SEED_SERVER_KEYS_CSV)
+            .orEmpty()
+        if (csv.isBlank()) return emptySet()
+        return csv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }
+
+    /** Replaces the stored seed identities (called by the fallback import). */
+    fun saveSeedKeys(keys: Collection<String>) {
+        MmkvManager.encodeSettings(
+            Vpn5gConstants.KEY_SEED_SERVER_KEYS_CSV,
+            keys.filter { it.isNotBlank() }.joinToString(","),
+        )
+    }
+
+    /** Drops the stored seed identities (called when live data replaces the seed). */
+    fun clearSeedKeys() {
+        MmkvManager.encodeSettings(Vpn5gConstants.KEY_SEED_SERVER_KEYS_CSV, "")
+    }
+
+    /**
      * Bundled fallback snapshot (assets/vpn5g/fallback_servers.json).
      *
      * Used ONLY when the stored group is empty and a live refresh failed
@@ -932,6 +1003,10 @@ object Vpn5gSync {
      * they show unknown ping and the UI marks the list offline. The next
      * successful refresh replaces them with ping-tested servers. Returns
      * the number of servers imported.
+     * v1.1.20: the snapshot is a fresh seed of >= 20 servers TCP-verified
+     * at build time, and the import records their identities as seed keys
+     * ([saveSeedKeys]) so the free list is visible immediately and
+     * auto-connect fires on the best seed server at once.
      */
     suspend fun loadBundledFallback(context: Context): Int = withContext(Dispatchers.IO) {
         try {
@@ -978,6 +1053,10 @@ object Vpn5gSync {
                 subscriptionId = subId,
                 append = false,
             )
+            // v1.1.20 (seed): the imported identities are the seed —
+            // free-eligible with an unknown ping until the real probe
+            // measures them, so the first screen is never empty.
+            saveSeedKeys(seenKeys)
             LogUtil.i(AppConfig.TAG, "Vpn5gSync: bundled fallback imported ${profiles.size} servers")
             profiles.size
         } catch (e: Exception) {

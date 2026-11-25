@@ -7,7 +7,12 @@ import org.junit.jupiter.api.Test
 /** JVM tests for the free tier: the 20 fastest-pinging configs (pure Kotlin). */
 class Vpn5gTopFreeTest {
 
-    private fun server(guid: String, pingMillis: Long, realPing: Boolean = true): Vpn5gServerUi {
+    private fun server(
+        guid: String,
+        pingMillis: Long,
+        realPing: Boolean = true,
+        isSeed: Boolean = false,
+    ): Vpn5gServerUi {
         return Vpn5gServerUi(
             guid = guid,
             name = guid,
@@ -16,6 +21,8 @@ class Vpn5gTopFreeTest {
             isSelected = false,
             // v1.1.7: only a real through-the-proxy ping counts.
             hasRealPing = realPing,
+            // v1.1.20: a build-time verified seed server.
+            isSeed = isSeed,
         )
     }
 
@@ -123,5 +130,71 @@ class Vpn5gTopFreeTest {
         )
         assertEquals(5, free.size)
         assertTrue(free.size < Vpn5gConstants.STANDBY_POOL_MIN)
+    }
+
+    // -- v1.1.20: seed servers (fresh-install free list) -----------------
+
+    @Test
+    fun test_seed_server_with_unknown_ping_is_free() {
+        // A fresh install's seed (build-time verified, ping unknown)
+        // is free-eligible — otherwise the first screen shows no free
+        // server at all until the first real probe finishes.
+        val servers = listOf(
+            server("seed-a", 0L, realPing = false, isSeed = true),
+            server("seed-b", 0L, realPing = false, isSeed = true),
+        )
+        assertEquals(setOf("seed-a", "seed-b"), Vpn5gSync.selectFreeGuids(servers))
+    }
+
+    @Test
+    fun test_seed_sorts_after_real_pinged() {
+        val servers = listOf(
+            server("seed-a", 0L, realPing = false, isSeed = true),
+            server("real", 900L),
+            server("seed-b", 0L, realPing = false, isSeed = true),
+        )
+        val ordered = Vpn5gSync.freeEligibleSorted(servers)
+        assertEquals(listOf("real", "seed-a", "seed-b"), ordered.map { it.guid })
+    }
+
+    @Test
+    fun test_dead_seed_never_free() {
+        // A seed the real probe failed (ping withdrawn to -1) loses
+        // its seed trust at once.
+        val servers = listOf(
+            server("dead-seed", -1L, realPing = false, isSeed = true),
+            server("live-seed", 0L, realPing = false, isSeed = true),
+        )
+        assertEquals(setOf("live-seed"), Vpn5gSync.selectFreeGuids(servers))
+    }
+
+    @Test
+    fun test_tcp_only_non_seed_still_never_free() {
+        // The seed exception is narrow: a TCP-only ping without seed
+        // trust still buys nothing.
+        val servers = listOf(
+            server("fake-fast", 1L, realPing = false),
+            server("seed", 0L, realPing = false, isSeed = true),
+        )
+        assertEquals(setOf("seed"), Vpn5gSync.selectFreeGuids(servers))
+    }
+
+    @Test
+    fun test_seed_counts_in_every_tier() {
+        val servers = (1..25).map {
+            server("seed-$it", 0L, realPing = false, isSeed = true)
+        }
+        assertEquals(
+            20,
+            Vpn5gSync.freeGuidsFor(servers, Vpn5gSubscriptionStatus.Vpn5gTier.FREE).size,
+        )
+        assertEquals(
+            25,
+            Vpn5gSync.freeGuidsFor(servers, Vpn5gSubscriptionStatus.Vpn5gTier.GIFT).size,
+        )
+        assertEquals(
+            25,
+            Vpn5gSync.freeGuidsFor(servers, Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER).size,
+        )
     }
 }

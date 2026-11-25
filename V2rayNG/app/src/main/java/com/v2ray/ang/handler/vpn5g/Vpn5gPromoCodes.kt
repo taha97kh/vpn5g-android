@@ -235,6 +235,12 @@ object Vpn5gPromoCodes {
      * in-app redeem flow (v1.1.12): unknown code, sign-in, ownership,
      * expiry, exhaustion and local re-redeem. Reads the local
      * redemption list from MMKV. Never throws.
+     * NOTE (v1.1.20): the redeem flow no longer calls this — codes are
+     * validated ONLY by the `validate_and_redeem_code` RPC, because the
+     * published list's remaining_uses is stale the moment a code is
+     * redeemed anywhere. Kept (with its tests) as the documented
+     * config-list decision for reference; do not wire it back into
+     * the redeem path.
      */
     fun validateForRedeem(
         rawInput: String,

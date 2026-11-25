@@ -55,6 +55,17 @@ object Vpn5gSubscriptionStatus {
          * without the field reads as null (unlimited).
          */
         val volumeCapBytes: Long? = null,
+        /**
+         * Volume the server already counts as used for this grant, in
+         * bytes (v1.1.20): `subscription_gb_used_mb` from the
+         * registrations row, as the bot recorded it. Null = the server
+         * reports no usage. The on-device counter is SEEDED from this
+         * when the grant changes (see Vpn5gVolumeStore), so volume a
+         * user consumed on another device is not silently forgotten —
+         * but the live measurement itself is always on-device tunnel
+         * bytes, never this number.
+         */
+        val volumeUsedServerBytes: Long? = null,
     )
 
     /**
@@ -182,6 +193,12 @@ object Vpn5gSubscriptionStatus {
      * expiry is an ISO-8601 timestamptz
      * ("2027-11-18T00:00:00+00:00"); an unparsable expiry is kept
      * as null (never a subscriber) instead of failing the row.
+     * v1.1.20: also reads the volume columns — `subscription_gb_total`
+     * becomes the grant's cap (the plan-list lookup in [withVolumeCap]
+     * still wins when the plan is published, so an admin cap change
+     * takes effect on refresh) and `subscription_gb_used_mb` the
+     * server-side used bytes. Both are numbers in the JSON (or null);
+     * absent columns read as null, never as zero.
      */
     fun parseRow(body: String): Vpn5gUserSubscription? {
         val trimmed = body.trim()
@@ -193,13 +210,37 @@ object Vpn5gSubscriptionStatus {
         val expiresRaw = Regex("\"subscription_expires_at\"\\s*:\\s*\"([^\"]+)\"")
             .find(trimmed)?.groupValues?.get(1)
         val expiresAt = expiresRaw?.let { parseIsoToEpoch(it) }
+        val gbTotal = Regex("\"subscription_gb_total\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)")
+            .find(trimmed)?.groupValues?.get(1)?.toDoubleOrNull()
+        val gbUsedMb = Regex("\"subscription_gb_used_mb\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)")
+            .find(trimmed)?.groupValues?.get(1)?.toDoubleOrNull()
         // A row with no status field at all is not a row we understand.
         if (status == null && plan == null && expiresRaw == null) return null
         return Vpn5gUserSubscription(
             status = status,
             expiresAtEpochSeconds = expiresAt,
             plan = plan,
+            volumeCapBytes = Vpn5gVolume.capBytes(gbTotal),
+            // Decimal megabytes, like GB_BYTES (the app's GB is decimal).
+            volumeUsedServerBytes = gbUsedMb?.let { (it * 1_000_000.0).toLong() },
         )
+    }
+
+    /**
+     * Expiry epoch seconds as a short date in the device timezone
+     * ("2027/01/25"), for the redeem-success message (v1.1.20). Pure,
+     * JVM-tested. `java.time` is safe here: the app enables core
+     * library desugaring.
+     */
+    fun formatExpiryDate(expiresAtEpochSeconds: Long): String {
+        return try {
+            java.time.Instant.ofEpochSecond(expiresAtEpochSeconds)
+                .atZone(java.time.ZoneId.systemDefault())
+                .toLocalDate()
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy/MM/dd"))
+        } catch (_: Exception) {
+            ""
+        }
     }
 
     /**
@@ -234,7 +275,7 @@ object Vpn5gSubscriptionStatus {
             try {
                 val url = Vpn5gAuthConfig.SUPABASE_URL.trimEnd('/') +
                     "/rest/v1/vpn5g_registrations" +
-                    "?select=subscription_status,subscription_expires_at,subscription_plan" +
+                    "?select=subscription_status,subscription_expires_at,subscription_plan,subscription_gb_total,subscription_gb_used_mb" +
                     "&user_id=eq.$userId&limit=1"
                 val request = Request.Builder()
                     .url(url)

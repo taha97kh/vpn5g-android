@@ -338,4 +338,60 @@ class Vpn5gServerRpcTest {
                 Vpn5gAuthService.ServerSubscriptionResult.Unavailable
         )
     }
+
+    // -- v1.1.20: no_registration + tier ---------------------------------
+    // The guard's fixed function answers no_registration when the email
+    // never registered (the code is NOT consumed then) and reports the
+    // code's tier on success, so a discount code is recognisable
+    // without the published list.
+
+    @Test
+    fun test_parse_code_rejected_no_registration() {
+        for (body in listOf(
+            """{"ok":false,"reason":"no_registration"}""",
+            """{"status":"no_registration"}""",
+        )) {
+            val result = Vpn5gAuthService.parseCodeServerResult(body)
+            assertTrue(result is Vpn5gAuthService.CodeServerResult.Rejected, body)
+            assertEquals(
+                "no_registration",
+                (result as Vpn5gAuthService.CodeServerResult.Rejected).status,
+                body,
+            )
+        }
+    }
+
+    @Test
+    fun test_parse_code_validated_tier() {
+        val gift = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"tier":"gift","plan":"gift","gift_hours":24,"applied":true,"expires_at":"$expiresIso"}"""
+        )
+        assertTrue(gift is Vpn5gAuthService.CodeServerResult.Validated)
+        assertEquals("gift", (gift as Vpn5gAuthService.CodeServerResult.Validated).tier)
+        val discount = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"tier":"discount","applied":true}"""
+        )
+        assertTrue(discount is Vpn5gAuthService.CodeServerResult.Validated)
+        assertEquals("discount", (discount as Vpn5gAuthService.CodeServerResult.Validated).tier)
+        // No tier reported: null, never a crash.
+        val noTier = Vpn5gAuthService.parseCodeServerResult("""{"ok":true,"plan":"sub_1"}""")
+        assertNull((noTier as Vpn5gAuthService.CodeServerResult.Validated).tier)
+    }
+
+    @Test
+    fun test_parse_code_validated_full_live_success_shape() {
+        // The exact live success shape (2026-11-25): ISO-string
+        // expires_at with +00:00, gb_total, applied true.
+        val result = Vpn5gAuthService.parseCodeServerResult(
+            """{"ok":true,"tier":"sub_1","plan":"sub_1","gift_hours":24,"gb_total":50,"applied":true,"expires_at":"2027-01-25T23:30:08+00:00"}"""
+        )
+        assertTrue(result is Vpn5gAuthService.CodeServerResult.Validated)
+        val validated = result as Vpn5gAuthService.CodeServerResult.Validated
+        assertEquals("sub_1", validated.plan)
+        assertEquals(true, validated.applied)
+        assertEquals(
+            Vpn5gSubscriptionStatus.parseIsoToEpoch("2027-01-25T23:30:08+00:00"),
+            validated.expiresAtEpochSeconds,
+        )
+    }
 }

@@ -387,14 +387,17 @@ object Vpn5gAuthService {
          * email, and strips expires_at when it does not apply) —
          * the caller must then re-derive the grant from the
          * published entry instead of showing VALID. Null when the
-         * server did not report it.
+         * server did not report it. [tier] is the code's tier as the
+         * server reports it ("discount" = a discount code with no
+         * grant — the bot applies it; "gift" / a plan id = a grant).
          */
         data class Validated(
             val plan: String?,
             val expiresAtEpochSeconds: Long?,
             val applied: Boolean? = null,
+            val tier: String? = null,
         ) : CodeServerResult
-        /** Server definitively rejected the code ("unknown" | "already_used" | "expired" | "exhausted" | "not_yours" | "invalid_email"). */
+        /** Server definitively rejected the code ("unknown" | "already_used" | "expired" | "exhausted" | "not_yours" | "invalid_email" | "no_registration"). */
         data class Rejected(val status: String) : CodeServerResult
         /** RPC missing / offline / unparsable — the caller falls back to the config-list check. */
         data object Unavailable : CodeServerResult
@@ -444,6 +447,10 @@ object Vpn5gAuthService {
      * and the presence of an expiry, never trust ok:true alone.
      * `expires_at` is also accepted as a bare numeric epoch
      * (unquoted digits) as a fallback. Pure, JVM-tested.
+     * v1.1.20: the guard's fixed function also answers
+     * `no_registration` (the email never registered — the code is NOT
+     * consumed in that case) and reports the code's `tier` on success,
+     * so a discount code is recognisable without the published list.
      * An unrecognised body is [CodeServerResult.Unavailable]
      * (fallback), never a false success.
      */
@@ -455,7 +462,9 @@ object Vpn5gAuthService {
                 "ok", "valid", "validated" -> {
                     val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
                         .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
-                    CodeServerResult.Validated(plan, parseExpiresAt(body), parseApplied(body))
+                    CodeServerResult.Validated(
+                        plan, parseExpiresAt(body), parseApplied(body), parseTier(body)
+                    )
                 }
                 "unknown", "already_used", "expired", "exhausted", "not_yours" ->
                     CodeServerResult.Rejected(status)
@@ -464,6 +473,10 @@ object Vpn5gAuthService {
                 // existing recovery status.
                 "already_redeemed" -> CodeServerResult.Rejected("already_used")
                 "invalid_email" -> CodeServerResult.Rejected("invalid_email")
+                // v1.1.20: the email never registered — the code was
+                // not consumed; the caller tells the user to register
+                // first instead of calling the code invalid.
+                "no_registration" -> CodeServerResult.Rejected("no_registration")
                 else -> CodeServerResult.Unavailable
             }
         }
@@ -474,7 +487,9 @@ object Vpn5gAuthService {
         if (ok == "true") {
             val plan = Regex("\"plan\"\\s*:\\s*\"([^\"]*)\"")
                 .find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
-            return CodeServerResult.Validated(plan, parseExpiresAt(body), parseApplied(body))
+            return CodeServerResult.Validated(
+                plan, parseExpiresAt(body), parseApplied(body), parseTier(body)
+            )
         }
         val reason = Regex("\"reason\"\\s*:\\s*\"([^\"]*)\"")
             .find(body)?.groupValues?.get(1)?.trim()?.lowercase()
@@ -485,8 +500,22 @@ object Vpn5gAuthService {
             // v1.1.19: the live function's own reason spellings.
             "already_redeemed" -> CodeServerResult.Rejected("already_used")
             "invalid_email" -> CodeServerResult.Rejected("invalid_email")
+            // v1.1.20: see the {"status":...} branch above.
+            "no_registration" -> CodeServerResult.Rejected("no_registration")
             else -> CodeServerResult.Unavailable
         }
+    }
+
+    /**
+     * The `tier` of a `validate_and_redeem_code` response (v1.1.20):
+     * "discount" for a discount code (no grant — the bot applies it),
+     * "gift" or a plan id for a grant. Null when the server did not
+     * report it. Pure.
+     */
+    private fun parseTier(body: String): String? {
+        return Regex("\"tier\"\\s*:\\s*\"([^\"]*)\"")
+            .find(body)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }
+            ?.lowercase()
     }
 
     /**

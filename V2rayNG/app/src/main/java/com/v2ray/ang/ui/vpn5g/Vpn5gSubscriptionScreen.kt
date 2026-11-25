@@ -1187,6 +1187,33 @@ private fun Vpn5gCodeStatusBlock(
                 fontWeight = FontWeight.Bold,
             )
         }
+        Vpn5gPromoStatus.NO_REGISTRATION -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_no_registration),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Vpn5gPromoStatus.SERVER_UNAVAILABLE -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_server_unavailable),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Vpn5gPromoStatus.NOT_APPLIED -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.vpn5g_promo_not_applied),
+                color = Color(0xFFF87171),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
         Vpn5gPromoStatus.REDEEMED -> {
             // v1.1.12: the gift code activated the subscription
             // immediately — plan + remaining days prominent.
@@ -1199,6 +1226,22 @@ private fun Vpn5gCodeStatusBlock(
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
             )
+            // v1.1.20: the success message carries the new expiry
+            // date from the RPC / server row — the user sees exactly
+            // until when the plan lasts, on the same screen.
+            val activatedExpiry = state.userSubscription?.expiresAtEpochSeconds
+            if (activatedExpiry != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(
+                        R.string.vpn5g_promo_redeemed_expiry,
+                        Vpn5gSubscriptionStatus.formatExpiryDate(activatedExpiry),
+                    ),
+                    color = Vpn5gOnDark,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
             val activated = state.userSubscription
             if (activated != null && state.isSubscriber) {
                 Spacer(Modifier.height(8.dp))

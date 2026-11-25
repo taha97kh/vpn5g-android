@@ -343,6 +343,15 @@ data class Vpn5gServerUi(
      * the proxy, not by a raw TCP connect. Only real-pinged servers can
      * be free or auto-picked; a TCP-only ping is never shown as a number. */
     val hasRealPing: Boolean = false,
+    /**
+     * True when this server comes from the bundled seed snapshot
+     * (v1.1.20): it was TCP-verified at build time and is free-eligible
+     * with an unknown ping until the real probe measures it. A seed
+     * server the real probe fails is never seed-trusted again (its ping
+     * is withdrawn to -1). The seed is a starting point, never proof —
+     * the connect chain still verifies the tunnel.
+     */
+    val isSeed: Boolean = false,
     /** Config protocol scheme ("vless", "vmess", "trojan", "ss"), or "" when unknown. */
     val protocol: String = "",
     /**

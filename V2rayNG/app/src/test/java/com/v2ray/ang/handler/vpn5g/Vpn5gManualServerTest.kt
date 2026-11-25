@@ -10,13 +10,19 @@ import org.junit.jupiter.api.Test
  * ping, and did not fail tunnel verification within the 6h TTL. */
 class Vpn5gManualServerTest {
 
-    private fun server(guid: String, ping: Long, free: Boolean = true) = Vpn5gServerUi(
+    private fun server(
+        guid: String,
+        ping: Long,
+        free: Boolean = true,
+        isSeed: Boolean = false,
+    ) = Vpn5gServerUi(
         guid = guid,
         name = guid,
         country = "بین‌الملل",
         pingMillis = ping,
         isSelected = false,
         isFree = free,
+        isSeed = isSeed,
     )
 
     private fun section(servers: List<Vpn5gServerUi>) = Vpn5gCountryUi(
@@ -65,6 +71,19 @@ class Vpn5gManualServerTest {
         val result = Vpn5gManualServer.resolve(sections, "c", emptyMap(), 1_000_000L)
         assertNull(result.server)
         assertEquals(Vpn5gManualServer.Problem.NO_PING, result.problem)
+    }
+
+    @Test
+    fun test_seed_pick_without_ping_resolves() {
+        // v1.1.20: a seed server has no measured ping yet, but it is
+        // free-eligible (build-time verified) and the connect chain
+        // verifies the tunnel — a manual tap on it must work like a
+        // tap on a real-pinged server.
+        val seedSections = listOf(section(listOf(server("seed", 0L, isSeed = true))))
+        val result = Vpn5gManualServer.resolve(seedSections, "seed", emptyMap(), 1_000_000L)
+        assertNotNull(result.server)
+        assertEquals("seed", result.server?.guid)
+        assertNull(result.problem)
     }
 
     @Test

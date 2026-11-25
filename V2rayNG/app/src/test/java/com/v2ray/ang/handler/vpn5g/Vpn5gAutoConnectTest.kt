@@ -10,7 +10,13 @@ import org.junit.jupiter.api.Test
  * picker and the failed-server TTL store (all pure Kotlin). */
 class Vpn5gAutoConnectTest {
 
-    private fun server(guid: String, ping: Long, free: Boolean = true, realPing: Boolean = true) =
+    private fun server(
+        guid: String,
+        ping: Long,
+        free: Boolean = true,
+        realPing: Boolean = true,
+        isSeed: Boolean = false,
+    ) =
         Vpn5gServerUi(
             guid = guid,
             name = guid,
@@ -20,6 +26,8 @@ class Vpn5gAutoConnectTest {
             isFree = free,
             // v1.1.7: the picker only trusts a real through-the-proxy ping.
             hasRealPing = realPing,
+            // v1.1.20: a build-time verified seed server.
+            isSeed = isSeed,
         )
 
     private fun section(servers: List<Vpn5gServerUi>) = Vpn5gCountryUi(
@@ -359,6 +367,57 @@ class Vpn5gAutoConnectTest {
             section(listOf(server("a", 10L, realPing = false), server("b", 20L, realPing = false))),
         )
         assertNull(Vpn5gAutoConnect.pickBestServer(sections))
+    }
+
+    // -- v1.1.20: seed fallback (fresh-install auto-connect) --------------
+
+    @Test
+    fun test_pick_best_server_falls_back_to_seed() {
+        // No real-pinged server yet (fresh install) — the build-time
+        // verified seed is the pick; the connect chain still verifies
+        // the tunnel.
+        val sections = listOf(
+            section(listOf(server("seed-a", 0L, realPing = false, isSeed = true))),
+        )
+        assertEquals("seed-a", Vpn5gAutoConnect.pickBestServer(sections)?.guid)
+    }
+
+    @Test
+    fun test_pick_best_server_prefers_real_over_seed() {
+        val sections = listOf(
+            section(
+                listOf(
+                    server("seed-a", 0L, realPing = false, isSeed = true),
+                    server("real", 900L, realPing = true),
+                )
+            ),
+        )
+        assertEquals("real", Vpn5gAutoConnect.pickBestServer(sections)?.guid)
+    }
+
+    @Test
+    fun test_pick_best_server_ignores_dead_seed() {
+        // A seed the real probe failed is not pickable.
+        val sections = listOf(
+            section(listOf(server("dead-seed", -1L, realPing = false, isSeed = true))),
+        )
+        assertNull(Vpn5gAutoConnect.pickBestServer(sections))
+    }
+
+    @Test
+    fun test_pick_best_server_seed_respects_excluding() {
+        val sections = listOf(
+            section(
+                listOf(
+                    server("seed-a", 0L, realPing = false, isSeed = true),
+                    server("seed-b", 0L, realPing = false, isSeed = true),
+                )
+            ),
+        )
+        assertEquals(
+            "seed-b",
+            Vpn5gAutoConnect.pickBestServer(sections, excluding = setOf("seed-a"))?.guid,
+        )
     }
 
     // -- Failed-server TTL store (pure functions) ------------------------------

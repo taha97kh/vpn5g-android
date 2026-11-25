@@ -242,6 +242,19 @@ object Vpn5gConstants {
     const val KEY_REAL_PING_KEYS_CSV = "vpn5g_real_ping_keys"
 
     /**
+     * MMKV SETTING key holding the dedupe keys (scheme://host:port:identity)
+     * of the bundled seed snapshot (v1.1.20): servers from
+     * assets/vpn5g/fallback_servers.json that were TCP-verified at build
+     * time. A seed server is free-eligible with an unknown ping until the
+     * real probe measures it (see Vpn5gSync) — the seed is a starting
+     * point, never proof: a seed server the real probe fails loses its
+     * seed trust at once, and the first live publish clears the set.
+     * Stored as a comma-separated list, keyed by server identity like
+     * the real-ping keys.
+     */
+    const val KEY_SEED_SERVER_KEYS_CSV = "vpn5g_seed_server_keys"
+
+    /**
      * Debounce after an unexpected drop before the drop detector fails
      * over to another server (v1.1.5 refinement: was a fixed 3,000 ms).
      * Intentional restarts are already excluded by suppressAutoFailover,

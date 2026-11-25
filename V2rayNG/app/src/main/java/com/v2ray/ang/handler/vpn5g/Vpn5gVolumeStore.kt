@@ -62,9 +62,14 @@ object Vpn5gVolumeStore {
 
     /**
      * Makes the counter belong to [subscription]'s grant: a new grant
-     * key resets the counter to 0, the same key keeps it, and no grant
+     * key resets the counter, the same key keeps it, and no grant
      * (null key — free tier / signed out) clears the key and the
-     * counter. Idempotent.
+     * counter. Idempotent. v1.1.20: the reset seeds the counter from
+     * the server's used bytes for the grant when the row reports any
+     * (`subscription_gb_used_mb`) — volume consumed on another device
+     * is not silently forgotten; when the server reports nothing the
+     * counter starts at 0, as before. The live measurement stays
+     * on-device tunnel bytes from here on.
      */
     fun ensureGrant(subscription: Vpn5gSubscriptionStatus.Vpn5gUserSubscription?) {
         try {
@@ -73,7 +78,8 @@ object Vpn5gVolumeStore {
                 ?.takeIf { it.isNotBlank() }
             if (stored == key) return
             MmkvManager.encodeSettings(KEY_VOLUME_GRANT_KEY, key ?: "")
-            MmkvManager.encodeSettings(KEY_VOLUME_CONSUMED_BYTES, 0L)
+            val seed = subscription?.volumeUsedServerBytes?.coerceAtLeast(0L) ?: 0L
+            MmkvManager.encodeSettings(KEY_VOLUME_CONSUMED_BYTES, seed)
         } catch (_: Exception) {
             // A failed counter reset must never block a redeem/refresh.
         }

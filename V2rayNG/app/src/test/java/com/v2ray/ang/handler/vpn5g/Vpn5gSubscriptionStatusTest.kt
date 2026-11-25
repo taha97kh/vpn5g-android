@@ -125,6 +125,37 @@ class Vpn5gSubscriptionStatusTest {
         assertNull(Vpn5gSubscriptionStatus.parseIsoToEpoch(""))
     }
 
+    // -- v1.1.20: volume columns + expiry date ---------------------------
+
+    @Test
+    fun test_parse_row_volume_columns() {
+        val sub = Vpn5gSubscriptionStatus.parseRow(
+            """[{"subscription_status":"active","subscription_expires_at":"2027-01-25T23:30:08+00:00","subscription_plan":"gb_50","subscription_gb_total":50,"subscription_gb_used_mb":1024.5}]"""
+        )
+        assertEquals("gb_50", sub?.plan)
+        // Decimal GB, like Vpn5gVolume.GB_BYTES.
+        assertEquals(50L * 1_000_000_000L, sub?.volumeCapBytes)
+        assertEquals(1_024_500_000L, sub?.volumeUsedServerBytes)
+    }
+
+    @Test
+    fun test_parse_row_without_volume_columns_is_null_not_zero() {
+        val sub = Vpn5gSubscriptionStatus.parseRow(
+            """[{"subscription_status":"active","subscription_expires_at":"2027-11-18T00:00:00+00:00","subscription_plan":"sub_12"}]"""
+        )
+        assertNull(sub?.volumeCapBytes)
+        assertNull(sub?.volumeUsedServerBytes)
+    }
+
+    @Test
+    fun test_format_expiry_date() {
+        // 2027-06-15T12:00:00Z — midday UTC, so every timezone from
+        // UTC-11 to UTC+11 renders the same calendar date.
+        val noon = Vpn5gSubscriptionStatus.parseIsoToEpoch("2027-06-15T12:00:00+00:00")!!
+        assertEquals("2027/06/15", Vpn5gSubscriptionStatus.formatExpiryDate(noon))
+        assertEquals("2027/06/16", Vpn5gSubscriptionStatus.formatExpiryDate(noon + 86_400L))
+    }
+
     @Test
     fun test_free_guids_for_subscriber_is_whole_pool() {
         val servers = listOf(
