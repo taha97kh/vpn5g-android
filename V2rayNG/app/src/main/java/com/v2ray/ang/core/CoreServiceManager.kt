@@ -48,7 +48,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
-import kotlinx.coroutines.delay
+// NOTE: no kotlinx.coroutines.delay import here — the file already
+// imports com.v2ray.ang.extension.delay (Int/Long wrappers over
+// kotlinx delay); importing both makes every delay(Long) call
+// ambiguous (broke the 1.1.29 CI compile).
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
