@@ -237,7 +237,7 @@ data class Vpn5gHomeUiState(
      */
     val userSubscription: Vpn5gSubscriptionStatus.Vpn5gUserSubscription? = null,
     val isSubscriber: Boolean = false,
-    /** True while the GIFT tier is active (v1.1.14): top-50 pool, no 30-minute cutoff. */
+    /** True while the GIFT tier is active (v1.1.14): top-100 pool, no 30-minute cutoff. */
     val isGift: Boolean = false,
     /** Whole remaining hours of the gift tier (0 when not a gift). */
     val giftRemainingHours: Long = 0L,

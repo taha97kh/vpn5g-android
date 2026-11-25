@@ -4,7 +4,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus.Vpn5gTier
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/** JVM tests for the tiered server pool (v1.1.14): free 20 / gift 50 / VIP all. */
+/** JVM tests for the tiered server pool (v1.1.14): free 20 / gift 100 / VIP all. */
 class Vpn5gGiftTierTest {
 
     private fun servers(count: Int): List<Vpn5gServerUi> {
@@ -26,11 +26,11 @@ class Vpn5gGiftTierTest {
     }
 
     @Test
-    fun test_gift_tier_is_50() {
-        val guids = Vpn5gSync.freeGuidsFor(servers(60), Vpn5gTier.GIFT)
-        assertEquals(50, guids.size)
-        // The 50 fastest (pings 1..50).
-        assertEquals((1..50).map { "g$it" }.toSet(), guids)
+    fun test_gift_tier_is_100() {
+        val guids = Vpn5gSync.freeGuidsFor(servers(150), Vpn5gTier.GIFT)
+        assertEquals(100, guids.size)
+        // The 100 fastest (pings 1..100).
+        assertEquals((1..100).map { "g$it" }.toSet(), guids)
     }
 
     @Test

@@ -243,7 +243,7 @@ class Vpn5gSubscriptionStatusTest {
 
     @Test
     fun test_effective_subscriber_beats_longer_gift() {
-        // A longer gift must never demote a subscriber to the top-50 pool.
+        // A longer gift must never demote a subscriber to the top-100 pool.
         val row = Vpn5gUserSubscription("active", future, "sub_12")
         val longerGift = Vpn5gUserSubscription("active", future + 30 * 86_400L, "gift")
         assertEquals(

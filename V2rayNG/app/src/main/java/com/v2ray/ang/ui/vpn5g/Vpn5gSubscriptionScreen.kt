@@ -283,7 +283,7 @@ fun Vpn5gSubscriptionScreen(
         // subscription buyers can open/use them; subscribers tap a
         // country to connect to its fastest server (auto-connect
         // includes them — the full pool). The gift tier opens the
-        // countries its top-50 servers belong to. A locked tap prompts
+        // countries its top-100 servers belong to. A locked tap prompts
         // subscription. No city data exists in the pool, so each server
         // row is one location inside its country.
         Vpn5gStaggeredItem(index = 4, visible = entered) {
@@ -428,7 +428,7 @@ fun Vpn5gSubscriptionScreen(
                     // this grant, measured on-device.
                     Vpn5gVolumeBlock(state)
                 } else if (ownSubscription != null && state.isGift) {
-                    // v1.1.14: the GIFT tier — middle tier, top-50
+                    // v1.1.14: the GIFT tier — middle tier, top-100
                     // servers, no 30-minute cutoff while it lasts.
                     // Remaining time is shown in hours, never days.
                     Text(
