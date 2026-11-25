@@ -273,6 +273,7 @@
     <string name="vpn5g_link_channel">Free config channel</string>
     <string name="vpn5g_link_bot">Smart bot</string>
     <string name="vpn5g_link_support">Online support</string>
+    <string name="vpn5g_link_support_telegram">Online support: @Aref_5G</string>
     <string name="vpn5g_guide_faq_title">Frequently asked questions</string>
     <string name="vpn5g_guide_s01_title">1. Connect with one tap</string>
     <string name="vpn5g_guide_s01_body">Tap the big switch in the middle of the screen. The app first checks the internet, then picks the fastest free server, builds the tunnel, and only shows “Connected” once traffic really goes through the VPN. If a server does not work, it moves to the next one automatically.</string>

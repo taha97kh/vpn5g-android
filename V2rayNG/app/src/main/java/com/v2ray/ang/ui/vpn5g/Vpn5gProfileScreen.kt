@@ -42,6 +42,7 @@ import com.v2ray.ang.R
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CHANNEL_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_BOT_URL
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
 
 /**
@@ -301,6 +302,14 @@ fun Vpn5gProfileScreen(
                     // section (start=support). Bot membership cannot be
                     // verified app-side — the bot handles it.
                     onClick = { onOpenUrl(SUPPORT_BOT_URL) },
+                )
+                Spacer(Modifier.height(12.dp))
+                // v1.1.28 (Aref's order): his personal Telegram
+                // account next to the bot support entry — "هم" (also),
+                // the bot entry above stays.
+                NeuLinkButton(
+                    label = stringResource(R.string.vpn5g_link_support_telegram),
+                    onClick = { onOpenUrl(SUPPORT_URL) },
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(

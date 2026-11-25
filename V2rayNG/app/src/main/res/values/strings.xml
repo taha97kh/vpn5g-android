@@ -878,6 +878,7 @@
     <string name="vpn5g_link_channel" translatable="false">کانال کانفیگ رایگان</string>
     <string name="vpn5g_link_bot" translatable="false">ربات هوشمند</string>
     <string name="vpn5g_link_support" translatable="false">پشتیبانی آنلاین</string>
+    <string name="vpn5g_link_support_telegram" translatable="false">پشتیبانی آنلاین: @Aref_5G</string>
 
     <!-- v1.1.5: OTP states (§7 — Android side only). -->
 

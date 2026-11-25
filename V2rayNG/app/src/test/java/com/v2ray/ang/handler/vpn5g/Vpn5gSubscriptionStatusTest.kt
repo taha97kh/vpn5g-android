@@ -125,6 +125,120 @@ class Vpn5gSubscriptionStatusTest {
         assertNull(Vpn5gSubscriptionStatus.parseIsoToEpoch(""))
     }
 
+    // -- v1.1.28: subscription «تمام شده» regression -------------------
+
+    @Test
+    fun test_parse_iso_live_rpc_string() {
+        // The EXACT expires_at the live get_subscription_status RPC
+        // returned for the real sub_12 grant on 2026-11-25 (6-digit
+        // fraction + numeric offset). On 1.1.26 this produced a
+        // null expiry on-device and the panel showed "ended".
+        assertEquals(
+            1_826_717_341L,
+            Vpn5gSubscriptionStatus.parseIsoToEpoch(
+                "2027-11-20T13:29:01.336555+00:00"
+            )
+        )
+    }
+
+    @Test
+    fun test_parse_iso_manual_fallback_variants() {
+        // The formatter-free stage alone must handle every shape
+        // the server can send (desugar insurance).
+        val expected = 1_826_717_341L // 2027-11-20T13:29:01Z
+        for (raw in listOf(
+            "2027-11-20T13:29:01.336555+00:00",
+            "2027-11-20T13:29:01+00:00",
+            "2027-11-20T13:29:01Z",
+            "2027-11-20T13:29:01+0000",
+            "2027-11-20T13:29:01",
+            "2027-11-20 13:29:01",
+            "2027-11-20T16:59:01+03:30",
+            "2027-11-20T08:29:01-05:00",
+        )) {
+            assertEquals(expected, Vpn5gSubscriptionStatus.parseIsoManually(raw), raw)
+            assertEquals(expected, Vpn5gSubscriptionStatus.parseIsoToEpoch(raw), raw)
+        }
+        // No-seconds form.
+        assertEquals(
+            expected - 1L,
+            Vpn5gSubscriptionStatus.parseIsoManually("2027-11-20T13:29Z"),
+        )
+        // Out-of-range fields stay null, never a bogus epoch.
+        assertNull(Vpn5gSubscriptionStatus.parseIsoManually("2027-13-20T13:29:01Z"))
+        assertNull(Vpn5gSubscriptionStatus.parseIsoManually("2027-11-20T25:29:01Z"))
+        assertNull(Vpn5gSubscriptionStatus.parseIsoManually("2027-11-20"))
+    }
+
+    @Test
+    fun test_parse_row_uppercase_status_is_subscriber() {
+        val sub = Vpn5gSubscriptionStatus.parseRow(
+            """[{"subscription_status":"ACTIVE","subscription_expires_at":"2027-11-20T13:29:01.336555+00:00","subscription_plan":"sub_12"}]"""
+        )
+        assertEquals("active", sub?.status)
+        assertEquals(1_826_717_341L, sub?.expiresAtEpochSeconds)
+        assertTrue(Vpn5gSubscriptionStatus.isSubscriber(sub, now))
+    }
+
+    @Test
+    fun test_merge_row_failed_rpc_found_is_subscriber() {
+        // Row read Failed (no row candidate) + RPC Found active:
+        // the merged result must be a live subscriber — the exact
+        // recovery path that failed on 1.1.26.
+        val rpcFound = Vpn5gUserSubscription("active", 1_826_717_341L, "sub_12")
+        val merged = Vpn5gSubscriptionStatus.effectiveSubscription(null, rpcFound, now)
+        assertEquals(rpcFound, merged)
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
+            Vpn5gSubscriptionStatus.tierOf(merged, now),
+        )
+    }
+
+    @Test
+    fun test_cache_persist_decision() {
+        val d = Vpn5gSubscriptionStatus::cachePersistDecision
+        // Active merged result is always saved.
+        assertEquals(
+            Vpn5gSubscriptionStatus.CachePersist.ACTIVE_RESULT,
+            d(true, false, false, false),
+        )
+        // Definitive none (none row + server none + no redeemed)
+        // clears the cache.
+        assertEquals(
+            Vpn5gSubscriptionStatus.CachePersist.NONE,
+            d(false, true, true, false),
+        )
+        // Readable none row but RPC merely Unavailable: the active
+        // cache SURVIVES (the v1.1.28 post-merge rule).
+        assertEquals(
+            Vpn5gSubscriptionStatus.CachePersist.KEEP,
+            d(false, true, false, false),
+        )
+        // A trusted redeemed grant blocks the none-clear.
+        assertEquals(
+            Vpn5gSubscriptionStatus.CachePersist.KEEP,
+            d(false, true, true, true),
+        )
+        // Nothing conclusive at all: keep.
+        assertEquals(
+            Vpn5gSubscriptionStatus.CachePersist.KEEP,
+            d(false, false, false, false),
+        )
+    }
+
+    @Test
+    fun test_redeemed_grant_unlocks_subscriber_tier() {
+        // Aref's acceptance criterion: entering a subscription code
+        // opens the locks — locks key off the merged tier, so a
+        // redeemed active grant must yield SUBSCRIBER immediately.
+        val redeemed = Vpn5gUserSubscription("active", future, "sub_12")
+        val merged = Vpn5gSubscriptionStatus.effectiveSubscription(null, redeemed, now)
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
+            Vpn5gSubscriptionStatus.tierOf(merged, now),
+        )
+    }
+
     // -- v1.1.20: volume columns + expiry date ---------------------------
 
     @Test

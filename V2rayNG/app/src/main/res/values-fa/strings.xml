@@ -849,6 +849,7 @@
     <string name="vpn5g_link_channel">کانال کانفیگ رایگان</string>
     <string name="vpn5g_link_bot">ربات هوشمند</string>
     <string name="vpn5g_link_support">پشتیبانی آنلاین</string>
+    <string name="vpn5g_link_support_telegram">پشتیبانی آنلاین: @Aref_5G</string>
     <string name="vpn5g_guide_faq_title">سوالات متداول</string>
     <string name="vpn5g_guide_s01_title">۱. اتصال با یک دکمه</string>
     <string name="vpn5g_guide_s01_body">روی کلید بزرگ وسط صفحه بزن. برنامه اول اینترنت را بررسی می‌کند، بعد سریع‌ترین سرور رایگان را انتخاب می‌کند، تونل را می‌سازد و فقط وقتی ترافیک واقعاً از داخل VPN رد شد، «متصل» نشان می‌دهد. اگر سروری کار نکرد، خودکار سراغ سرور بعدی می‌رود.</string>

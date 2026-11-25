@@ -4378,7 +4378,12 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                         Vpn5gDestination.PREMIUM -> Vpn5gSubscriptionScreen(
                             state = uiState,
                             onBack = { destination = Vpn5gDestination.HOME },
-                            onEntered = { viewModel.refreshSubscriptionAndLocks() },
+                            // v1.1.28: opening Premium always re-reads
+                            // server truth (forced, not debounced) so
+                            // the panel can never show a stale state.
+                            onEntered = {
+                                viewModel.refreshSubscriptionAndLocks(force = true)
+                            },
                             onOpenBot = { Utils.openUri(this@Vpn5gMainActivity, BOT_URL) },
                             onOpenBuyBot = { planId ->
                                 Utils.openUri(

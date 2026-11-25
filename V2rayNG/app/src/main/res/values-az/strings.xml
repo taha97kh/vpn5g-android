@@ -849,6 +849,7 @@
     <string name="vpn5g_link_channel">Pulsuz konfiq kanalı</string>
     <string name="vpn5g_link_bot">Ağıllı bot</string>
     <string name="vpn5g_link_support">Onlayn dəstək</string>
+    <string name="vpn5g_link_support_telegram">Onlayn dəstək: @Aref_5G</string>
     <string name="vpn5g_guide_faq_title">Tez-tez verilən suallar</string>
     <string name="vpn5g_guide_s01_title">1. Bir toxunuşla qoşul</string>
     <string name="vpn5g_guide_s01_body">Ekranın ortasındakı böyük açara toxunun. Tətbiq əvvəlcə interneti yoxlayır, sonra ən sürətli pulsuz serveri seçir, tuneli qurur və yalnız trafik həqiqətən VPN-dən keçəndə “Qoşulub” göstərir. Server işləməsə, avtomatik növbəti serverə keçir.</string>

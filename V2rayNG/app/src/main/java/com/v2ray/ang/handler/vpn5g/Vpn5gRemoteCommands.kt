@@ -114,7 +114,9 @@ object Vpn5gRemoteCommands {
         runCatching {
             return LocalDateTime.parse(text).toInstant(ZoneOffset.UTC).toEpochMilli()
         }
-        return null
+        // v1.1.28: formatter-free manual fallback (same desugar
+        // insurance as the subscription expiry parser).
+        return Vpn5gSubscriptionStatus.parseIsoToEpoch(text)?.times(1_000L)
     }
 
     /**

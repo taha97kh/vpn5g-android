@@ -7,12 +7,15 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_USER_SUBSCRIPTION_JSON
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.concurrent.TimeUnit
 
 /**
@@ -203,8 +206,10 @@ object Vpn5gSubscriptionStatus {
     fun parseRow(body: String): Vpn5gUserSubscription? {
         val trimmed = body.trim()
         if (trimmed == "[]" || trimmed.isEmpty()) return null
+        // v1.1.28: normalize like the RPC parser does — a row stored
+        // as "Active"/"ACTIVE" must still read as a subscriber.
         val status = Regex("\"subscription_status\"\\s*:\\s*\"([^\"]*)\"")
-            .find(trimmed)?.groupValues?.get(1)
+            .find(trimmed)?.groupValues?.get(1)?.trim()?.lowercase()
         val plan = Regex("\"subscription_plan\"\\s*:\\s*\"([^\"]*)\"")
             .find(trimmed)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
         val expiresRaw = Regex("\"subscription_expires_at\"\\s*:\\s*\"([^\"]+)\"")
@@ -246,16 +251,89 @@ object Vpn5gSubscriptionStatus {
     /**
      * ISO-8601 timestamp ("2027-11-18T00:00:00+00:00", "…Z", with or
      * without fractional seconds) to epoch seconds, or null when it
-     * does not parse. Pure, JVM-tested. `java.time` is safe here: the
-     * app enables core library desugaring.
+     * does not parse. Pure, JVM-tested.
+     *
+     * v1.1.28 (subscription «تمام شده» fix): three-stage parse —
+     * [Instant.parse], then [OffsetDateTime.parse], then a manual
+     * arithmetic fallback ([parseIsoManually]) that uses no
+     * formatters at all. Device evidence 2026-11-25: on 1.1.26 a
+     * bot-activated subscription showed as ended because the
+     * published record's expiry came out null for the exact live
+     * RPC string "2027-11-20T13:29:01.336555+00:00" (6-digit
+     * fraction + numeric offset) — the on-device desugared
+     * `java.time` parser is the prime suspect (host-JVM tests pass
+     * for the same string). The manual stage makes the result
+     * independent of which parser the device ships: fractional or
+     * not, `Z`, `+HH:MM`, `+HHMM`, space separator, or no offset
+     * (treated as UTC — the server always sends one) all parse.
      */
     fun parseIsoToEpoch(raw: String): Long? {
-        return try {
-            Instant.parse(raw.trim()).epochSecond
+        val text = raw.trim()
+        if (text.isEmpty()) return null
+        try {
+            return Instant.parse(text).epochSecond
         } catch (_: Exception) {
-            null
+            // fall through to the next stage
         }
+        try {
+            return OffsetDateTime.parse(text).toInstant().epochSecond
+        } catch (_: Exception) {
+            // fall through to the manual stage
+        }
+        return parseIsoManually(text)
     }
+
+    /**
+     * Manual ISO-8601 → epoch-seconds fallback (v1.1.28): regex
+     * fields + days-from-civil arithmetic, no `java.time`
+     * formatters, so a desugar/parser quirk on-device can never
+     * turn a real expiry into null again. Accepts
+     * `YYYY-MM-DD[T| ]HH:MM[:SS[.fraction]]` with an optional
+     * `Z`/`z` or `±HH:MM`/`±HHMM` offset (absent offset = UTC).
+     * Out-of-range fields return null. Pure, JVM-tested.
+     */
+    internal fun parseIsoManually(text: String): Long? {
+        val match = ISO_MANUAL_REGEX.matchEntire(text) ?: return null
+        val (yearS, monthS, dayS, hourS, minuteS, secondS, offsetS) =
+            match.destructured
+        val year = yearS.toIntOrNull() ?: return null
+        val month = monthS.toIntOrNull() ?: return null
+        val day = dayS.toIntOrNull() ?: return null
+        val hour = hourS.toIntOrNull() ?: return null
+        val minute = minuteS.toIntOrNull() ?: return null
+        val second = secondS.takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 0
+        if (month !in 1..12 || day !in 1..31 || hour !in 0..23 ||
+            minute !in 0..59 || second !in 0..60
+        ) {
+            return null
+        }
+        val offsetSeconds = when {
+            offsetS.isEmpty() || offsetS.equals("Z", ignoreCase = true) -> 0L
+            else -> {
+                val sign = if (offsetS[0] == '-') -1L else 1L
+                val digits = offsetS.substring(1).replace(":", "")
+                val offHour = digits.substring(0, 2).toLongOrNull() ?: return null
+                val offMinute = digits.substring(2, 4).toLongOrNull() ?: return null
+                if (offHour !in 0..23 || offMinute !in 0..59) return null
+                sign * (offHour * 3_600L + offMinute * 60L)
+            }
+        }
+        // Days from civil (Howard Hinnant's algorithm): proleptic
+        // Gregorian days since 1970-01-01, integer arithmetic only.
+        val y = if (month <= 2) year - 1 else year
+        val era = Math.floorDiv(y, 400)
+        val yoe = y - era * 400
+        val mp = if (month > 2) month - 3 else month + 9
+        val doy = (153 * mp + 2) / 5 + day - 1
+        val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+        val days = era * 146_097L + doe - 719_468L
+        return days * 86_400L + hour * 3_600L + minute * 60L + second -
+            offsetSeconds
+    }
+
+    private val ISO_MANUAL_REGEX = Regex(
+        """(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?\s*([Zz]|[+-]\d{2}:?\d{2})?"""
+    )
 
     /**
      * Fetches the signed-in user's own registration row. Returns
@@ -312,7 +390,10 @@ object Vpn5gSubscriptionStatus {
      */
     suspend fun linkOwnUserId(session: Vpn5gAuthService.Vpn5gAuthSession): Boolean =
         withContext(Dispatchers.IO) {
-            val token = session.accessToken
+            // v1.1.28: renew an expired token first (best effort —
+            // freshSession returns the original on any failure).
+            val token = Vpn5gAuthService.freshSession(session)?.accessToken
+                ?: session.accessToken
             if (token.isNullOrBlank()) return@withContext false
             try {
                 val request = Request.Builder()
@@ -392,18 +473,38 @@ object Vpn5gSubscriptionStatus {
 
     /**
      * Refreshes the cached subscription for the current session.
-     * A successful fetch overwrites the ROW cache (Found → the row;
-     * NoRow → an explicit "none" so a stale active entry cannot
-     * linger); a failed fetch keeps the cache untouched, so a
-     * network error never silently demotes a subscriber. What is
+     * Only the FINAL merged result is persisted (v1.1.28: an active
+     * result is saved; a definitive server "none" with a none row
+     * clears to "none"; anything inconclusive keeps the cache, so
+     * a network error never silently demotes a subscriber). What is
      * returned is always the EFFECTIVE subscription (v1.1.12): the
      * row merged with a locally redeemed gift code — the later
      * expiry wins, and a redeemed code survives a NoRow/Failed
      * fetch. Returns the subscription to use, or null when there is
      * no session. Never throws.
      */
+    /** Serializes [refresh] (v1.1.28 single-flight). */
+    private val refreshMutex = Mutex()
+
+    /**
+     * Single-flight entry (v1.1.28): startup, onResume, Premium
+     * entry, connect and redeem paths can all ask for a refresh at
+     * once; concurrent callers now share ONE in-flight refresh
+     * instead of racing — last-finisher-wins could publish (and
+     * persist) a stale result over a fresh one.
+     */
     suspend fun refresh(session: Vpn5gAuthService.Vpn5gAuthSession?): Vpn5gUserSubscription? {
         if (session == null) return null
+        return refreshMutex.withLock { refreshLocked(session) }
+    }
+
+    private suspend fun refreshLocked(
+        sessionIn: Vpn5gAuthService.Vpn5gAuthSession,
+    ): Vpn5gUserSubscription? {
+        // v1.1.28: renew an expired access token first (refresh-token
+        // grant) so the row read / link below don't 401 after ~1 h;
+        // on any failure the original session is used unchanged.
+        val session = Vpn5gAuthService.freshSession(sessionIn) ?: sessionIn
         val nowSeconds = System.currentTimeMillis() / 1000
         val rowFetch = fetchOwnRow(session)
         // v1.1.25: only a READ row is consistent server truth (see
@@ -411,11 +512,13 @@ object Vpn5gSubscriptionStatus {
         val rowReadable = rowFetch is FetchResult.Found
         val rowCandidate = when (val result = rowFetch) {
             is FetchResult.Found -> {
-                // v1.1.18: the row's plan cap is attached before the
-                // cache is saved, so the cached record meters.
-                val capped = withVolumeCap(result.subscription)
-                if (capped != null) saveCached(capped)
-                capped
+                // v1.1.18: the row's plan cap is attached so the
+                // record meters. v1.1.28: NOT persisted here anymore —
+                // the pre-merge save let a readable none/expired row
+                // overwrite an active cache even when the RPC merge
+                // below was merely Unavailable. Only the final
+                // effective result is persisted (see below).
+                withVolumeCap(result.subscription)
             }
             FetchResult.NoRow -> {
                 // v1.1.25: do NOT overwrite the cache with "none" yet.
@@ -493,18 +596,46 @@ object Vpn5gSubscriptionStatus {
         // no row and no live grant clears the cache to "none" so a
         // stale active entry cannot linger; an Unavailable RPC
         // never demotes anything.
-        if (result != null &&
+        val resultActive = result != null &&
             (isSubscriber(result, nowSeconds, volume) ||
                 isGiftTier(result, nowSeconds, volume))
+        when (
+            cachePersistDecision(
+                resultActive = resultActive,
+                rowIsNone = rowCandidate?.status == "none",
+                serverIsNone =
+                    serverResult is Vpn5gAuthService.ServerSubscriptionResult.None,
+                hasTrustedRedeemed = trustedRedeemed != null,
+            )
         ) {
-            saveCached(result)
-        } else if (rowCandidate?.status == "none" &&
-            serverResult is Vpn5gAuthService.ServerSubscriptionResult.None &&
-            trustedRedeemed == null
-        ) {
-            saveCached(Vpn5gUserSubscription(status = "none"))
+            CachePersist.ACTIVE_RESULT -> result?.let { saveCached(it) }
+            CachePersist.NONE -> saveCached(Vpn5gUserSubscription(status = "none"))
+            CachePersist.KEEP -> Unit
         }
         return result
+    }
+
+    /** What [refresh] may write to the row cache after the merge (v1.1.28). */
+    internal enum class CachePersist { ACTIVE_RESULT, NONE, KEEP }
+
+    /**
+     * Post-merge persistence decision (v1.1.28, extracted pure):
+     * an ACTIVE effective result is always saved; a definitive
+     * server "none" with a none row and no trusted redeemed grant
+     * clears the cache to "none"; everything else — notably a
+     * readable none row while the RPC is merely Unavailable —
+     * keeps the existing cache untouched, so an active cached
+     * grant survives an inconclusive refresh. Pure, JVM-tested.
+     */
+    internal fun cachePersistDecision(
+        resultActive: Boolean,
+        rowIsNone: Boolean,
+        serverIsNone: Boolean,
+        hasTrustedRedeemed: Boolean,
+    ): CachePersist = when {
+        resultActive -> CachePersist.ACTIVE_RESULT
+        rowIsNone && serverIsNone && !hasTrustedRedeemed -> CachePersist.NONE
+        else -> CachePersist.KEEP
     }
 
     /**

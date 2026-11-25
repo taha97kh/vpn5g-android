@@ -152,6 +152,61 @@ object Vpn5gAuthService {
         MmkvManager.encodeSettings(KEY_AUTH_SESSION_JSON, JsonUtil.toJson(normalized))
     }
 
+    /** Renew the access token this many seconds before it expires. */
+    private const val TOKEN_REFRESH_SKEW_SECONDS = 60L
+
+    /**
+     * True when [session]'s access token is expired (or within the
+     * skew window) AND a refresh token exists to renew it with
+     * (v1.1.28). Unknown expiry = no proactive refresh (the
+     * pre-1.1.28 behavior). Pure, JVM-tested.
+     */
+    internal fun needsTokenRefresh(
+        session: Vpn5gAuthSession?,
+        nowEpochSeconds: Long,
+    ): Boolean {
+        if (session == null) return false
+        if (session.refreshToken.isNullOrBlank()) return false
+        val expiresAt = session.expiresAtEpochSeconds ?: return false
+        return expiresAt <= nowEpochSeconds + TOKEN_REFRESH_SKEW_SECONDS
+    }
+
+    /**
+     * Returns a session with a live access token (v1.1.28): when
+     * the stored token is expired, exchanges the refresh token
+     * (POST /auth/v1/token?grant_type=refresh_token), persists the
+     * renewed session and returns it. Any failure — offline, HTTP
+     * error, unparsable body — returns the ORIGINAL session
+     * unchanged, so callers degrade exactly as before (the
+     * anon-key RPC path never needed the token). Never throws;
+     * never logs tokens.
+     */
+    suspend fun freshSession(session: Vpn5gAuthSession?): Vpn5gAuthSession? {
+        if (session == null) return null
+        val nowSeconds = System.currentTimeMillis() / 1000
+        if (!needsTokenRefresh(session, nowSeconds)) return session
+        val refreshToken = session.refreshToken ?: return session
+        val result = postRaw(
+            path = "/auth/v1/token?grant_type=refresh_token",
+            body = """{"refresh_token":"${jsonEscape(refreshToken)}"}""",
+        ) ?: return session
+        if (result.first !in 200..299) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gAuthService: token refresh HTTP ${result.first}",
+            )
+            return session
+        }
+        val renewed = parseSession(result.second, session.email.orEmpty())
+            ?: return session
+        val merged = renewed.copy(
+            email = renewed.email ?: session.email,
+            userId = renewed.userId ?: session.userId,
+        )
+        saveSession(merged)
+        return merged
+    }
+
     /**
      * Flow 1: direct signup (supabase.auth.signUp), guarded by the
      * one-account-per-IP+email rule. Requires a password — GoTrue has

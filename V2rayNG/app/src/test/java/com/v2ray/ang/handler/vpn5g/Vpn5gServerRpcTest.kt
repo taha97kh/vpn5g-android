@@ -328,6 +328,56 @@ class Vpn5gServerRpcTest {
     }
 
     @Test
+    fun test_parse_subscription_live_payload_1_1_28() {
+        // The EXACT body the live get_subscription_status RPC
+        // returned on 2026-11-25 for the real sub_12 grant. On
+        // 1.1.26 the app showed «اشتراک شما تمام شده است» for this
+        // payload (expiry parsed to null on-device). It must parse
+        // to a live subscriber now.
+        val result = Vpn5gAuthService.parseServerSubscription(
+            """{"plan":"sub_12","status":"active","expires_at":"2027-11-20T13:29:01.336555+00:00"}"""
+        )
+        assertTrue(result is Vpn5gAuthService.ServerSubscriptionResult.Found)
+        val found = result as Vpn5gAuthService.ServerSubscriptionResult.Found
+        assertEquals("active", found.subscription.status)
+        assertEquals("sub_12", found.subscription.plan)
+        assertEquals(1_826_717_341L, found.subscription.expiresAtEpochSeconds)
+        val now = Vpn5gSubscriptionStatus.parseIsoToEpoch("2026-11-25T00:00:00Z")!!
+        assertTrue(
+            Vpn5gSubscriptionStatus.isSubscriber(found.subscription, now)
+        )
+        assertEquals(
+            Vpn5gSubscriptionStatus.Vpn5gTier.SUBSCRIBER,
+            Vpn5gSubscriptionStatus.tierOf(found.subscription, now),
+        )
+    }
+
+    @Test
+    fun test_needs_token_refresh() {
+        val now = 1_800_000_000L
+        fun session(expiresAt: Long?, refresh: String?) =
+            Vpn5gAuthService.Vpn5gAuthSession(
+                email = "user@example.com",
+                accessToken = "access",
+                refreshToken = refresh,
+                expiresAtEpochSeconds = expiresAt,
+            )
+        // Expired token + refresh token → refresh.
+        assertTrue(Vpn5gAuthService.needsTokenRefresh(session(now - 10, "r"), now))
+        // Inside the 60 s skew window → refresh.
+        assertTrue(Vpn5gAuthService.needsTokenRefresh(session(now + 30, "r"), now))
+        // Comfortably live token → no refresh.
+        assertTrue(!Vpn5gAuthService.needsTokenRefresh(session(now + 3_600, "r"), now))
+        // No refresh token → cannot refresh.
+        assertTrue(!Vpn5gAuthService.needsTokenRefresh(session(now - 10, null), now))
+        assertTrue(!Vpn5gAuthService.needsTokenRefresh(session(now - 10, " "), now))
+        // Unknown expiry → no proactive refresh (legacy behavior).
+        assertTrue(!Vpn5gAuthService.needsTokenRefresh(session(null, "r"), now))
+        // No session → no refresh.
+        assertTrue(!Vpn5gAuthService.needsTokenRefresh(null, now))
+    }
+
+    @Test
     fun test_parse_subscription_unavailable_without_status() {
         assertTrue(
             Vpn5gAuthService.parseServerSubscription("garbage") is
