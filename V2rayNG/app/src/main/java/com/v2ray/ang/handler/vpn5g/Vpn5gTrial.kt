@@ -112,7 +112,12 @@ object Vpn5gTrial {
                 ?.filterKeys { it.isNotBlank() }
                 .orEmpty()
         } catch (e: Exception) {
-            LogUtil.e(AppConfig.TAG, "Vpn5gTrial: record parse failed", e)
+            // runCatching: LogUtil hits android.util.Log, which is
+            // a throwing stub in JVM unit tests — logging must
+            // never break the parse fallback.
+            runCatching {
+                LogUtil.e(AppConfig.TAG, "Vpn5gTrial: record parse failed", e)
+            }
             emptyMap()
         }
     }

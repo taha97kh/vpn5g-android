@@ -236,7 +236,12 @@ object Vpn5gRemoteCommands {
             val parsed = JsonUtil.fromJsonSafe(json, Array<String>::class.java)
             parsed?.filter { it.isNotBlank() }?.toSet().orEmpty()
         } catch (e: Exception) {
-            LogUtil.e(AppConfig.TAG, "Vpn5gRemoteCommands: id store parse failed", e)
+            // runCatching: LogUtil hits android.util.Log, which is
+            // a throwing stub in JVM unit tests — logging must
+            // never break the parse fallback.
+            runCatching {
+                LogUtil.e(AppConfig.TAG, "Vpn5gRemoteCommands: id store parse failed", e)
+            }
             emptySet()
         }
     }
