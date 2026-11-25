@@ -5486,16 +5486,18 @@ private fun Vpn5gConnectSwitch(
     }
     // The thumb slides back and forth while connecting. The infinite
     // transition's value is read ONLY while connecting, so it does
-    // not recompose the switch in any other state.
+    // not recompose the switch in any other state. (animateFloat, not
+    // animateDp: this Compose version has no animateDp on
+    // InfiniteTransition.)
     val slideTransition = rememberInfiniteTransition(label = "vpn5g_switch_slide")
-    val slideState = slideTransition.animateDp(
-        initialValue = 0.dp,
-        targetValue = travel,
+    val slideFraction by slideTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
             animation = tween(900, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse,
         ),
-        label = "vpn5g_switch_slide_offset",
+        label = "vpn5g_switch_slide_fraction",
     )
     // Settled positions animate once (off ↔ on, on → off while
     // disconnecting); the connecting slide is direct.
@@ -5505,7 +5507,7 @@ private fun Vpn5gConnectSwitch(
         label = "vpn5g_switch_thumb",
     )
     val thumbOffset = if (visual == Vpn5gConnectSwitchVisual.CONNECTING) {
-        slideState.value
+        travel * slideFraction
     } else {
         settledOffset
     }
