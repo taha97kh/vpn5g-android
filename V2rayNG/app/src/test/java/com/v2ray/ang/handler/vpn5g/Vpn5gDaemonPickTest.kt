@@ -58,14 +58,26 @@ class Vpn5gDaemonPickTest {
             "failed",
             Vpn5gDaemonPick.pickNext(candidates, emptySet(), setOf("failed"))?.guid,
         )
-        // Unknown-delay not-failed beats measured failed (tier order).
+        // Tier order: a measured (delay > 0) failed-store server
+        // still beats a never-measured fresh one — a known-fast
+        // server that failed hours ago is a better bet than an
+        // unknown quantity.
         val mixed = listOf(
             candidate("failedMeasured", 50),
             candidate("freshUnknown", 0),
         )
         assertEquals(
-            "freshUnknown",
+            "failedMeasured",
             Vpn5gDaemonPick.pickNext(mixed, emptySet(), setOf("failedMeasured"))?.guid,
+        )
+        // With no measured candidate at all, not-failed wins.
+        val unmeasured = listOf(
+            candidate("failedUnknown", 0),
+            candidate("freshUnknown", 0),
+        )
+        assertEquals(
+            "freshUnknown",
+            Vpn5gDaemonPick.pickNext(unmeasured, emptySet(), setOf("failedUnknown"))?.guid,
         )
     }
 
