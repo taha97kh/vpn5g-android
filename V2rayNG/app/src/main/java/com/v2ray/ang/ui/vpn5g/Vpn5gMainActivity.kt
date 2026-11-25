@@ -148,6 +148,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gNetworkProfile
 import com.v2ray.ang.handler.vpn5g.Vpn5gOperator
 import com.v2ray.ang.handler.vpn5g.Vpn5gPromoCodes
 import com.v2ray.ang.handler.vpn5g.Vpn5gRecoveryLink
+import com.v2ray.ang.handler.vpn5g.Vpn5gRemoteCommands
 import com.v2ray.ang.handler.vpn5g.Vpn5gRemoteConfig
 import com.v2ray.ang.handler.vpn5g.Vpn5gRouting
 import com.v2ray.ang.handler.vpn5g.Vpn5gRoutingMode
@@ -206,6 +207,12 @@ enum class Vpn5gServerTab { FREE, ALL, SPECIAL }
 enum class Vpn5gTunnelState { IDLE, VERIFYING, VERIFIED, FAILED, UNKNOWN, SWITCHING }
 
 enum class Vpn5gPromoStatus { IDLE, VALID, UNKNOWN_CODE, EXHAUSTED, ALREADY_REDEEMED, INVALID, REDEEMED, EXPIRED, NOT_YOURS, NOT_SIGNED_IN, WRONG_SECTION, INVALID_EMAIL, NO_REGISTRATION, SERVER_UNAVAILABLE, NOT_APPLIED }
+
+/** A remote show_message command (v1.1.26): shown once as a dialog. */
+data class Vpn5gRemoteMessageUi(
+    val title: String,
+    val text: String,
+)
 
 /** A manually picked server that turned out unusable (v1.1.5 §3). */
 data class Vpn5gManualFailure(
@@ -334,6 +341,16 @@ data class Vpn5gHomeUiState(
     val updateDownloading: Boolean = false,
     /** Download progress 0..1 while downloading. */
     val updateDownloadProgress: Float = 0f,
+    /**
+     * Forced update (v1.1.26, contract v1): true when the published
+     * min_version (or a force_update command) is above the installed
+     * version — a non-dismissible update dialog blocks the app.
+     */
+    val forcedUpdateRequired: Boolean = false,
+    /** The version the forced update demands (display only). */
+    val forcedUpdateVersion: String? = null,
+    /** A remote show_message command waiting to be shown (v1.1.26). */
+    val remoteMessage: Vpn5gRemoteMessageUi? = null,
     /** Remote ad config (v1.1.15): null = no ad config published, no ad. */
     val ads: AdsRemote? = null,
     /** Interstitial ad currently on screen, or null (v1.1.15). */
@@ -1156,7 +1173,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     plans = cached.plans,
                     paymentGateway = cached.payment_gateway,
                     trialEnabled = cached.trial_enabled ?: false,
-                    trialHours = cached.trial_hours ?: 24,
+                    trialHours = Vpn5gRemoteCommands.clampTrialHours(cached.trial_hours),
                     signedInEmail = Vpn5gAuthService.currentSession()?.email,
                     userSubscription = effective,
                     isSubscriber = subscriber,
@@ -1252,30 +1269,250 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     fun refreshConfig() {
         viewModelScope.launch(Dispatchers.IO) {
-            val fresh = runCatching { Vpn5gRemoteConfig.fetch() }.getOrNull() ?: return@launch
+            // v1.1.26 (contract v1): commands run ONLY from a
+            // successfully fetched config — on fetch failure the app
+            // continues with the cached config and executes nothing.
+            val (fresh, fetched) = runCatching {
+                Vpn5gRemoteConfig.fetchWithStatus()
+            }.getOrNull() ?: return@launch
+            applyRemoteConfig(fresh, executeCommands = fetched)
+        }
+    }
+
+    /**
+     * Applies one remote config to the UI state (v1.1.26): plans,
+     * ads, codes, announcement, notice banner, trial settings and
+     * the min_version forced-update gate — then, when
+     * [executeCommands] is true (a real network fetch, or the
+     * cached config at startup where execute-once makes it safe),
+     * runs the bot's remote commands. Never throws.
+     */
+    private fun applyRemoteConfig(config: AppConfigRemote, executeCommands: Boolean) {
+        val belowMin = Vpn5gRemoteCommands.isBelowMinVersion(
+            BuildConfig.VERSION_NAME, config.min_version,
+        )
+        _uiState.update {
+            it.copy(
+                announcement = visibleAnnouncement(config),
+                ads = config.ads,
+                promoCodes = config.codes,
+                plans = config.plans,
+                paymentGateway = config.payment_gateway,
+                trialEnabled = config.trial_enabled ?: it.trialEnabled,
+                trialHours = Vpn5gRemoteCommands.clampTrialHours(
+                    config.trial_hours ?: it.trialHours
+                ),
+                // Contract v1: a null/blank notice HIDES the banner —
+                // the published value replaces, never merges.
+                notice = config.notice?.takeIf { text -> text.isNotBlank() },
+                subscriptionStatus = config.subscription_status ?: it.subscriptionStatus,
+                forcedUpdateRequired = it.forcedUpdateRequired || belowMin,
+                forcedUpdateVersion = if (belowMin) {
+                    config.min_version ?: it.forcedUpdateVersion
+                } else {
+                    it.forcedUpdateVersion
+                },
+            )
+        }
+        if (belowMin) forceUpdateCheck()
+        if (executeCommands) executeRemoteCommands(config)
+    }
+
+    /**
+     * Runs the bot's remote commands from [config] (v1.1.26,
+     * contract v1): planned by [Vpn5gRemoteCommands.plan]
+     * (execute-once, expiry, order, unknown-type and other-user
+     * rules), executed here where the UI state lives. Each command
+     * is marked executed in MMKV so it never runs twice — before
+     * the action for state-changing ones (reload/logout/force
+     * update, which could otherwise loop), after it for the rest.
+     * Never throws.
+     */
+    private fun executeRemoteCommands(config: AppConfigRemote) {
+        val planned = runCatching {
+            Vpn5gRemoteCommands.plan(
+                commands = config.commands,
+                executedIds = Vpn5gRemoteCommands.loadExecutedIds(),
+                nowMs = System.currentTimeMillis(),
+                currentEmail = Vpn5gAuthService.currentSession()?.email,
+            )
+        }.getOrDefault(emptyList())
+        if (planned.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            for (item in planned) {
+                val id = item.command.id?.trim().orEmpty()
+                if (id.isEmpty()) continue
+                val markFirst = item.action is Vpn5gRemoteCommands.Action.ReloadConfig ||
+                    item.action is Vpn5gRemoteCommands.Action.Logout ||
+                    item.action is Vpn5gRemoteCommands.Action.ForceUpdate
+                if (markFirst) {
+                    runCatching { Vpn5gRemoteCommands.markExecuted(id) }
+                }
+                runCatching { executeRemoteAction(item.action, config) }
+                    .onFailure {
+                        LogUtil.e(
+                            AppConfig.TAG,
+                            "Vpn5gHomeViewModel: remote command $id failed",
+                            it,
+                        )
+                    }
+                if (!markFirst) {
+                    runCatching { Vpn5gRemoteCommands.markExecuted(id) }
+                }
+            }
+        }
+    }
+
+    /** Executes one planned remote action. Never throws to the caller. */
+    private fun executeRemoteAction(
+        action: Vpn5gRemoteCommands.Action,
+        config: AppConfigRemote,
+    ) {
+        when (action) {
+            Vpn5gRemoteCommands.Action.RefreshSubscription ->
+                refreshSubscriptionAndLocks(force = true)
+            is Vpn5gRemoteCommands.Action.ShowMessage ->
+                _uiState.update {
+                    it.copy(
+                        remoteMessage = Vpn5gRemoteMessageUi(
+                            title = action.title,
+                            text = action.text,
+                        )
+                    )
+                }
+            Vpn5gRemoteCommands.Action.ClearCache -> {
+                // Local caches only — login, subscription, redeemed
+                // grants, trial and executed-command ids are NOT
+                // cache and are never touched here.
+                listOf(
+                    Vpn5gConstants.KEY_REAL_PING_KEYS_CSV,
+                    Vpn5gConstants.KEY_HEALTH_SCORES_JSON,
+                    Vpn5gConstants.KEY_FAILED_GUIDS_JSON,
+                    Vpn5gConstants.KEY_OPERATOR_HISTORY_JSON,
+                    Vpn5gConstants.KEY_AD_IMPRESSIONS_JSON,
+                    Vpn5gConstants.KEY_ANNOUNCEMENT_DISMISSED,
+                ).forEach { key -> MmkvManager.encodeSettings(key, "") }
+                refresh()
+            }
+            is Vpn5gRemoteCommands.Action.ForceUpdate -> {
+                _uiState.update {
+                    it.copy(
+                        forcedUpdateRequired = true,
+                        forcedUpdateVersion = action.version
+                            ?: config.min_version
+                            ?: it.forcedUpdateVersion,
+                    )
+                }
+                forceUpdateCheck()
+            }
+            Vpn5gRemoteCommands.Action.ReloadConfig -> refreshConfig()
+            is Vpn5gRemoteCommands.Action.SetConfig -> applySetConfig(action)
+            Vpn5gRemoteCommands.Action.Logout -> signOut()
+        }
+    }
+
+    /**
+     * Applies one `set_config` command (v1.1.26): only the known
+     * keys act (the planner already filtered); notice/trial/
+     * min_version apply to the UI at once, the rest are stored raw
+     * for their owners. Unknown values never crash anything.
+     */
+    private fun applySetConfig(action: Vpn5gRemoteCommands.Action.SetConfig) {
+        val value = action.value
+        when (action.key) {
+            "notice" -> _uiState.update {
+                it.copy(
+                    notice = value?.takeIf { v ->
+                        v.isJsonPrimitive && v.asJsonPrimitive.isString
+                    }?.asString?.takeIf { text -> text.isNotBlank() }
+                )
+            }
+            "trial_enabled" -> _uiState.update {
+                it.copy(
+                    trialEnabled = value?.takeIf { v ->
+                        v.isJsonPrimitive && v.asJsonPrimitive.isBoolean
+                    }?.asBoolean ?: it.trialEnabled
+                )
+            }
+            "trial_hours" -> _uiState.update {
+                it.copy(
+                    trialHours = Vpn5gRemoteCommands.clampTrialHours(
+                        value?.takeIf { v ->
+                            v.isJsonPrimitive && v.asJsonPrimitive.isNumber
+                        }?.asInt ?: it.trialHours
+                    )
+                )
+            }
+            "min_version" -> {
+                val minVersion = value?.takeIf { v ->
+                    v.isJsonPrimitive && v.asJsonPrimitive.isString
+                }?.asString
+                if (Vpn5gRemoteCommands.isBelowMinVersion(
+                        BuildConfig.VERSION_NAME, minVersion,
+                    )
+                ) {
+                    _uiState.update {
+                        it.copy(
+                            forcedUpdateRequired = true,
+                            forcedUpdateVersion = minVersion,
+                        )
+                    }
+                    forceUpdateCheck()
+                }
+            }
+            else -> {
+                // config_sources / subscription_status /
+                // payment_gateway: stored raw for their owners;
+                // the next published config remains the authority.
+                MmkvManager.encodeSettings(
+                    "vpn5g_setconfig_${action.key}",
+                    value?.toString().orEmpty(),
+                )
+                LogUtil.i(
+                    AppConfig.TAG,
+                    "Vpn5gHomeViewModel: set_config stored ${action.key}",
+                )
+            }
+        }
+    }
+
+    /** Dismisses the remote show_message dialog (v1.1.26). */
+    fun dismissRemoteMessage() {
+        _uiState.update { it.copy(remoteMessage = null) }
+    }
+
+    /**
+     * Forced-update release lookup (v1.1.26): like [checkForUpdate]
+     * but ignoring the daily interval — the admin demanded this
+     * update now. Fills [pendingUpdateAsset] so the forced dialog's
+     * button can download + install through the existing flow.
+     * Silent on failure (the dialog stays; the user can retry).
+     */
+    private fun forceUpdateCheck() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val release = Vpn5gAppUpdate.fetchLatest() ?: return@launch
+            val asset = Vpn5gAppUpdate.pickPlaystoreApkAsset(release) ?: return@launch
+            pendingUpdateAsset = asset
             _uiState.update {
                 it.copy(
-                    announcement = visibleAnnouncement(fresh),
-                    ads = fresh.ads,
-                    promoCodes = fresh.codes,
-                    plans = fresh.plans,
-                    paymentGateway = fresh.payment_gateway,
-                    trialEnabled = fresh.trial_enabled ?: it.trialEnabled,
-                    trialHours = fresh.trial_hours ?: it.trialHours,
-                    notice = fresh.notice ?: it.notice,
-                    subscriptionStatus = fresh.subscription_status ?: it.subscriptionStatus,
+                    updateAvailable = true,
+                    updateVersion = Vpn5gAppUpdate.displayVersion(release.tagName)
+                        .ifEmpty { it.forcedUpdateVersion },
                 )
             }
         }
     }
 
     fun refresh() {
-        refreshInternal(onProgress = null, finishStartup = false)
+        // v1.1.26 (Aref): manual refresh lands servers + app config
+        // inside 5 s — fast path; verification continues behind.
+        refreshInternal(onProgress = null, finishStartup = false, fast = true)
     }
 
     private fun refreshInternal(
         onProgress: ((Vpn5gStartupProgress.Stage, Float) -> Unit)?,
         finishStartup: Boolean,
+        fast: Boolean = false,
     ) {
         if (_uiState.value.isRefreshing) return
         viewModelScope.launch(Dispatchers.IO) {
@@ -1289,6 +1526,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     getApplication<Application>(),
                     skipRealProbe = _uiState.value.isRunning,
                     onProgress = onProgress,
+                    fast = fast,
                 )
                 val cached = Vpn5gRemoteConfig.cached()
                 // v1.1.11: refresh the per-user subscription BEFORE
@@ -1331,7 +1569,7 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         plans = cached.plans,
                         paymentGateway = cached.payment_gateway,
                         trialEnabled = cached.trial_enabled ?: false,
-                        trialHours = cached.trial_hours ?: 24,
+                        trialHours = Vpn5gRemoteCommands.clampTrialHours(cached.trial_hours),
                         signedInEmail = Vpn5gAuthService.currentSession()?.email,
                         startupProgress = if (finishStartup) 1f else it.startupProgress,
                         // v1.1.16: the quick first-screen path may have
@@ -1355,6 +1593,34 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 refreshSelection()
                 enrichCountries()
+                // v1.1.26: the config this refresh fetched (or kept)
+                // also drives the min_version gate and the bot's
+                // remote commands. Commands run only when the fetch
+                // actually landed (not offline) — contract v1.
+                applyRemoteConfig(cached, executeCommands = !result.offline)
+                // v1.1.26 (fast refresh): the real-ping verification
+                // the fast path skipped continues HERE, in the
+                // background — the refreshed list is already on
+                // screen inside the 5 s budget, and proven servers
+                // join it as the probe verifies them.
+                if (fast && !_uiState.value.isRunning) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        val verified = runCatching {
+                            Vpn5gSync.warmProbeStoredProfiles(getApplication())
+                        }.getOrDefault(0)
+                        if (verified > 0 && !_uiState.value.isRunning) {
+                            val probed = runCatching {
+                                Vpn5gSync.loadGroupedServers(
+                                    forceFreeTier = tamperDetected
+                                )
+                            }.getOrElse { emptyList() }
+                            if (probed.isNotEmpty()) {
+                                _uiState.update { it.copy(countries = probed) }
+                                refreshSelection()
+                            }
+                        }
+                    }
+                }
                 // v1.1.25: no startup auto-connect (user tap only).
             } catch (e: Exception) {
                 LogUtil.e(AppConfig.TAG, "Vpn5gHomeViewModel: refresh failed", e)
@@ -1953,7 +2219,13 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      * A failed download shows a toast and leaves the card for a retry.
      */
     fun startUpdateDownload() {
-        val asset = pendingUpdateAsset ?: return
+        // v1.1.26: the forced-update dialog can be tapped before
+        // the release lookup landed — fetch it, then the user taps
+        // again (or the daily-check asset is already there).
+        val asset = pendingUpdateAsset ?: run {
+            forceUpdateCheck()
+            return
+        }
         val url = asset.browserDownloadUrl ?: return
         if (_uiState.value.updateDownloading) return
         updateDownloadJob = viewModelScope.launch(Dispatchers.IO) {
@@ -3779,6 +4051,10 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         // never be stale after a return to the app — refresh them
         // (debounced inside; the server row is best-effort).
         viewModel.refreshSubscriptionAndLocks()
+        // v1.1.26 (contract v1): app_config.json is also re-read on
+        // every return to the foreground, so bot-published settings
+        // and remote commands land without waiting for the ticker.
+        viewModel.refreshConfig()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -4198,6 +4474,61 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                 confirmButton = {
                     TextButton(onClick = { showBellAnnouncement = false }) {
                         Text(stringResource(R.string.vpn5g_close))
+                    }
+                },
+            )
+        }
+
+        // Remote show_message command (v1.1.26): an admin message
+        // from the bot, shown once (execute-once in the ViewModel).
+        uiState.remoteMessage?.let { remoteMessage ->
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissRemoteMessage() },
+                title = {
+                    if (remoteMessage.title.isNotBlank()) {
+                        Text(remoteMessage.title)
+                    }
+                },
+                text = { Text(remoteMessage.text) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.dismissRemoteMessage() }) {
+                        Text(stringResource(R.string.vpn5g_close))
+                    }
+                },
+            )
+        }
+
+        // Forced update (v1.1.26, contract v1): min_version above
+        // the installed version (or a force_update command) blocks
+        // the app behind a NON-dismissible dialog — no "later".
+        if (uiState.forcedUpdateRequired) {
+            AlertDialog(
+                onDismissRequest = { /* forced: no dismiss */ },
+                title = { Text(stringResource(R.string.vpn5g_update_title)) },
+                text = {
+                    Text(
+                        stringResource(
+                            R.string.vpn5g_update_body,
+                            uiState.forcedUpdateVersion
+                                ?: uiState.updateVersion.orEmpty(),
+                        )
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = { viewModel.startUpdateDownload() },
+                        enabled = !uiState.updateDownloading,
+                    ) {
+                        Text(
+                            if (uiState.updateDownloading) {
+                                stringResource(
+                                    R.string.vpn5g_update_downloading,
+                                    (uiState.updateDownloadProgress * 100).toInt(),
+                                )
+                            } else {
+                                stringResource(R.string.vpn5g_update_button)
+                            }
+                        )
                     }
                 },
             )

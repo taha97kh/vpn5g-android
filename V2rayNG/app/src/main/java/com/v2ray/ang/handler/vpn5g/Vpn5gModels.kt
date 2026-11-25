@@ -46,6 +46,30 @@ data class AppConfigRemote(
     val announcement: AnnouncementRemote? = null,
     /** Ads: interstitial + user-submitted ads + pricing (v1.1.15). Null = no ads. */
     val ads: AdsRemote? = null,
+    /**
+     * Remote commands (v1.1.26, remote-control contract v1): admin
+     * commands published by the bot. The array always mirrors the
+     * bot's pending list (each publish replaces it whole). Null =
+     * key absent = no commands. Executed once per [RemoteCommandRemote.id]
+     * — see [Vpn5gRemoteCommands].
+     */
+    val commands: List<RemoteCommandRemote>? = null,
+)
+
+/**
+ * One remote command from app_config.json (v1.1.26, contract v1).
+ * [payload] stays a raw [com.google.gson.JsonObject] so unknown or
+ * future fields never break parsing; the planner in
+ * [Vpn5gRemoteCommands] extracts exactly the fields each type needs.
+ * [created_at]/[expires_at] are UTC "YYYY-MM-DD HH:MM:SS" (space
+ * separator); ISO-8601 with T is also accepted by the parser.
+ */
+data class RemoteCommandRemote(
+    val id: String? = null,
+    val type: String? = null,
+    val payload: com.google.gson.JsonObject? = null,
+    val created_at: String? = null,
+    val expires_at: String? = null,
 )
 
 /**

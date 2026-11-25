@@ -35,13 +35,14 @@ valid JSON; the app ignores unknown fields.
 | `notice` | string \| null | no | `null` | Short announcement shown at the top of the home screen (e.g. maintenance). `null` or absent hides it. |
 | `announcement` | object \| null | no | `null` | Admin-published app announcement (v1.1.5): a dismissible card on the home screen. `null` or absent hides it. See below. |
 | `config_sources` | array of strings (URLs) | no | `[]` | Extra config sources fetched in addition to the built-in defaults. Each URL must return plain-text config URIs, one per line (`vmess://`, `vless://`, `trojan://`, `ss://`). Duplicates are de-duplicated; a failing source is skipped. |
-| `min_version` | string \| null | no | `null` | Reserved for v2 (minimum app version that may use the configs). v1 reads it but does not enforce it. |
+| `min_version` | string \| null | no | `null` | **(v1.1.26, enforced)** Minimum app version allowed to run. Numeric part-by-part compare (1.1.9 < 1.1.24). Installed < min → non-dismissible forced-update dialog (existing download path). `null`/absent = no gate. |
 | `subscription_status` | object \| null | no | `null` | The subscription status shown on the Subscription screen. `null` shows "no subscription". See below. |
 | `codes` | array of objects \| null | no | `null` | Admin-managed discount/gift codes. `null` or absent means no codes — every entered code is rejected as unknown. See below. |
 | `plans` | array of objects \| null | no | `null` | Admin-managed subscription plans (monthly/yearly) with prices in Toman. `null` or absent means no plan cards — the Premium screen shows only the comparison table and the bot purchase button. See below. |
 | `payment_gateway` | object \| null | no | `null` | Direct bank payment gateway settings. `null` or absent means the gateway row is shown as coming soon and routes to the bot. See below. |
-| `trial_enabled` | boolean \| null | no | `false` | Whether the 24h free trial is offered on the plans. |
-| `trial_hours` | integer \| null | no | `24` | Free-trial length in hours (24 per the product rule). |
+| `trial_enabled` | boolean \| null | no | `false` | **(v1.1.26, enforced)** Whether the free trial is offered. The bot only declares it; start/end logic is the app's: one trial per account (normalized email), starts on the first subscription refresh of a signed-in user with no other active grant, grants the gift tier while running, survives sign-out. `false` = a running trial is ignored (record kept, never extended). |
+| `trial_hours` | integer \| null | no | `24` | Free-trial length in hours, clamped to 1–720 by the app. |
+| `commands` | array of objects \| null | no | `null` | **(v1.1.26)** Remote-control commands from the bot admin panel. Absent/`null` = no commands. See "Remote commands (contract v1)" below. |
 | `ads` | object \| null | no | `null` | **(v1.1.15)** Interstitial + user-submitted ads: admin interstitial, user ads with schedule/caps, and per-model prices. `null` or absent means NO ad is ever shown. See below. |
 
 ### `subscription_status`
@@ -449,3 +450,57 @@ commerce works end to end:
     connecting when the cached tier is premium (3 s bound) and merges it
     with the cached row on every refresh — it is the server-side
     authority for VIP access (the local cache is only a display hint).
+
+## Remote commands (contract v1, v1.1.26)
+
+The bot admin panel can publish a `commands` array; the app executes
+each command **once, without user confirmation**, in array order:
+
+```json
+"commands": [
+  {
+    "id": "cmd-2026-11-25-001",
+    "type": "refresh_subscription",
+    "payload": {"email": null},
+    "created_at": "2026-11-25 10:00:00",
+    "expires_at": "2026-11-26 10:00:00"
+  }
+]
+```
+
+Consumption rules (app side, `Vpn5gRemoteCommands`):
+
+- **Execute-once**: executed ids are persisted (MMKV, capped at 200);
+  a command whose id was already executed never runs again.
+  State-changing commands (`reload_config`, `logout`,
+  `force_update`) are marked before running so they cannot loop.
+- **Expiry**: `expires_at` is `"YYYY-MM-DD HH:MM:SS"` in UTC (ISO
+  `T`/`Z` also accepted). Expired commands are skipped; a missing or
+  unparsable expiry never expires.
+- **Order**: array order. **Unknown `type`** is ignored.
+- **Targeting**: `payload.email` null/absent = the current signed-in
+  user. A command addressed to another account is skipped (and not
+  marked executed).
+- **Fetch failure**: the app keeps the last cached config and runs
+  **no new commands**. Config is re-read at launch, on every
+  `onResume`, and at most every 5 minutes.
+- **Idempotency**: every action is safe to repeat (refresh, clear,
+  reload, logout, message-once via executed ids).
+
+| `type` | `payload` | Effect |
+|---|---|---|
+| `refresh_subscription` | `{"email": str\|null}` | Re-reads `get_subscription_status {"p_email": lowercased}` and refreshes the panel/locks. |
+| `show_message` | `{"title": str, "text": str}` | Shows the message once as a dialog. Blank `text` = skipped. |
+| `clear_cache` | — | Clears local caches (real-ping results, health scores, failed servers, operator history, ad impressions, announcement-dismissed) and refreshes. Login, subscription, redeemed grants, trial and executed ids are never touched. |
+| `force_update` | `{"version": str\|null}` | Non-dismissible update dialog; `null` version = `min_version`. Downloads via the existing update path. |
+| `reload_config` | — | Re-fetches `app_config.json` immediately. |
+| `set_config` | `{"key": str, "value": any}` | Known keys only: `notice`, `min_version`, `trial_enabled`, `trial_hours` (applied to the UI at once), `config_sources`, `subscription_status`, `payment_gateway` (stored raw; the next published config stays the authority). Unknown keys ignored. |
+| `logout` | `{"email": str\|null}` | Signs the current user out. |
+
+Related settings (same contract): `notice` — a non-empty string is
+the home banner, `null`/empty hides it (published value replaces,
+never merges). `min_version` and `trial_enabled`/`trial_hours` are
+enforced as described in the fields table above. Manual refresh
+shows updated servers + config within 5 s (4 s parallel fetch,
+TCP-live list first); real-ping verification continues in the
+background.

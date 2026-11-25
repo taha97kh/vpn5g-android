@@ -464,7 +464,27 @@ object Vpn5gSubscriptionStatus {
         // bytes measured under one grant never end another.
         val volume = Vpn5gVolumeStore.consumedState()
         val merged = effectiveSubscription(rowCandidate, serverSub, nowSeconds, volume)
-        val result = effectiveSubscription(merged, trustedRedeemed, nowSeconds, volume)
+        val withRedeemed = effectiveSubscription(merged, trustedRedeemed, nowSeconds, volume)
+        // v1.1.26 (contract v1): the free trial is the LAST grant
+        // source — it only fills in when row/RPC/redeemed give no
+        // active tier, and it starts (once per account) on the
+        // first refresh where the bot has it enabled. A trial
+        // grant never outranks a real subscription/gift: the merge
+        // order below keeps any active real grant first.
+        val config = runCatching { Vpn5gRemoteConfig.cached() }.getOrNull()
+        val hasActiveGrant = withRedeemed != null &&
+            (isSubscriber(withRedeemed, nowSeconds, volume) ||
+                isGiftTier(withRedeemed, nowSeconds, volume))
+        val trialGrant = runCatching {
+            Vpn5gTrial.grantFor(
+                email = session.email,
+                enabled = config?.trial_enabled == true,
+                hours = config?.trial_hours,
+                hasActiveGrant = hasActiveGrant,
+                nowEpochSeconds = nowSeconds,
+            )
+        }.getOrNull()
+        val result = effectiveSubscription(withRedeemed, trialGrant, nowSeconds, volume)
         // v1.1.25 (recovery persistence): an ACTIVE grant recovered
         // from the RPC (or the merge) is saved to the row cache, so
         // it survives a restart and loadEffective() keeps showing

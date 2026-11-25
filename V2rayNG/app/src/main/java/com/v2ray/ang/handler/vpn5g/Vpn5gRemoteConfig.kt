@@ -35,25 +35,37 @@ object Vpn5gRemoteConfig {
         return parse(json) ?: defaults()
     }
 
-    suspend fun fetch(): AppConfigRemote = withContext(Dispatchers.IO) {
+    suspend fun fetch(timeoutMs: Int = 10_000): AppConfigRemote =
+        fetchWithStatus(timeoutMs).first
+
+    /**
+     * Like [fetch] but also reports whether the network fetch
+     * actually succeeded (v1.1.26, contract v1 rule: on fetch
+     * failure the app continues with the last cached config and
+     * executes NO new remote commands). The boolean is true only
+     * when a fresh, parsable body was downloaded and cached.
+     */
+    suspend fun fetchWithStatus(
+        timeoutMs: Int = 10_000,
+    ): Pair<AppConfigRemote, Boolean> = withContext(Dispatchers.IO) {
         try {
             val body = HttpUtil.getUrlContent(
-                UrlContentRequest(url = APP_CONFIG, timeout = 10_000)
+                UrlContentRequest(url = APP_CONFIG, timeout = timeoutMs)
             )
             if (body.isNullOrBlank()) {
                 LogUtil.w(AppConfig.TAG, "Vpn5gRemoteConfig: empty response, using cache/defaults")
-                return@withContext cached()
+                return@withContext cached() to false
             }
             val parsed = parse(body)
             if (parsed == null) {
                 LogUtil.w(AppConfig.TAG, "Vpn5gRemoteConfig: unparsable response, using cache/defaults")
-                return@withContext cached()
+                return@withContext cached() to false
             }
             MmkvManager.encodeSettings(KEY_APP_CONFIG_JSON, body)
-            parsed
+            parsed to true
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Vpn5gRemoteConfig: fetch failed, using cache/defaults", e)
-            cached()
+            cached() to false
         }
     }
 

@@ -256,14 +256,28 @@ object Vpn5gSync {
      * startup screen's 0→100% bar — it is only called when provided
      * (startup); the 5-minute ticker and manual refresh pass none.
      */
+    /**
+     * Manual-refresh fetch timeout (v1.1.26): the <5 s refresh
+     * budget Aref ordered — sources answer in parallel inside
+     * this, the list shows, and real-ping verification continues
+     * in the background (warm pool) without blocking the UI.
+     */
+    private const val FAST_FETCH_TIMEOUT_MS = 4_000
+
     suspend fun refresh(
         context: Context,
         skipRealProbe: Boolean = false,
         onProgress: ((Vpn5gStartupProgress.Stage, Float) -> Unit)? = null,
+        fast: Boolean = false,
     ): Vpn5gSyncResult = withContext(Dispatchers.IO) {
         try {
             onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_CONFIG, 0f)
-            val remoteConfig = Vpn5gRemoteConfig.fetch()
+            // v1.1.26 (fast manual refresh): the config fetch gets
+            // the same tight timeout so servers + app config land
+            // inside the 5 s budget together.
+            val remoteConfig = Vpn5gRemoteConfig.fetch(
+                timeoutMs = if (fast) FAST_FETCH_TIMEOUT_MS else 10_000,
+            )
             onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_CONFIG, 1f)
 
             val sources = linkedSetOf<String>()
@@ -288,7 +302,10 @@ object Vpn5gSync {
                     async {
                         url to try {
                             HttpUtil.getUrlContent(
-                                UrlContentRequest(url = url, timeout = FETCH_TIMEOUT_MS)
+                                UrlContentRequest(
+                                    url = url,
+                                    timeout = if (fast) FAST_FETCH_TIMEOUT_MS else FETCH_TIMEOUT_MS,
+                                )
                             )
                         } catch (e: Exception) {
                             LogUtil.e(AppConfig.TAG, "Vpn5gSync: fetch failed for $url", e)
@@ -344,7 +361,12 @@ object Vpn5gSync {
                 context = context,
                 live = live,
                 subId = subId,
-                skipRealProbe = skipRealProbe,
+                // v1.1.26 (fast manual refresh): publish the
+                // TCP-live list immediately; the real-ping probe
+                // (45 s budget) must not hold the refresh UI past
+                // the 5 s budget. Verification continues in the
+                // background warm pool, which reloads the list.
+                skipRealProbe = skipRealProbe || fast,
                 probeCount = Vpn5gConstants.REAL_PING_CANDIDATES,
                 probeBudgetMs = Vpn5gConstants.REAL_PING_BUDGET_MS,
                 onProgress = onProgress,

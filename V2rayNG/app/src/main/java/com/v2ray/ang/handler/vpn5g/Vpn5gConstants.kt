@@ -200,6 +200,20 @@ object Vpn5gConstants {
      * stranger; scores decay toward zero with a 24 h half-life so a
      * server that was good last week does not win forever.
      */
+    /**
+     * Executed remote-command ids (v1.1.26, contract v1): JSON array
+     * of command ids already run on this device — each admin command
+     * runs exactly once, even while it stays in the published array.
+     * Capped (oldest pruned); see Vpn5gRemoteCommands.
+     */
+    const val KEY_EXECUTED_COMMAND_IDS_JSON = "vpn5g_executed_command_ids_json"
+    /**
+     * Free-trial records (v1.1.26): JSON map of normalized email →
+     * trial start/length (see Vpn5gTrial). One trial per account;
+     * sign-out does NOT clear it (the trial belongs to the account,
+     * and clearing would hand out a second trial).
+     */
+    const val KEY_TRIAL_JSON = "vpn5g_trial_json"
     const val KEY_HEALTH_SCORES_JSON = "vpn5g_health_scores_json"
     /** Health score half-life: evidence halves every 24 h (v1.1.24). */
     const val HEALTH_HALF_LIFE_MS = 24L * 60L * 60L * 1000L
