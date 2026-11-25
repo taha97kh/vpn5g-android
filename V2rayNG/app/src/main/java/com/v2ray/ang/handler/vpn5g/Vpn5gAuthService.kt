@@ -126,7 +126,12 @@ object Vpn5gAuthService {
         val json = MmkvManager.decodeSettingsString(KEY_AUTH_SESSION_JSON)
         if (json.isNullOrBlank()) return null
         return try {
-            JsonUtil.fromJsonSafe(json, Vpn5gAuthSession::class.java)
+            // v1.1.25: sessions stored before email normalization may
+            // carry a mixed-case email ("Taha@gmail.com") — normalize
+            // on read so every downstream RPC uses the canonical form.
+            JsonUtil.fromJsonSafe(json, Vpn5gAuthSession::class.java)?.let { session ->
+                session.copy(email = session.email?.let { Vpn5gEmailPolicy.normalize(it) })
+            }
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Vpn5gAuthService: session parse failed", e)
             null
@@ -140,7 +145,11 @@ object Vpn5gAuthService {
     }
 
     private fun saveSession(session: Vpn5gAuthSession) {
-        MmkvManager.encodeSettings(KEY_AUTH_SESSION_JSON, JsonUtil.toJson(session))
+        // v1.1.25: only the canonical (lowercase) email is ever stored.
+        val normalized = session.copy(
+            email = session.email?.let { Vpn5gEmailPolicy.normalize(it) }
+        )
+        MmkvManager.encodeSettings(KEY_AUTH_SESSION_JSON, JsonUtil.toJson(normalized))
     }
 
     /**
@@ -157,6 +166,8 @@ object Vpn5gAuthService {
     suspend fun signUp(email: String, password: String): AuthResult =
         withContext(Dispatchers.IO) {
             if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
+            // v1.1.25: canonical lowercase email for every call below.
+            val email = Vpn5gEmailPolicy.normalize(email)
             // Guard first: the public IP, then the server-side check.
             // Any failure here fails CLOSED — no signup is attempted
             // on an unchecked registration.
@@ -207,6 +218,8 @@ object Vpn5gAuthService {
     suspend fun signInWithPassword(email: String, password: String): AuthResult =
         withContext(Dispatchers.IO) {
             if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
+            // v1.1.25: canonical lowercase email (see Vpn5gEmailPolicy).
+            val email = Vpn5gEmailPolicy.normalize(email)
             post(
                 path = "/auth/v1/token?grant_type=password",
                 body = """{"email":"${jsonEscape(email)}","password":"${jsonEscape(password)}"}""",
@@ -242,7 +255,7 @@ object Vpn5gAuthService {
             if (!Vpn5gAuthConfig.isConfigured()) return@withContext AuthResult.NotConfigured
             post(
                 path = "/auth/v1/recover",
-                body = """{"email":"${jsonEscape(email)}","redirect_to":"$RECOVERY_REDIRECT_URL"}""",
+                body = """{"email":"${jsonEscape(Vpn5gEmailPolicy.normalize(email))}","redirect_to":"$RECOVERY_REDIRECT_URL"}""",
             ) { code, _ ->
                 if (code in 200..299) AuthResult.RecoveryLinkSent
                 else AuthResult.Error(recoveryErrorKey(code))
@@ -267,7 +280,7 @@ object Vpn5gAuthService {
             ) { code, _ ->
                 if (code in 200..299) {
                     val session = Vpn5gAuthSession(
-                        email = email,
+                        email = Vpn5gEmailPolicy.normalize(email),
                         accessToken = link.accessToken,
                         refreshToken = link.refreshToken,
                         expiresAtEpochSeconds = link.expiresInSeconds?.let {
@@ -332,7 +345,7 @@ object Vpn5gAuthService {
     private suspend fun checkRegistration(email: String, ip: String): String? {
         val result = postRaw(
             path = "/rest/v1/rpc/check_registration",
-            body = """{"p_email":"${jsonEscape(email)}","p_ip":"${jsonEscape(ip)}"}""",
+            body = """{"p_email":"${jsonEscape(Vpn5gEmailPolicy.normalize(email))}","p_ip":"${jsonEscape(ip)}"}""",
         ) ?: return null
         if (result.first !in 200..299) {
             LogUtil.e(
@@ -358,7 +371,7 @@ object Vpn5gAuthService {
     suspend fun recordCodeRedemption(code: String, email: String): Boolean {
         val result = postRaw(
             path = "/rest/v1/rpc/record_code_redemption",
-            body = """{"p_code":"${jsonEscape(code.trim().uppercase())}","p_email":"${jsonEscape(email.trim())}"}""",
+            body = """{"p_code":"${jsonEscape(code.trim().uppercase())}","p_email":"${jsonEscape(Vpn5gEmailPolicy.normalize(email))}"}""",
         ) ?: return false
         if (result.first !in 200..299) {
             LogUtil.e(
@@ -434,7 +447,7 @@ object Vpn5gAuthService {
     suspend fun validateAndRedeemCode(code: String, email: String): CodeServerResult {
         val result = postRaw(
             path = "/rest/v1/rpc/validate_and_redeem_code",
-            body = """{"p_code":"${jsonEscape(code.trim().uppercase())}","p_email":"${jsonEscape(email.trim())}"}""",
+            body = """{"p_code":"${jsonEscape(code.trim().uppercase())}","p_email":"${jsonEscape(Vpn5gEmailPolicy.normalize(email))}"}""",
         ) ?: return CodeServerResult.Unavailable
         if (result.first !in 200..299) {
             LogUtil.e(
@@ -609,7 +622,7 @@ object Vpn5gAuthService {
     suspend fun recordAdView(adId: String, email: String?): Boolean {
         val result = postRaw(
             path = "/rest/v1/rpc/record_ad_view",
-            body = """{"p_ad_id":"${jsonEscape(adId)}","p_email":"${jsonEscape(email.orEmpty())}"}""",
+            body = """{"p_ad_id":"${jsonEscape(adId)}","p_email":"${jsonEscape(Vpn5gEmailPolicy.normalize(email.orEmpty()))}"}""",
         ) ?: return false
         if (result.first !in 200..299) {
             LogUtil.e(
@@ -631,7 +644,7 @@ object Vpn5gAuthService {
     suspend fun recordAdClick(adId: String, email: String?): Boolean {
         val result = postRaw(
             path = "/rest/v1/rpc/record_ad_click",
-            body = """{"p_ad_id":"${jsonEscape(adId)}","p_email":"${jsonEscape(email.orEmpty())}"}""",
+            body = """{"p_ad_id":"${jsonEscape(adId)}","p_email":"${jsonEscape(Vpn5gEmailPolicy.normalize(email.orEmpty()))}"}""",
         ) ?: return false
         if (result.first !in 200..299) {
             LogUtil.e(
@@ -665,7 +678,7 @@ object Vpn5gAuthService {
     suspend fun fetchServerSubscription(email: String): ServerSubscriptionResult {
         val result = postRaw(
             path = "/rest/v1/rpc/get_subscription_status",
-            body = """{"p_email":"${jsonEscape(email.trim())}"}""",
+            body = """{"p_email":"${jsonEscape(Vpn5gEmailPolicy.normalize(email))}"}""",
         ) ?: return ServerSubscriptionResult.Unavailable
         if (result.first !in 200..299) {
             LogUtil.e(
@@ -722,7 +735,7 @@ object Vpn5gAuthService {
     suspend fun ensureRegistrationRow(email: String): Boolean {
         if (email.isBlank()) return false
         val ip = runCatching { fetchPublicIp() }.getOrNull() ?: return false
-        return runCatching { recordRegistration(email.trim(), ip) }.getOrDefault(false)
+        return runCatching { recordRegistration(Vpn5gEmailPolicy.normalize(email), ip) }.getOrDefault(false)
     }
 
     /**
@@ -734,7 +747,7 @@ object Vpn5gAuthService {
     private suspend fun recordRegistration(email: String, ip: String): Boolean {
         val result = postRaw(
             path = "/rest/v1/rpc/register_account",
-            body = """{"p_email":"${jsonEscape(email)}","p_ip":"${jsonEscape(ip)}"}""",
+            body = """{"p_email":"${jsonEscape(Vpn5gEmailPolicy.normalize(email))}","p_ip":"${jsonEscape(ip)}"}""",
         ) ?: return false
         if (result.first !in 200..299) {
             LogUtil.e(
@@ -865,7 +878,7 @@ object Vpn5gAuthService {
             val expires = Regex("\"expires_in\"\\s*:\\s*(\\d+)").find(body)?.groupValues?.get(1)?.toLongOrNull()
             if (access.isNullOrBlank()) return null
             Vpn5gAuthSession(
-                email = email,
+                email = Vpn5gEmailPolicy.normalize(email),
                 accessToken = access,
                 refreshToken = refresh,
                 expiresAtEpochSeconds = expires?.let { System.currentTimeMillis() / 1000 + it },

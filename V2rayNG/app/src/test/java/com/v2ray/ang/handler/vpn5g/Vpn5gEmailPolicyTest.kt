@@ -81,4 +81,32 @@ class Vpn5gEmailPolicyTest {
             Vpn5gEmailPolicy.check("user@gmail"),
         )
     }
+    // -- Email normalization (v1.1.25) -------------------------------------
+    // Proven live 2026-11-25: the guard's get_subscription_status is
+    // CASE-SENSITIVE — "Taha@gmail.com" -> {"status":"none"} while
+    // "taha@gmail.com" -> the active sub_12. The app therefore sends
+    // and stores only the canonical lowercase form everywhere.
+
+    @Test
+    fun test_normalize_lowercases_and_trims() {
+        assertEquals("taha@gmail.com", Vpn5gEmailPolicy.normalize("Taha@gmail.com"))
+        assertEquals("taha@gmail.com", Vpn5gEmailPolicy.normalize("  TAHA@GMAIL.COM  "))
+        assertEquals("taha@gmail.com", Vpn5gEmailPolicy.normalize("taha@gmail.com"))
+        assertEquals("", Vpn5gEmailPolicy.normalize("   "))
+    }
+
+    @Test
+    fun test_normalize_makes_case_variants_identical() {
+        // The exact live failure: capital-T login must hit the same
+        // server record as the lowercase one.
+        assertEquals(
+            Vpn5gEmailPolicy.normalize("taha@gmail.com"),
+            Vpn5gEmailPolicy.normalize("Taha@gmail.com"),
+        )
+        assertEquals(
+            Vpn5gEmailPolicy.Check.OK,
+            Vpn5gEmailPolicy.check(Vpn5gEmailPolicy.normalize("Taha@Gmail.Com")),
+        )
+    }
+
 }

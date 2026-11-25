@@ -49,9 +49,21 @@ object Vpn5gEmailPolicy {
         "kurzepost.de",
     )
 
+    /**
+     * Canonical form of an email (v1.1.25): trimmed + lowercased.
+     * Proven live 2026-11-25: the guard's `get_subscription_status`
+     * is CASE-SENSITIVE — "Taha@gmail.com" returned {"status":"none"}
+     * while "taha@gmail.com" returned the active sub_12 — so the app
+     * normalizes EVERY email it sends or stores (login, signup,
+     * subscription lookup, code redeem, registration, ad records)
+     * and case can never matter app-side, whatever the server does.
+     * Pure, JVM-tested.
+     */
+    fun normalize(rawEmail: String): String = rawEmail.trim().lowercase()
+
     /** Checks [rawEmail] against the policy. Never throws. */
     fun check(rawEmail: String): Check {
-        val email = rawEmail.trim()
+        val email = normalize(rawEmail)
         val at = email.lastIndexOf('@')
         if (at <= 0 || at == email.length - 1) return Check.INVALID_FORMAT
         val local = email.substring(0, at)
