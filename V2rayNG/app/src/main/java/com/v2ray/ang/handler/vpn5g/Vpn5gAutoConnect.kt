@@ -217,34 +217,80 @@ object Vpn5gAutoConnect {
     }
 
     /**
-     * The fastest free server with a measured ping, excluding the given
+     * The best server in the user's tier pool, excluding the given
      * GUIDs (failed this session / failed within the TTL). Pure — the
      * caller supplies the current section list.
+     *
+     * The [Vpn5gServerUi.isFree] flag IS the tier pool (see
+     * Vpn5gSync.freeGuidsFor): top-20 for FREE, top-100 for GIFT,
+     * the whole pinged pool for SUBSCRIBER — so a subscriber's
+     * unlocked servers carry isFree = true and must be pickable.
+     *
+     * Pick order (v1.1.23):
+     *  1. Real through-the-proxy ping inside the tier pool, fastest
+     *     first (v1.1.7 rule — a TCP-only ping can be faked by a
+     *     middlebox, so a verified server always wins).
+     *  2. A build-time verified seed server in the pool (v1.1.20) —
+     *     a starting point, never proof; a seed the real probe
+     *     failed (ping -1) is dead and never picked.
+     *  3. TCP-pinged servers inside the tier pool, fastest first
+     *     (v1.1.23). This is the paid-tier fill pool: before 1.1.23
+     *     the locks opened after a redeem but the picker ignored
+     *     every fill server (no real ping), so a subscriber got
+     *     «اول یک سرور انتخاب کنید» with hundreds of unlocked
+     *     servers on screen. The tunnel verification + failover
+     *     still guard a dead pick.
+     *  4. Provisional entry fallback (v1.1.23): the fastest
+     *     TCP-pinged server overall, only when the tier pool has
+     *     nothing pickable yet — e.g. a free user right after
+     *     entry, before the real probe has verified anything and
+     *     with no seed trust (upgraders). 1.1.14 connected by
+     *     itself to the best server; without this step the switch
+     *     sat in FINDING_SERVER («در حال آزمایش سرور…») with
+     *     «هنوز سروری نیست» while 688 servers were listed. The
+     *     pick is provisional — verification judges it, and as
+     *     soon as a verified pool server exists step 1 wins.
      */
     fun pickBestServer(
         sections: List<Vpn5gCountryUi>,
         excluding: Set<String> = emptySet(),
     ): Vpn5gServerUi? {
-        // v1.1.7: only a server with a REAL through-the-proxy ping is
-        // pickable — a TCP-only ping can be faked in-transit by a
-        // middlebox (a dead server showing 1 ms), so it must never win
-        // the auto pick.
-        val real = sections
-            .flatMap { it.servers }
+        val all = sections.flatMap { it.servers }
+        val real = all
             .filter { it.isFree && it.hasRealPing && it.pingMillis > 0 && it.guid !in excluding }
             .minByOrNull { it.pingMillis }
         if (real != null) return real
-        // v1.1.20 (seed): no real-pinged server yet (fresh install) —
-        // a build-time verified seed server is the best available pick.
-        // The connect chain still verifies the tunnel, and a dead seed
-        // fails over to the next candidate — the seed is a starting
-        // point, never proof. A seed the real probe failed (ping -1)
-        // is dead and is never picked, even if a caller still marks it
-        // a seed.
-        return sections
-            .flatMap { it.servers }
+        val seed = all
             .filter { it.isFree && it.isSeed && it.pingMillis >= 0 && it.guid !in excluding }
             .firstOrNull()
+        if (seed != null) return seed
+        val tcpInPool = all
+            .filter { it.isFree && it.pingMillis > 0 && it.guid !in excluding }
+            .minByOrNull { it.pingMillis }
+        if (tcpInPool != null) return tcpInPool
+        return all
+            .filter { it.pingMillis > 0 && it.guid !in excluding }
+            .minByOrNull { it.pingMillis }
+    }
+
+    /**
+     * True while a tap on the connect switch must mean "turn OFF"
+     * (v1.1.23, pure): the daemon is running OR the connect chain
+     * is in any live state. Before 1.1.23 the switch only
+     * disconnected when the daemon was already running — a tap
+     * while FINDING_SERVER / CONNECTING (daemon not started yet)
+     * restarted the chain instead of cancelling it, so the switch
+     * got stuck in CONNECTING and could never be turned off.
+     * IDLE and FAILED are the only states where a tap means
+     * "connect".
+     */
+    fun isConnectActive(
+        connectState: Vpn5gConnectState,
+        isRunning: Boolean,
+    ): Boolean {
+        if (isRunning) return true
+        return connectState != Vpn5gConnectState.IDLE &&
+            connectState != Vpn5gConnectState.FAILED
     }
 
     /**

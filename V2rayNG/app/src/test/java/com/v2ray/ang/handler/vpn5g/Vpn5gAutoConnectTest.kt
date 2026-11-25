@@ -361,12 +361,99 @@ class Vpn5gAutoConnectTest {
     }
 
     @Test
-    fun test_pick_best_server_empty_when_nothing_real_pinged() {
-        // v1.1.7: TCP-only servers are not pickable at all.
+    fun test_pick_best_server_tcp_pool_when_nothing_real_pinged() {
+        // v1.1.23: TCP-pinged servers inside the tier pool ARE
+        // pickable when no real-pinged or seed server exists — this
+        // is the subscriber/gift fill pool (locks open after redeem
+        // must be usable for connection). Real still wins over TCP
+        // (see test_pick_best_server_ignores_tcp_only).
         val sections = listOf(
             section(listOf(server("a", 10L, realPing = false), server("b", 20L, realPing = false))),
         )
-        assertNull(Vpn5gAutoConnect.pickBestServer(sections))
+        assertEquals("a", Vpn5gAutoConnect.pickBestServer(sections)?.guid)
+    }
+
+    @Test
+    fun test_pick_best_server_provisional_fallback_outside_pool() {
+        // v1.1.23: on entry, before the real probe verifies
+        // anything (and with no seed trust), the fastest TCP-pinged
+        // server overall is the provisional auto pick — the switch
+        // must not sit in FINDING_SERVER with «هنوز سروری نیست»
+        // while hundreds of servers are listed.
+        val sections = listOf(
+            section(
+                listOf(
+                    server("locked-fast", 5L, free = false, realPing = false),
+                    server("locked-slow", 50L, free = false, realPing = false),
+                    server("unpinged", 0L, free = false, realPing = false),
+                )
+            ),
+        )
+        assertEquals("locked-fast", Vpn5gAutoConnect.pickBestServer(sections)?.guid)
+    }
+
+    @Test
+    fun test_pick_best_server_pool_tcp_beats_provisional() {
+        // A TCP server inside the tier pool beats a faster TCP
+        // server outside the pool.
+        val sections = listOf(
+            section(
+                listOf(
+                    server("outside", 1L, free = false, realPing = false),
+                    server("in-pool", 100L, free = true, realPing = false),
+                )
+            ),
+        )
+        assertEquals("in-pool", Vpn5gAutoConnect.pickBestServer(sections)?.guid)
+    }
+
+    @Test
+    fun test_pick_best_server_provisional_respects_excluding() {
+        val sections = listOf(
+            section(
+                listOf(
+                    server("a", 5L, free = false, realPing = false),
+                    server("b", 9L, free = false, realPing = false),
+                )
+            ),
+        )
+        assertEquals(
+            "b",
+            Vpn5gAutoConnect.pickBestServer(sections, excluding = setOf("a"))?.guid,
+        )
+    }
+
+    // -- v1.1.23: switch tap means OFF while the chain is live ---------
+
+    @Test
+    fun test_connect_active_while_testing_or_connecting() {
+        // Daemon not started yet (isRunning false) but the chain is
+        // live — a tap must cancel, never restart the chain.
+        val live = listOf(
+            Vpn5gConnectState.CHECKING_INTERNET,
+            Vpn5gConnectState.FINDING_SERVER,
+            Vpn5gConnectState.CONNECTING,
+            Vpn5gConnectState.CREATING_TUNNEL,
+            Vpn5gConnectState.VERIFYING_TUNNEL,
+            Vpn5gConnectState.SWITCHING_SERVER,
+            Vpn5gConnectState.RETRYING,
+            Vpn5gConnectState.DISCONNECTING,
+        )
+        live.forEach { state ->
+            assertTrue(Vpn5gAutoConnect.isConnectActive(state, isRunning = false), "state $state")
+        }
+    }
+
+    @Test
+    fun test_connect_active_when_running_or_connected() {
+        assertTrue(Vpn5gAutoConnect.isConnectActive(Vpn5gConnectState.CONNECTED, isRunning = true))
+        assertTrue(Vpn5gAutoConnect.isConnectActive(Vpn5gConnectState.IDLE, isRunning = true))
+    }
+
+    @Test
+    fun test_connect_not_active_when_idle_or_failed() {
+        assertFalse(Vpn5gAutoConnect.isConnectActive(Vpn5gConnectState.IDLE, isRunning = false))
+        assertFalse(Vpn5gAutoConnect.isConnectActive(Vpn5gConnectState.FAILED, isRunning = false))
     }
 
     // -- v1.1.20: seed fallback (fresh-install auto-connect) --------------

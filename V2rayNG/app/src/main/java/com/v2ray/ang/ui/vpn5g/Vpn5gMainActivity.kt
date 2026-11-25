@@ -1620,10 +1620,17 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // Strip any stored forced QUIC block before the tunnel is built.
             Vpn5gNetworkProfile.removeForcedQuicBlock()
             if (!Vpn5gAutoConnect.hasInternet(app)) {
+                // v1.1.23: the chain ends here — land in FAILED, not
+                // RETRYING. RETRYING renders as the blue CONNECTING
+                // switch forever (nothing retries after this return),
+                // which read as a stuck switch on device.
                 _uiState.update {
                     it.copy(
                         connectState = Vpn5gAutoConnect.transition(
-                            it.connectState, Vpn5gConnectEvent.INTERNET_FAILED
+                            Vpn5gAutoConnect.transition(
+                                it.connectState, Vpn5gConnectEvent.INTERNET_FAILED
+                            ),
+                            Vpn5gConnectEvent.GIVE_UP,
                         ),
                         errorMessage = app.getString(R.string.vpn5g_no_internet),
                     )
@@ -1718,10 +1725,19 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         )
                     }
                 } else {
+                    // v1.1.23: same stuck-switch fix as the internet
+                    // path — SERVER_MISSING lands in RETRYING (blue
+                    // CONNECTING visual) but nothing retries after
+                    // this return, so give up to FAILED. With the
+                    // tier-pool + provisional picker this only fires
+                    // when the synced list truly has no pinged server.
                     _uiState.update {
                         it.copy(
                             connectState = Vpn5gAutoConnect.transition(
-                                it.connectState, Vpn5gConnectEvent.SERVER_MISSING
+                                Vpn5gAutoConnect.transition(
+                                    it.connectState, Vpn5gConnectEvent.SERVER_MISSING
+                                ),
+                                Vpn5gConnectEvent.GIVE_UP,
                             ),
                             errorMessage = app.getString(R.string.vpn5g_no_server_selected),
                         )
@@ -1985,12 +2001,23 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         persistentReconnectJob = null
         persistentReconnectAttempts = 0
         resetTunnelAttempts()
+        // v1.1.23: when the daemon never started (cancel while
+        // testing/connecting), there is nothing to stop — land in
+        // IDLE at once instead of sitting in DISCONNECTING until
+        // the 5 s timeout. A running daemon still goes through
+        // DISCONNECTING + timeout below.
+        val wasRunning = _uiState.value.isRunning
         _uiState.update {
             it.copy(
-                connectState = Vpn5gAutoConnect.transition(
-                    it.connectState, Vpn5gConnectEvent.USER_DISCONNECT
-                ),
+                connectState = if (wasRunning) {
+                    Vpn5gAutoConnect.transition(
+                        it.connectState, Vpn5gConnectEvent.USER_DISCONNECT
+                    )
+                } else {
+                    Vpn5gConnectState.IDLE
+                },
                 lastError = null,
+                errorMessage = null,
                 manualServerFailed = null,
             )
         }
@@ -3067,16 +3094,29 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         val failed = Vpn5gFailedServers.prune(
             Vpn5gFailedServers.load(), System.currentTimeMillis()
         )
-        val candidates = _uiState.value.countries
+        // v1.1.23: tier-pool ordering like pickBestServer —
+        // real-pinged first, then TCP-pinged pool servers, so a
+        // subscriber fails over onto unlocked servers too.
+        val pool = _uiState.value.countries
             .flatMap { it.servers }
             .filter {
-                it.isFree && it.hasRealPing && it.guid != droppedGuid &&
+                it.isFree && it.guid != droppedGuid &&
                     it.guid !in failed && it.pingMillis > 0
             }
+            .sortedWith(
+                compareBy({ !it.hasRealPing }, { it.pingMillis })
+            )
+        val candidates = if (pool.isNotEmpty()) pool else _uiState.value.countries
+            .flatMap { it.servers }
+            .filter {
+                it.guid != droppedGuid && it.guid !in failed && it.pingMillis > 0
+            }
+            .sortedWith(
+                compareBy({ !it.hasRealPing }, { it.pingMillis })
+            )
         val next = candidates
-            .filter { it.country != droppedCountry }
-            .minByOrNull { it.pingMillis }
-            ?: candidates.minByOrNull { it.pingMillis }
+            .firstOrNull { it.country != droppedCountry }
+            ?: candidates.firstOrNull()
         if (next == null) {
             // v1.1.11: an empty pool means the network (or the sources)
             // is dead, not just a bad server. Refresh + backoff a few
@@ -3428,18 +3468,34 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         val failed = Vpn5gFailedServers.prune(
             Vpn5gFailedServers.load(), System.currentTimeMillis()
         )
-        val candidates = _uiState.value.countries
+        // v1.1.23: same tier-pool ordering as pickBestServer —
+        // real-pinged pool servers first, then TCP-pinged pool
+        // servers (the subscriber/gift fill pool), so failover and
+        // manual switches can use unlocked servers too. Before
+        // this, only real-pinged servers were candidates and a
+        // subscriber's unlocked pool was invisible here.
+        val pool = _uiState.value.countries
             .flatMap { it.servers }
             .filter {
-                it.isFree && it.hasRealPing && it.guid !in excluding &&
+                it.isFree && it.guid !in excluding &&
                     it.guid !in failed && it.pingMillis > 0
             }
+            .sortedWith(
+                compareBy({ !it.hasRealPing }, { it.pingMillis })
+            )
+        val candidates = if (pool.isNotEmpty()) pool else _uiState.value.countries
+            .flatMap { it.servers }
+            .filter {
+                it.guid !in excluding && it.guid !in failed && it.pingMillis > 0
+            }
+            .sortedWith(
+                compareBy({ !it.hasRealPing }, { it.pingMillis })
+            )
         if (differentCountryThan.isNullOrBlank()) {
-            return candidates.minByOrNull { it.pingMillis }
+            return candidates.firstOrNull()
         }
-        return candidates.filter { it.country != differentCountryThan }
-            .minByOrNull { it.pingMillis }
-            ?: candidates.minByOrNull { it.pingMillis }
+        return candidates.firstOrNull { it.country != differentCountryThan }
+            ?: candidates.firstOrNull()
     }
 
     /**
@@ -4196,7 +4252,12 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
 
     private fun toggleConnect() {
         val state = viewModel.uiState.value
-        if (state.isRunning) {
+        // v1.1.23: a tap while the chain is testing/connecting (daemon
+        // not started yet, isRunning still false) must CANCEL the
+        // chain, not restart it. Before this, only a running daemon
+        // disconnected — the switch stuck in CONNECTING («در حال
+        // آزمایش سرور…») and could never be turned off.
+        if (Vpn5gAutoConnect.isConnectActive(state.connectState, state.isRunning)) {
             viewModel.userDisconnect()
             LauncherManager.stopService(this)
             return
@@ -5465,9 +5526,11 @@ private fun Vpn5gConnectSwitch(
     // tunnel can start while one is stopping).
     val visual = connectSwitchVisual(connectState)
     val isOn = visual == Vpn5gConnectSwitchVisual.ON
-    val trackWidth = 232.dp
-    val trackHeight = 68.dp
-    val thumbSize = 56.dp
+    // v1.1.23: normal switch size (was 232x68 with a 56 dp thumb —
+    // Aref, 2026-11-25: «سویچ روشن خاموش بزرگ هست»).
+    val trackWidth = 168.dp
+    val trackHeight = 52.dp
+    val thumbSize = 40.dp
     // Thumb travel: track width minus thumb minus both side insets.
     val travel = trackWidth - thumbSize - 12.dp
     val trackColor = when (visual) {
@@ -5559,7 +5622,7 @@ private fun Vpn5gConnectSwitch(
                     .clip(CircleShape)
                     .background(Color.White),
             ) {
-                Vpn5gPowerIcon(color = glyphColor, size = 28.dp)
+                Vpn5gPowerIcon(color = glyphColor, size = 20.dp)
             }
         }
         // While connected the 30-minute session shows as a thin
