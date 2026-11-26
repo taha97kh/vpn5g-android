@@ -105,18 +105,20 @@ fun Vpn5gLoopingVideo(
                         player.setVolume(0f, 0f)
                         videoWidth = player.videoWidth
                         videoHeight = player.videoHeight
+                        // Some devices report a 0 size at prepare time
+                        // and deliver the real size here — without
+                        // this the center-crop scale would never
+                        // engage and the video would stay letterboxed
+                        // (v1.1.32). The listener lives on the
+                        // MediaPlayer, not on VideoView.
+                        player.setOnVideoSizeChangedListener { _, width, height ->
+                            if (width > 0 && height > 0) {
+                                videoWidth = width
+                                videoHeight = height
+                            }
+                        }
                         prepared = true
                         view.start()
-                    }
-                    // Some devices report a 0 size at prepare time and
-                    // deliver the real size here — without this the
-                    // center-crop scale would never engage and the
-                    // video would stay letterboxed (v1.1.32).
-                    view.setOnVideoSizeChangedListener { player, _, _ ->
-                        if (player.videoWidth > 0 && player.videoHeight > 0) {
-                            videoWidth = player.videoWidth
-                            videoHeight = player.videoHeight
-                        }
                     }
                     view.setOnErrorListener { _, _, _ ->
                         // Fallback: render nothing — the animated
