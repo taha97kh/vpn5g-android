@@ -23,19 +23,19 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
 /**
- * Looping video background (v1.1.30, Aref's orders): the entrance
- * video on the first page («این پس زمینه برای ورودی باشه») and the
- * globe video while connecting («وقتی کاربر روی وصل شدن زده، این
- * تصویر دیده بشه بعد که وصل شد تموم بشه ویدیو»).
+ * Looping video (v1.1.30, placements corrected in v1.1.31 per
+ * Aref's orders): the entrance video plays on the 0→100% entry
+ * loading screen («دقیقاً منظورم همون ۱ تا ۱۰۰ بود»), and the globe
+ * video covers the whole screen while connecting («هنگام وصل زدن
+ * اون ویدیو کامل بیاد رو صفحه... نه اینکه پس‌زمینه باشه»), ending
+ * the moment the tunnel is CONNECTED (or fails/disconnects).
  *
  * Playback rules: muted, looping, center-crop fill (the video is
  * scaled to cover the whole area, overflow clipped). Paused when
  * the app leaves the foreground and released when the composable
  * leaves composition — it never keeps playing invisibly. Any
- * playback failure renders nothing, so the animated gradient
- * background behind it shows through (graceful fallback). The UI
- * on top (texts, switch) is untouched — only the background
- * changed.
+ * playback failure renders nothing, so whatever is behind it
+ * (animated gradient / home UI) shows through (graceful fallback).
  */
 @Composable
 fun Vpn5gLoopingVideo(

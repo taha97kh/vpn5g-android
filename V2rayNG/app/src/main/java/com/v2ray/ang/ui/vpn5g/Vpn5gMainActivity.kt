@@ -72,7 +72,6 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -4623,41 +4622,13 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                     modifier = Modifier.padding(innerPadding),
                 ) { dest ->
                     when (dest) {
-                        // v1.1.30 (Aref's orders): video background on
-                        // the first page — the entrance video normally
-                        // («این پس زمینه برای ورودی باشه»), the globe
-                        // video while connecting («وقتی کاربر روی وصل
-                        // شدن زده، این تصویر دیده بشه بعد که وصل شد
-                        // تموم بشه ویدیو»). It ends the moment the
-                        // tunnel is CONNECTED (or fails/disconnects).
-                        // All texts/UI stay exactly as before, over
-                        // the video; the scrim keeps them readable.
-                        Vpn5gDestination.HOME -> Box(Modifier.fillMaxSize()) {
-                            val connecting = uiState.connectState in setOf(
-                                Vpn5gConnectState.CHECKING_INTERNET,
-                                Vpn5gConnectState.FINDING_SERVER,
-                                Vpn5gConnectState.CONNECTING,
-                                Vpn5gConnectState.CREATING_TUNNEL,
-                                Vpn5gConnectState.VERIFYING_TUNNEL,
-                                Vpn5gConnectState.SWITCHING_SERVER,
-                                Vpn5gConnectState.RETRYING,
-                            )
-                            key(if (connecting) "connecting" else "entrance") {
-                                Vpn5gLoopingVideo(
-                                    rawResId = if (connecting) {
-                                        R.raw.connecting_background
-                                    } else {
-                                        R.raw.entrance_background
-                                    },
-                                    modifier = Modifier.fillMaxSize(),
-                                )
-                            }
-                            Box(
-                                Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.45f))
-                            )
-                            Vpn5gHomeScreen(
+                        // v1.1.31 (Aref's correction): the entrance
+                        // video no longer plays behind the home — it
+                        // belongs on the 0→100% entry screen (see
+                        // Vpn5gStartupScreen). The globe video while
+                        // connecting is a full-screen overlay below
+                        // (Vpn5gConnectingOverlay), not a background.
+                        Vpn5gDestination.HOME -> Vpn5gHomeScreen(
                             state = uiState,
                             onRefresh = { viewModel.refresh() },
                             onToggleConnect = { toggleConnect() },
@@ -4704,8 +4675,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                                 }
                             },
                             onDismissCrashReport = { viewModel.dismissCrashReport() },
-                            )
-                        }
+                        )
                         // v1.1.21: the server list moved out of home
                         // into its own Lantern-style screen.
                         Vpn5gDestination.SERVER_SELECT -> Vpn5gServerSelectScreen(
@@ -4825,6 +4795,22 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                         )
                     }
                 }
+            }
+            // v1.1.31 (Aref's order): while connecting, the globe
+            // video covers the WHOLE screen («هنگام وصل زدن اون ویدیو
+            // کامل بیاد رو صفحه... نه اینکه پس‌زمینه باشه») with the
+            // status texts on it; it ends the moment the tunnel is
+            // CONNECTED (or fails/disconnects). Drawn after the
+            // Scaffold so it also covers the bottom bar; the cancel
+            // button runs the same toggleConnect() as the switch
+            // (a tap while connecting cancels the chain).
+            if (destination == Vpn5gDestination.HOME &&
+                uiState.connectState in VPN5G_CONNECTING_STATES
+            ) {
+                Vpn5gConnectingOverlay(
+                    connectState = uiState.connectState,
+                    onCancel = { toggleConnect() },
+                )
             }
         }
         }
@@ -5320,6 +5306,98 @@ private fun Vpn5gUpdateCard(
                         color = Vpn5gOnDarkMuted,
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The connect-chain states during which the globe video covers the
+ * screen (v1.1.31, Aref's order). Same set that drove the v1.1.30
+ * home background video: every in-progress connect step, ending the
+ * moment the state leaves this set (CONNECTED, FAILED, IDLE...).
+ */
+private val VPN5G_CONNECTING_STATES = setOf(
+    Vpn5gConnectState.CHECKING_INTERNET,
+    Vpn5gConnectState.FINDING_SERVER,
+    Vpn5gConnectState.CONNECTING,
+    Vpn5gConnectState.CREATING_TUNNEL,
+    Vpn5gConnectState.VERIFYING_TUNNEL,
+    Vpn5gConnectState.SWITCHING_SERVER,
+    Vpn5gConnectState.RETRYING,
+)
+
+/**
+ * Full-screen connecting overlay (v1.1.31, Aref's order): when the
+ * user taps connect, the globe video itself fills the whole screen
+ * («هنگام وصل زدن اون ویدیو کامل بیاد رو صفحه و فقط ویدیو گفته نشون
+ * داده بشه با نوشته هاش، نه اینکه پس‌زمینه باشه») — the necessary
+ * status text (the same connect-state texts as the home screen)
+ * sits on the video, with a cancel button that runs the same
+ * toggleConnect() as the switch (a tap while connecting cancels
+ * the chain). The overlay is composed only while the connect state
+ * is in [VPN5G_CONNECTING_STATES], so the video ends the moment the
+ * tunnel is CONNECTED (or fails/disconnects). If playback fails,
+ * the video renders nothing and the texts + cancel stay usable
+ * over the home UI.
+ */
+@Composable
+private fun Vpn5gConnectingOverlay(
+    connectState: Vpn5gConnectState,
+    onCancel: () -> Unit,
+) {
+    // Same status texts as the home screen (v1.1.4 §1): the seven
+    // spec states verbatim, so the overlay never promises anything
+    // the home would not say.
+    val statusTextRes = when (connectState) {
+        Vpn5gConnectState.CHECKING_INTERNET -> R.string.vpn5g_connect_checking_internet
+        Vpn5gConnectState.FINDING_SERVER -> R.string.vpn5g_connect_finding_server
+        Vpn5gConnectState.CONNECTING -> R.string.vpn5g_connect_connecting
+        Vpn5gConnectState.CREATING_TUNNEL -> R.string.vpn5g_connect_creating_tunnel
+        Vpn5gConnectState.VERIFYING_TUNNEL -> R.string.vpn5g_connect_verifying_tunnel
+        Vpn5gConnectState.SWITCHING_SERVER -> R.string.vpn5g_connect_switching_server
+        Vpn5gConnectState.CONNECTED -> R.string.vpn5g_connected
+        Vpn5gConnectState.RETRYING -> R.string.vpn5g_connect_retrying
+        Vpn5gConnectState.FAILED -> R.string.vpn5g_connect_failed
+        Vpn5gConnectState.DISCONNECTING -> R.string.vpn5g_disconnecting
+        Vpn5gConnectState.IDLE -> R.string.vpn5g_status_not_connected
+    }
+    Box(Modifier.fillMaxSize()) {
+        Vpn5gLoopingVideo(
+            rawResId = R.raw.connecting_background,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.35f))
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 32.dp),
+        ) {
+            Text(
+                text = stringResource(statusTextRes),
+                color = Vpn5gOnDark,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(24.dp))
+            Button(
+                onClick = onCancel,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Vpn5gTeal,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(
+                    text = stringResource(R.string.action_cancel),
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
     }

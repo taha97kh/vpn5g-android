@@ -499,10 +499,13 @@ fun Vpn5gFooter() {
  * Startup screen (v1.1.14; fast entry + rotating texts v1.1.15):
  * replaces the old fixed 3-second splash.
  *
- * Shows the animated VPN 5G logo (the same pulsing logo as the connect
- * circle language — it scales and floats, then the fire/fade treatment
- * lives on the connect button itself) with the "TAHA VPN 5G" motion
- * graphic and "4ref.ai" underneath, and a REAL 0→100% progress bar
+ * v1.1.31 (Aref's order): Aref's entrance video (the logos clip)
+ * plays behind this 0→100% screen («دقیقاً منظورم همون ۱ تا ۱۰۰ بود»)
+ * — muted, looping, center-crop; if playback fails the animated
+ * gradient background shows through unchanged. No logo is added on
+ * this screen («لوگو دیگه اضافه نکن فقط نوشته های لازم»): only the
+ * necessary texts — the brand line, the rotating status texts, the
+ * progress bar and the percentage. The bar is a REAL 0→100% progress
  * driven by the server-list sync stages (fetching sources, pinging) —
  * never a fake timer. v1.1.15: the home opens FAST on the cached list
  * (the heavy refresh runs in the background after entry), so the bar
@@ -520,6 +523,19 @@ fun Vpn5gStartupScreen(
     onRetry: () -> Unit,
 ) {
     Vpn5gAnimatedBackground {
+        // v1.1.31 (Aref's order): the entrance video belongs on this
+        // 0→100% screen, not on the home background. It sits over the
+        // animated gradient (which stays as the fallback if playback
+        // fails) and under the texts; the scrim keeps them readable.
+        Vpn5gLoopingVideo(
+            rawResId = R.raw.entrance_background,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.45f))
+        )
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
@@ -527,11 +543,11 @@ fun Vpn5gStartupScreen(
                 .padding(horizontal = 32.dp, vertical = 48.dp),
         ) {
             Spacer(Modifier.weight(1f))
-            Vpn5gPulsingLogo(size = 120.dp)
-            Spacer(Modifier.height(16.dp))
             // v1.1.15: "TAHA VPN 5G" as an animated motion graphic
             // (light sweep, speed lines, fine particles) until the
             // home is truly ready — never a static label.
+            // v1.1.31: no logo on this screen («لوگو دیگه اضافه نکن
+            // فقط نوشته های لازم») — texts only.
             Vpn5gMotionBrandText()
             Spacer(Modifier.height(4.dp))
             Text(
