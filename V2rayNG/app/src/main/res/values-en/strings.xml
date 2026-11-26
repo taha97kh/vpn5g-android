@@ -413,7 +413,7 @@ Good for daily, always-on use.</string>
     <string name="vpn5g_pay_usdt_network">Network: %1$s</string>
     <string name="vpn5g_pay_usdt_copy">Copy address</string>
     <string name="vpn5g_pay_usdt_copied">Address copied</string>
-    <string name="vpn5g_pay_usdt_guide_default">Send the plan's equivalent amount to this address and send the receipt in the bot to get your subscription code.</string>
+    <string name="vpn5g_pay_usdt_guide_default">Send the plan\'s equivalent amount to this address and send the receipt in the bot to get your subscription code.</string>
     <string name="vpn5g_referral_title">Share the app, get 1 GB gift</string>
     <string name="vpn5g_referral_body">Send your personal link to your friends. Anyone who joins and registers through your link — both you and they get 1 GB gift on ALL servers, no limits!
 
