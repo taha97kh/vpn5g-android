@@ -19,6 +19,7 @@ import com.v2ray.ang.contracts.Tun2SocksControl
 import com.v2ray.ang.core.CoreServiceManager
 import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.handler.vpn5g.Vpn5gRouting
 import com.v2ray.ang.handler.NotificationManager
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.root.RootLanSharing
@@ -277,40 +278,30 @@ class CoreVpnService : VpnService(), ServiceControl {
     /**
      * Configures per-app proxy rules for the VPN builder.
      *
-     * - If per-app proxy is not enabled, disallow the VPN service's own package.
-     * - If no apps are selected, disallow the VPN service's own package.
-     * - If bypass mode is enabled, disallow all selected apps (including self).
-     * - If proxy mode is enabled, only allow the selected apps (excluding self).
+     * The decision itself is the pure [Vpn5gRouting.perAppDecision]
+     * (v1.1.34): the upstream branches are unchanged, plus the
+     * seeded Iranian bypass set (Aref's order — Iranian apps must
+     * not use the tunnel by default) is unioned into every
+     * disallow branch. In allowlist mode Iranian apps bypass by
+     * not being ticked; ticking one is the user's choice.
      *
      * @param builder The VPN Builder to configure.
      */
     private fun configurePerAppProxy(builder: Builder) {
         val selfPackageName = BuildConfig.APPLICATION_ID
-
-        // If per-app proxy is not enabled, disallow the VPN service's own package and return
-        if (MmkvManager.decodeSettingsBool(AppConfig.PREF_PER_APP_PROXY) == false) {
-            builder.addDisallowedApplication(selfPackageName)
-            return
-        }
-
-        // If no apps are selected, disallow the VPN service's own package and return
-        val apps = MmkvManager.decodeSettingsStringSet(AppConfig.PREF_PER_APP_PROXY_SET)
-        if (apps.isNullOrEmpty()) {
-            builder.addDisallowedApplication(selfPackageName)
-            return
-        }
-
-        val bypassApps = MmkvManager.decodeSettingsBool(AppConfig.PREF_BYPASS_APPS)
-        // Handle the VPN service's own package according to the mode
-        if (bypassApps) apps.add(selfPackageName) else apps.remove(selfPackageName)
-
-        apps.forEach {
+        val decision = Vpn5gRouting.perAppDecision(
+            perAppEnabled = MmkvManager.decodeSettingsBool(AppConfig.PREF_PER_APP_PROXY),
+            bypassApps = MmkvManager.decodeSettingsBool(AppConfig.PREF_BYPASS_APPS),
+            userSet = MmkvManager.decodeSettingsStringSet(AppConfig.PREF_PER_APP_PROXY_SET)
+                ?.toSet() ?: emptySet(),
+            iranianSet = Vpn5gRouting.loadIranianBypassSet(),
+            selfPackage = selfPackageName,
+        )
+        decision.packages.forEach {
             try {
-                if (bypassApps) {
-                    // In bypass mode, disallow the selected apps
+                if (decision.apply == Vpn5gRouting.PerAppApply.DISALLOW) {
                     builder.addDisallowedApplication(it)
                 } else {
-                    // In proxy mode, only allow the selected apps
                     builder.addAllowedApplication(it)
                 }
             } catch (e: PackageManager.NameNotFoundException) {

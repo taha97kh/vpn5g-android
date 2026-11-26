@@ -25,7 +25,21 @@ class Vpn5gConfigSourcesTest {
         assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_4))
         assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_5))
         assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_6))
-        assertEquals(8, sources.size)
+        // v1.1.34: the verified GitHub expansion (sources 7–19).
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_7))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_8))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_9))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_10))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_11))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_12))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_13))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_14))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_15))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_16))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_17))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_18))
+        assertTrue(sources.contains(Vpn5gConstants.GITHUB_SOURCE_19))
+        assertEquals(21, sources.size)
         // Every default source is HTTPS — never plain HTTP.
         assertTrue(sources.all { it.startsWith("https://") })
     }
@@ -39,6 +53,20 @@ class Vpn5gConfigSourcesTest {
             Vpn5gConstants.GITHUB_SOURCE_4,
             Vpn5gConstants.GITHUB_SOURCE_5,
             Vpn5gConstants.GITHUB_SOURCE_6,
+            // v1.1.34: the verified GitHub expansion is capped too.
+            Vpn5gConstants.GITHUB_SOURCE_7,
+            Vpn5gConstants.GITHUB_SOURCE_8,
+            Vpn5gConstants.GITHUB_SOURCE_9,
+            Vpn5gConstants.GITHUB_SOURCE_10,
+            Vpn5gConstants.GITHUB_SOURCE_11,
+            Vpn5gConstants.GITHUB_SOURCE_12,
+            Vpn5gConstants.GITHUB_SOURCE_13,
+            Vpn5gConstants.GITHUB_SOURCE_14,
+            Vpn5gConstants.GITHUB_SOURCE_15,
+            Vpn5gConstants.GITHUB_SOURCE_16,
+            Vpn5gConstants.GITHUB_SOURCE_17,
+            Vpn5gConstants.GITHUB_SOURCE_18,
+            Vpn5gConstants.GITHUB_SOURCE_19,
         ).forEach { url ->
             assertTrue(Vpn5gConstants.isCappedSource(url), url)
         }

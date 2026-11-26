@@ -255,8 +255,10 @@ object Vpn5gAutoConnect {
         sections: List<Vpn5gCountryUi>,
         excluding: Set<String> = emptySet(),
         healthScores: Map<String, Double> = emptyMap(),
+        pinnedCountry: String? = null,
     ): Vpn5gServerUi? {
-        return rankCandidates(sections, excluding, healthScores).firstOrNull()
+        return rankCandidates(sections, excluding, healthScores, pinnedCountry)
+            .firstOrNull()
     }
 
     /**
@@ -275,8 +277,15 @@ object Vpn5gAutoConnect {
         sections: List<Vpn5gCountryUi>,
         excluding: Set<String> = emptySet(),
         healthScores: Map<String, Double> = emptyMap(),
+        pinnedCountry: String? = null,
     ): List<Vpn5gServerUi> {
-        val all = sections.flatMap { it.servers }
+        // v1.1.34 (Instagram Safe Mode): with a country pinned,
+        // only that country's servers are candidates at all — the
+        // exit country can never change while the mode is on. A
+        // null pin (mode off) keeps the pre-1.1.34 behavior.
+        val all = Vpn5gInstagramSafeMode.filterUiServers(
+            sections.flatMap { it.servers }, pinnedCountry,
+        )
         fun adjusted(server: Vpn5gServerUi): Long =
             Vpn5gHealthScore.adjustedPing(server.pingMillis, healthScores[server.dedupeKey] ?: 0.0)
         val real = all

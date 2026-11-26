@@ -66,13 +66,14 @@ object Vpn5gTunnelCheck {
     private const val TUNNEL_FETCH_TIMEOUT_MS = 7_000
     /**
      * Per-probe timeout for the light watchdog probe (v1.1.11;
-     * 3 s since v1.1.29 — the probe now runs every 5 s with a
-     * confirm probe, so a long per-probe budget would eat the
-     * detection budget; a healthy tunnel answers an exit-IP fetch
-     * well inside 3 s, and a slow answer is itself a failure
+     * 3 s since v1.1.29; 1.5 s since v1.1.34 — the probe now runs
+     * every 2 s with an immediate confirm probe, so a long
+     * per-probe budget would eat the sub-2-second failover budget
+     * Aref ordered; a healthy tunnel answers an exit-IP fetch
+     * well inside 1.5 s, and a slow answer is itself a failure
      * signal the leaky bucket weighs).
      */
-    private const val WATCHDOG_PROBE_TIMEOUT_MS = 3_000
+    private const val WATCHDOG_PROBE_TIMEOUT_MS = 1_500
     /** How many fetch rounds verify() tries before giving up on a server. */
     private const val MAX_VERIFY_ROUNDS = 3
     /** Pause between fetch rounds. */

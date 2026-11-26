@@ -141,6 +141,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.WATCHDOG_CONFIRM_DELAY_MS
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.WATCHDOG_PROBE_INTERVAL_TICKS
 import com.v2ray.ang.handler.vpn5g.Vpn5gDaemonHeartbeat
 import com.v2ray.ang.handler.vpn5g.Vpn5gFailoverPick
+import com.v2ray.ang.handler.vpn5g.Vpn5gInstagramSafeMode
 import com.v2ray.ang.handler.vpn5g.Vpn5gStandbyLiveness
 import com.v2ray.ang.handler.vpn5g.Vpn5gWatchdogScore
 import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
@@ -410,6 +411,16 @@ data class Vpn5gHomeUiState(
      */
     val routingMode: Vpn5gRoutingMode = Vpn5gRoutingMode.SMART,
     val directFirst: Boolean = true,
+    /**
+     * Instagram Safe Mode (v1.1.34): when on, every automatic
+     * server pick (initial connect, failover, standby queues —
+     * UI and daemon) is locked to [igSafeCountryCode] so the exit
+     * country never changes mid-session (Instagram checkpoints
+     * impossible travel). Loaded from MMKV at startup; default
+     * off. See [Vpn5gInstagramSafeMode].
+     */
+    val igSafeEnabled: Boolean = false,
+    val igSafeCountryCode: String = "",
     /** Stored language code ("auto" = system), for the drawer (v1.1.21). */
     /** v1.1.22: default locale is Persian (fa), not "auto". */
     val languageCode: String = "fa",
@@ -740,6 +751,51 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(directFirst = on) }
     }
 
+    /** The active Instagram Safe Mode pin, or null when off (v1.1.34). */
+    private fun igPinnedCountry(): String? =
+        Vpn5gInstagramSafeMode.pinnedCountry(
+            _uiState.value.igSafeEnabled, _uiState.value.igSafeCountryCode,
+        )
+
+    /** Display label (flag + Persian name) for a pinned country code. */
+    private fun igPinnedCountryLabel(code: String): String {
+        val server = _uiState.value.countries.flatMap { it.servers }
+            .firstOrNull {
+                Vpn5gInstagramSafeMode.matchesPinned(it.countryCode, code) &&
+                    it.countryNameFa.isNotBlank()
+            } ?: return code
+        return "${server.flag} ${server.countryNameFa}".trim()
+    }
+
+    /**
+     * Instagram Safe Mode toggle (v1.1.34): persisted at once so
+     * the daemon honors the same pin. Turning it on with no
+     * country chosen yet pins a sensible default — the current
+     * server's country when connected (the live session's exit
+     * country must not change), else the best-ping country (see
+     * [Vpn5gInstagramSafeMode.defaultCountryCode]). Enabling
+     * mid-session never yanks the live tunnel: the pin governs
+     * every automatic pick from now on.
+     */
+    fun setInstagramSafeMode(enabled: Boolean) {
+        var country = _uiState.value.igSafeCountryCode
+        if (enabled && country.isBlank()) {
+            country = Vpn5gInstagramSafeMode.defaultCountryCode(
+                _uiState.value.countries.flatMap { it.servers },
+                MmkvManager.getSelectServer(),
+            ).orEmpty()
+        }
+        Vpn5gInstagramSafeMode.save(enabled, country)
+        _uiState.update { it.copy(igSafeEnabled = enabled, igSafeCountryCode = country) }
+    }
+
+    /** Instagram Safe Mode country pick (v1.1.34): persisted at once. */
+    fun setInstagramSafeCountry(code: String) {
+        val normalized = Vpn5gInstagramSafeMode.normalizeCode(code)
+        Vpn5gInstagramSafeMode.save(_uiState.value.igSafeEnabled, normalized)
+        _uiState.update { it.copy(igSafeCountryCode = normalized) }
+    }
+
     /**
      * Drawer language (v1.1.21): applies the new locale immediately
      * (the activity recreates) and stores the choice in state so the
@@ -916,6 +972,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                 false
             }
         }
+        // v1.1.34 (Aref's order): one-time Iranian-apps bypass seed —
+        // Iranian apps never use the tunnel by default (applied in
+        // CoreVpnService.configurePerAppProxy via perAppDecision).
+        Vpn5gRouting.seedIranianBypassIfNeeded()
         // v1.1.29 (Aref's order): entering the app with another
         // VPN active must be visible at once (Home banner).
         checkOtherVpn()
@@ -932,6 +992,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             it.copy(
                 routingMode = savedMode,
                 directFirst = savedDirectFirst,
+                // v1.1.34: Instagram Safe Mode — persisted toggle +
+                // pinned country, restored so the UI and the daemon
+                // enforce the same pin from the first pick.
+                igSafeEnabled = Vpn5gInstagramSafeMode.loadEnabled(),
+                igSafeCountryCode = Vpn5gInstagramSafeMode.loadCountryCode(),
                 languageCode = MmkvManager.decodeSettingsString(
                     AppConfig.PREF_LANGUAGE
                 ) ?: "fa",
@@ -1042,9 +1107,19 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     continue
                 }
                 val currentGuid = MmkvManager.getSelectServer()
+                // v1.1.34 (Instagram Safe Mode): the standby queue
+                // only ever holds pinned-country servers while the
+                // mode is on, so a failover can never land outside
+                // the locked country.
+                val igPinned = igPinnedCountry()
                 val candidates = state.countries
                     .flatMap { it.servers }
-                    .filter { it.guid != currentGuid }
+                    .filter {
+                        it.guid != currentGuid &&
+                            Vpn5gInstagramSafeMode.matchesPinned(
+                                it.countryCode, igPinned,
+                            )
+                    }
                     .sortedWith(
                         compareBy({ !it.hasRealPing }, { it.pingMillis })
                     )
@@ -2049,6 +2124,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         return Vpn5gAutoConnect.pickBestServer(
             _uiState.value.countries, triedGuids + failed.keys,
             Vpn5gHealthScore.currentScores(),
+            // v1.1.34: Instagram Safe Mode pin (null = mode off).
+            pinnedCountry = igPinnedCountry(),
         )
     }
 
@@ -2290,6 +2367,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     guid = Vpn5gAutoConnect.pickBestServer(
                         _uiState.value.countries, triedGuids + failed.keys,
                         Vpn5gHealthScore.currentScores(),
+                        // v1.1.34: Instagram Safe Mode pin — the
+                        // initial pick also stays in the locked
+                        // country (null = mode off).
+                        pinnedCountry = igPinnedCountry(),
                     )?.guid
                     if (guid != null) {
                         // v1.1.7 connect-time gate: an auto pick is
@@ -3742,6 +3823,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             failedGuids = failed.keys,
             standbyQueue = standbyQueue,
             healthScores = Vpn5gHealthScore.currentScores(),
+            // v1.1.34: Instagram Safe Mode pin — with a country
+            // locked, the failover pool is that country only; an
+            // exhausted pinned country lands in the empty-pool
+            // retry loop below instead of switching country.
+            pinnedCountry = igPinnedCountry(),
         ).filter { MmkvManager.decodeServerConfig(it.guid) != null }
         val next = ranked.firstOrNull { it.country != droppedCountry }
             ?: ranked.firstOrNull()
@@ -3757,10 +3843,22 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // bounded reconnect and the session sat dead.)
             dropFailoverRounds++
             autoFailoverPending = true
+            // v1.1.34 (Instagram Safe Mode): with a country locked
+            // the empty pool means "no server in the pinned
+            // country right now" — say so plainly while the loop
+            // keeps retrying inside the country.
+            val igPinned = igPinnedCountry()
             _uiState.update {
                 it.copy(
                     connectState = Vpn5gConnectState.RETRYING,
-                    autoFailoverNotice = app.getString(R.string.vpn5g_refreshing_servers),
+                    autoFailoverNotice = if (igPinned != null) {
+                        app.getString(
+                            R.string.vpn5g_ig_safe_retrying,
+                            igPinnedCountryLabel(igPinned),
+                        )
+                    } else {
+                        app.getString(R.string.vpn5g_refreshing_servers)
+                    },
                 )
             }
             val round = dropFailoverRounds - 1
@@ -4178,6 +4276,8 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             failedGuids = failed.keys,
             standbyQueue = standbyQueue,
             healthScores = Vpn5gHealthScore.currentScores(),
+            // v1.1.34: Instagram Safe Mode pin (null = mode off).
+            pinnedCountry = igPinnedCountry(),
         ).filter { MmkvManager.decodeServerConfig(it.guid) != null }
         if (differentCountryThan.isNullOrBlank()) return ranked.firstOrNull()
         return ranked.firstOrNull { it.country != differentCountryThan }
@@ -4908,6 +5008,14 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                                         PerAppProxyActivity::class.java,
                                     )
                                 )
+                            },
+                            // v1.1.34: Instagram Safe Mode toggle +
+                            // country pick (persisted in the VM).
+                            onSetInstagramSafeMode = { enabled ->
+                                viewModel.setInstagramSafeMode(enabled)
+                            },
+                            onSelectInstagramSafeCountry = { code ->
+                                viewModel.setInstagramSafeCountry(code)
                             },
                         )
                         Vpn5gDestination.AUTH -> Vpn5gAuthScreen(
@@ -5650,7 +5758,15 @@ fun Vpn5gHomeScreen(
     // status card's smart-location row — the same pick auto-connect
     // uses, so the row never promises a server the engine would not
     // try first. A config with no ping result is never returned.
-    val bestServer = Vpn5gAutoConnect.pickBestServer(state.countries)
+    // v1.1.34: the recommended server honors the Instagram Safe
+    // Mode pin too, so the home row shows what a connect would
+    // actually pick (null pin = mode off, unchanged).
+    val bestServer = Vpn5gAutoConnect.pickBestServer(
+        state.countries,
+        pinnedCountry = Vpn5gInstagramSafeMode.pinnedCountry(
+            state.igSafeEnabled, state.igSafeCountryCode,
+        ),
+    )
     // Split tunnel is live only under Smart routing with direct-first
     // on — the single tested rule in [Vpn5gRouting.isSplitTunnelActive];
     // the row shows that derived state, never a separate stored flag.

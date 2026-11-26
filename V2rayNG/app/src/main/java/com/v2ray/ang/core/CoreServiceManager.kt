@@ -32,6 +32,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gDaemonPick
 import com.v2ray.ang.handler.vpn5g.Vpn5gFailedServers
 import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
 import com.v2ray.ang.handler.vpn5g.Vpn5gHealthScore
+import com.v2ray.ang.handler.vpn5g.Vpn5gInstagramSafeMode
 import com.v2ray.ang.handler.vpn5g.Vpn5gRealPing
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerValidator
 import com.v2ray.ang.handler.vpn5g.Vpn5gStandbyLiveness
@@ -90,7 +91,10 @@ object CoreServiceManager {
      * force-stop clears it.
      */
     private const val RESTART_STOP_WAIT_MS = 3_000L
-    private const val RESTART_STOP_POLL_MS = 100L
+    // v1.1.34: 50 ms poll (was 100 ms) — the in-place failover
+    // restart notices the core stop sooner, keeping the whole
+    // switch (stop + start on the same TUN) well under a second.
+    private const val RESTART_STOP_POLL_MS = 50L
 
     /** Tun descriptor the core was started with, null in the proxy only and root run modes. */
     private var currentVpnInterface: ParcelFileDescriptor? = null
@@ -197,6 +201,11 @@ object CoreServiceManager {
 
     @Throws(Exception::class)
     private fun launchCore(service: Service, vpnInterface: ParcelFileDescriptor?, isReload: Boolean = false) {
+        // v1.1.34: a (re)start clears the stopping latch and the
+        // silent-round counter — the new core gets fresh rounds
+        // to answer before the self-heal can fire again.
+        coreStopping = false
+        statsMissRounds = 0
         val guid = MmkvManager.getSelectServer() ?: error("No server selected")
         val config = MmkvManager.decodeServerConfig(guid) ?: error("Failed to decode server config")
 
@@ -277,6 +286,11 @@ object CoreServiceManager {
      * @return True if the core was stopped successfully, false otherwise.
      */
     fun stopCoreLoop(): Boolean {
+        // v1.1.34: from here on the stats self-heal must stay out
+        // of the way — this stop is intentional (user disconnect,
+        // timer, revoke) and a silent stats round during teardown
+        // must never restart the core.
+        coreStopping = true
         // v1.1.29: teardown prevents new work first — the daemon
         // watchdog (and any in-flight daemon failover) is cancelled
         // before anything else, so a user stop, the 30-minute timer
@@ -397,6 +411,90 @@ object CoreServiceManager {
             .onFailure { e ->
                 LogUtil.e(AppConfig.TAG, "StartCore-Manager: traffic flush failed", e)
             }
+    }
+
+    /** Consecutive stats rounds the core did not answer (v1.1.34). */
+    @Volatile
+    private var statsMissRounds = 0
+
+    /**
+     * True from [stopCoreLoop] entry until the next [launchCore]
+     * (v1.1.34): the self-heal below must never fight an
+     * intentional stop (user disconnect, timer, revoke).
+     */
+    @Volatile
+    private var coreStopping = false
+
+    /**
+     * One stats round report from the speed job (v1.1.34): counts
+     * silent rounds and restarts a wedged/dead core in place
+     * after [SELF_HEAL_MISS_ROUNDS] of them. Called on the speed
+     * job's IO thread; the restart is the same stop/start
+     * discipline as [reloadCore] (same service, same TUN), so the
+     * key icon never drops. If the restart itself fails, the
+     * core-alive stamp stays stale and SessionResurrection
+     * escalates to a full service restart. Never throws.
+     */
+    fun noteStatsRound(coreAnswered: Boolean) {
+        if (coreAnswered) {
+            statsMissRounds = 0
+            return
+        }
+        statsMissRounds++
+        val action = selfHealAction(
+            isRunning = isRunning(),
+            coreAnswered = false,
+            consecutiveMisses = statsMissRounds,
+            isReloading = isReloading,
+            stopping = coreStopping,
+            hasVpnInterface = currentVpnInterface != null,
+        )
+        if (action == SelfHealAction.NONE) return
+        // Give the restarted core fresh rounds to answer before
+        // counting again; a still-silent core retries every
+        // SELF_HEAL_MISS_ROUNDS until resurrection escalates.
+        statsMissRounds = 0
+        LogUtil.w(
+            AppConfig.TAG,
+            "StartCore-Manager: core silent for $SELF_HEAL_MISS_ROUNDS stats " +
+                "rounds (mode=VPN phase=self-heal action=$action) — restarting in place",
+        )
+        runCatching {
+            when (action) {
+                SelfHealAction.RELOAD -> reloadCore()
+                SelfHealAction.START -> restartCoreInPlace()
+                SelfHealAction.NONE -> Unit
+            }
+        }.onFailure { e ->
+            LogUtil.e(AppConfig.TAG, "StartCore-Manager: core self-heal failed", e)
+        }
+    }
+
+    /**
+     * Restarts the core onto the TUN this service still holds
+     * after the core died without a stop (v1.1.34 self-heal
+     * START path): the receiver and network monitor from the
+     * original start are still registered, so only the core
+     * itself is relaunched (same discipline as [reloadCore]).
+     */
+    private fun restartCoreInPlace(): Boolean {
+        val service = getService() ?: return false
+        val tunFd = currentVpnInterface ?: return false
+        if (isRunning()) return reloadCore()
+        return try {
+            isReloading = true
+            launchCore(service, tunFd, isReload = true)
+            isRunning()
+        } catch (e: Exception) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "StartCore-Manager: core self-heal start failed (mode=VPN phase=self-heal)",
+                e,
+            )
+            false
+        } finally {
+            isReloading = false
+        }
     }
 
     /**
@@ -737,6 +835,10 @@ object CoreServiceManager {
             excluding = daemonTriedGuids,
             failedGuids = failed.keys,
             standbyQueue = Vpn5gStandbyLiveness.loadQueue(),
+            // v1.1.34 (Instagram Safe Mode): the daemon honors the
+            // same MMKV pin as the UI — with a country pinned, the
+            // daemon failover never switches country either.
+            pinnedCountry = Vpn5gInstagramSafeMode.loadPinnedCountry(),
         )?.guid
     }
 
@@ -777,8 +879,16 @@ object CoreServiceManager {
     /** One daemon standby probe round (see [startDaemonStandby]). */
     private suspend fun daemonStandbyRound() {
         val currentGuid = MmkvManager.getSelectServer()
+        // v1.1.34 (Instagram Safe Mode): the persisted standby
+        // queue only ever holds pinned-country servers while the
+        // mode is on, so a daemon failover can never land outside
+        // the locked country.
+        val pinned = Vpn5gInstagramSafeMode.loadPinnedCountry()
         val candidates = daemonCandidates()
-            .filter { it.guid != currentGuid && it.guid !in daemonTriedGuids }
+            .filter {
+                it.guid != currentGuid && it.guid !in daemonTriedGuids &&
+                    Vpn5gInstagramSafeMode.matchesPinned(it.countryCode, pinned)
+            }
             .sortedWith(compareBy({ !it.hasRealPing }, { it.adjustedDelayMs }))
             .take(Vpn5gConstants.STANDBY_PROBE_K)
         if (candidates.isEmpty()) return
@@ -1029,3 +1139,37 @@ internal fun shouldKeepWaitingForCoreStop(
     nowMs: Long,
     deadlineMs: Long,
 ): Boolean = isRunning && nowMs < deadlineMs
+
+/** What one silent-stats round should do (v1.1.34). Pure. */
+internal enum class SelfHealAction { NONE, RELOAD, START }
+
+/** Silent rounds before the core is restarted in place. */
+internal const val SELF_HEAL_MISS_ROUNDS = 3
+
+/**
+ * Pure self-heal decision (v1.1.34, zombie fix): the speed job
+ * reports every stats round; a core that stops answering (empty
+ * stats) for [SELF_HEAL_MISS_ROUNDS] consecutive rounds (~3 s) is
+ * restarted in place on the same TUN — RELOAD when the running
+ * flag is still set (wedged core), START when the core died but
+ * the service still holds the TUN. Never while stopping or
+ * reloading (restarts in flight legitimately have silent
+ * rounds), and never without a TUN to restart onto — the
+ * SessionResurrection backstop owns process-level death. Kept
+ * top-level for the same reason as [shouldKeepWaitingForCoreStop]:
+ * JVM tests drive it without initializing the core controller.
+ */
+internal fun selfHealAction(
+    isRunning: Boolean,
+    coreAnswered: Boolean,
+    consecutiveMisses: Int,
+    isReloading: Boolean,
+    stopping: Boolean,
+    hasVpnInterface: Boolean,
+): SelfHealAction = when {
+    coreAnswered || stopping || isReloading -> SelfHealAction.NONE
+    consecutiveMisses < SELF_HEAL_MISS_ROUNDS -> SelfHealAction.NONE
+    isRunning -> SelfHealAction.RELOAD
+    hasVpnInterface -> SelfHealAction.START
+    else -> SelfHealAction.NONE
+}

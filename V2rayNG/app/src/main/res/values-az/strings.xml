@@ -742,6 +742,10 @@
     <string name="vpn5g_filter_free">Pulsuz</string>
     <string name="vpn5g_per_app_title">VPN istifadə edən tətbiqlər</string>
     <string name="vpn5g_per_app_body">Standart olaraq Instagram və Telegram VPN-dən istifadə edir. Bu seçimi dəyişə bilərsiniz; dəyişiklik növbəti qoşulmadan tətbiq edilir.</string>
+    <string name="vpn5g_ig_safe_title">Instagram Təhlükəsiz Rejimi</string>
+    <string name="vpn5g_ig_safe_body">Instagram həmişə bir sabit ölkədən qoşulur ki, səhifəniz yoxlama və kilidlənməyə düşməsin</string>
+    <string name="vpn5g_ig_safe_country">Sabit ölkə</string>
+    <string name="vpn5g_ig_safe_retrying">%1$s serverlərinə qoşulmağa cəhd edilir…</string>
     <string name="vpn5g_per_app_open">Tətbiqləri seç</string>
     <string name="vpn5g_startup_text_01">Qoşulmanın təhlükəsizliyi yoxlanılır...</string>
     <string name="vpn5g_startup_text_02">Təhlükəsiz tunel hazırlanır...</string>

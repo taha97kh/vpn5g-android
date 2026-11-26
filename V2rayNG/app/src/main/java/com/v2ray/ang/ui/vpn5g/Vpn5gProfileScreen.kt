@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,11 +15,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,6 +40,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,6 +52,8 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CHANNEL_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_URL
+import com.v2ray.ang.handler.vpn5g.Vpn5gCountryGroups
+import com.v2ray.ang.handler.vpn5g.Vpn5gInstagramSafeMode
 import com.v2ray.ang.handler.vpn5g.Vpn5gPlans
 import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
 import com.v2ray.ang.handler.vpn5g.Vpn5gVolume
@@ -65,6 +73,10 @@ fun Vpn5gProfileScreen(
     onOpenUrl: (String) -> Unit,
     /** Opens the per-app bypass screen (v1.1.14). */
     onOpenPerAppBypass: () -> Unit,
+    /** Instagram Safe Mode toggle (v1.1.34). */
+    onSetInstagramSafeMode: (Boolean) -> Unit,
+    /** Instagram Safe Mode fixed-country pick (v1.1.34). */
+    onSelectInstagramSafeCountry: (String) -> Unit,
 ) {
     var entered by remember { mutableStateOf(false) }
     // Section expansion is transient presentation state only (v1.1.5
@@ -304,6 +316,98 @@ fun Vpn5gProfileScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(text = stringResource(R.string.vpn5g_per_app_open), fontSize = 16.sp)
+                }
+                // Instagram Safe Mode (v1.1.34, Aref's order): an
+                // opt-in tick — with it on, Instagram always exits
+                // from ONE fixed country (every automatic pick,
+                // failover and standby queue is locked to it), so
+                // the page never hits impossible-travel checkpoints
+                // or locks. The toggle and the country persist in
+                // the ViewModel/MM KV; this section only renders
+                // state and forwards the taps.
+                Spacer(Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_ig_safe_title),
+                            color = Vpn5gOnDark,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = stringResource(R.string.vpn5g_ig_safe_body),
+                            color = Vpn5gOnDarkMuted,
+                            fontSize = 13.sp,
+                        )
+                    }
+                    val igSafeTitle = stringResource(R.string.vpn5g_ig_safe_title)
+                    Switch(
+                        checked = state.igSafeEnabled,
+                        onCheckedChange = { onSetInstagramSafeMode(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Vpn5gGreen,
+                            uncheckedThumbColor = Color.White,
+                            uncheckedTrackColor = Vpn5gOnDarkMuted,
+                        ),
+                        modifier = Modifier.semantics {
+                            contentDescription = igSafeTitle
+                        },
+                    )
+                }
+                if (state.igSafeEnabled) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = stringResource(R.string.vpn5g_ig_safe_country),
+                        color = Vpn5gOnDark,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    // Only countries with live servers (and a real
+                    // ISO code) can be pinned.
+                    val igCountries = remember(state.countries) {
+                        Vpn5gCountryGroups.groupByCountry(state.countries)
+                            .filter { it.code.isNotBlank() }
+                    }
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        igCountries.forEach { group ->
+                            val selected = Vpn5gInstagramSafeMode
+                                .normalizeCode(group.code) ==
+                                Vpn5gInstagramSafeMode
+                                    .normalizeCode(state.igSafeCountryCode)
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(
+                                        if (selected) Vpn5gTeal
+                                        else Vpn5gOnDark.copy(alpha = 0.08f)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (selected) Vpn5gTeal
+                                        else Vpn5gOnDark.copy(alpha = 0.18f),
+                                        RoundedCornerShape(20.dp),
+                                    )
+                                    .selectable(
+                                        selected = selected,
+                                        role = Role.RadioButton,
+                                    ) {
+                                        onSelectInstagramSafeCountry(group.code)
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                            ) {
+                                Text(
+                                    text = "${group.flag} ${group.nameFa} (${group.servers.size})",
+                                    color = if (selected) Color.White else Vpn5gOnDark,
+                                    fontSize = 13.sp,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

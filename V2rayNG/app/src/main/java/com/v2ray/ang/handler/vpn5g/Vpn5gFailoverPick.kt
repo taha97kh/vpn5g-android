@@ -55,9 +55,18 @@ object Vpn5gFailoverPick {
         failedGuids: Set<String>,
         standbyQueue: List<String> = emptyList(),
         healthScores: Map<String, Double> = emptyMap(),
+        pinnedCountry: String? = null,
     ): List<Vpn5gServerUi> {
-        val byGuid = servers.associateBy { it.guid }
-        val eligible = servers.filter { it.guid !in excluding }
+        // v1.1.34 (Instagram Safe Mode): with a country pinned the
+        // candidate pool is that country only — standby-queue
+        // members outside it never resolve (byGuid is built from
+        // the filtered pool), and an exhausted pinned country
+        // yields an empty ranking so the caller keeps retrying
+        // inside the country instead of switching country. A null
+        // pin (mode off) keeps the pre-1.1.34 behavior.
+        val pool = Vpn5gInstagramSafeMode.filterUiServers(servers, pinnedCountry)
+        val byGuid = pool.associateBy { it.guid }
+        val eligible = pool.filter { it.guid !in excluding }
         fun healthAdjusted(server: Vpn5gServerUi): Long =
             Vpn5gHealthScore.adjustedPing(
                 server.pingMillis, healthScores[server.dedupeKey] ?: 0.0
@@ -122,8 +131,11 @@ object Vpn5gFailoverPick {
         standbyQueue: List<String> = emptyList(),
         healthScores: Map<String, Double> = emptyMap(),
         differentCountryThan: String? = null,
+        pinnedCountry: String? = null,
     ): Vpn5gServerUi? {
-        return ranked(servers, excluding, failedGuids, standbyQueue, healthScores)
-            .firstOrNull()
+        return ranked(
+            servers, excluding, failedGuids, standbyQueue, healthScores,
+            pinnedCountry,
+        ).firstOrNull()
     }
 }

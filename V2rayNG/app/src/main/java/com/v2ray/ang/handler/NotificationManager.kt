@@ -283,7 +283,20 @@ object NotificationManager {
         var directUplink = 0L
         var directDownlink = 0L
 
-        CoreServiceManager.queryAllOutboundTrafficStats().forEach { stat ->
+        val stats = CoreServiceManager.queryAllOutboundTrafficStats()
+        // v1.1.34 (zombie fix): the core ANSWERED only when the
+        // stats query returned entries. queryAllOutboundTrafficStats
+        // returns an empty list when the core is stopped — and a
+        // wedged core whose running flag is stale answers with an
+        // empty payload too. Before 1.1.34 the core-alive stamp
+        // below was written unconditionally, so a dead core kept
+        // a fresh stamp forever and the resurrection backstop
+        // never fired: key icon up, no traffic (Aref's recents-
+        // swipe report). The stamp now proves the core answered,
+        // and CoreServiceManager counts silent rounds to restart
+        // a wedged core in place.
+        val coreAnswered = stats.isNotEmpty()
+        stats.forEach { stat ->
             when {
                 stat.tag == AppConfig.TAG_DIRECT -> {
                     when (stat.direction) {
@@ -334,7 +347,13 @@ object NotificationManager {
         Vpn5gVolumeStore.addSessionIntervalBytes(proxyDownlink + proxyUplink)
         // v1.1.33: core-alive stamp for the resurrection backstop —
         // written every round while the core answers, every mode.
-        Vpn5gDaemonHeartbeat.writeCoreAlive(queryTime)
+        // v1.1.34: ONLY when the core actually answered this round
+        // (non-empty stats) — a silent core must let the stamp go
+        // stale so the backstop restarts the stuck service.
+        if (coreAnswered) {
+            Vpn5gDaemonHeartbeat.writeCoreAlive(queryTime)
+        }
+        CoreServiceManager.noteStatsRound(coreAnswered)
         if (!screenOff && (!zeroSpeed || !lastZeroSpeed)) {
             // v1.1.14: TUNNEL-ONLY speeds with Persian labels — the
             // bypassed (direct) traffic is never shown, and nothing is

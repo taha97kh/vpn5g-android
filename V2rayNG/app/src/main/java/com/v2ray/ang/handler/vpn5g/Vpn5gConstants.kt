@@ -55,6 +55,53 @@ object Vpn5gConstants {
     const val GITHUB_SOURCE_6 =
         "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/super-sub.txt"
 
+    /**
+     * GitHub sources 7–19 (v1.1.34, Aref's order: «از مخازن
+     * گیت‌هاب و سایت‌هایی که کانفیگ می‌زارن هم استفاده کنه واسه
+     * جمع‌آوری کانفیگ‌های بیشتر و سالم»): more well-known public
+     * config repos so the pool has more healthy configs. Every
+     * URL below was verified live via the GitHub API on
+     * 2026-11-26 (file exists; sample lines parse as
+     * vmess/vless/trojan/ss URIs with the existing pipeline —
+     * counts in the 1.1.34 release log). All are capped sources
+     * (spread-sampled ping), fetched in parallel with the same
+     * bounded timeouts, so refresh stays inside its budget;
+     * configs with no measured ping never appear, as always.
+     * Rejected after verification: MhdiTaheri/V2rayCollector,
+     * SoliSpirit/v2ray-configs, Epodonios/v2ray-configs,
+     * 10ium/V2ray-Config, itsyebekhe/PSG, Au1rxx/Free-V2ray-Config,
+     * Surfboardv2ray/TGParse (404 at the checked paths);
+     * mahdibland sub_merge_base64.txt (same content as
+     * sub_merge.txt, base64-wrapped — duplicate); Pawdroid/
+     * Free-servers (4.8 KB, no plain URIs).
+     */
+    const val GITHUB_SOURCE_7 =
+        "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub1.txt"
+    const val GITHUB_SOURCE_8 =
+        "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub2.txt"
+    const val GITHUB_SOURCE_9 =
+        "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub3.txt"
+    const val GITHUB_SOURCE_10 =
+        "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub4.txt"
+    const val GITHUB_SOURCE_11 =
+        "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub5.txt"
+    const val GITHUB_SOURCE_12 =
+        "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub6.txt"
+    const val GITHUB_SOURCE_13 =
+        "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub7.txt"
+    const val GITHUB_SOURCE_14 =
+        "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub8.txt"
+    const val GITHUB_SOURCE_15 =
+        "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt"
+    const val GITHUB_SOURCE_16 =
+        "https://raw.githubusercontent.com/Kwinshadow/TelegramV2rayCollector/main/sublinks/mix.txt"
+    const val GITHUB_SOURCE_17 =
+        "https://raw.githubusercontent.com/ndsphonemy/proxy-sub/main/speed.txt"
+    const val GITHUB_SOURCE_18 =
+        "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/server.txt"
+    const val GITHUB_SOURCE_19 =
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/V2RAY_RAW.txt"
+
     /** Default config sources, in order. Extra sources may come from app_config.json. */
     val DEFAULT_CONFIG_SOURCES = listOf(
         LIVE_JSON,
@@ -65,6 +112,19 @@ object Vpn5gConstants {
         GITHUB_SOURCE_4,
         GITHUB_SOURCE_5,
         GITHUB_SOURCE_6,
+        GITHUB_SOURCE_7,
+        GITHUB_SOURCE_8,
+        GITHUB_SOURCE_9,
+        GITHUB_SOURCE_10,
+        GITHUB_SOURCE_11,
+        GITHUB_SOURCE_12,
+        GITHUB_SOURCE_13,
+        GITHUB_SOURCE_14,
+        GITHUB_SOURCE_15,
+        GITHUB_SOURCE_16,
+        GITHUB_SOURCE_17,
+        GITHUB_SOURCE_18,
+        GITHUB_SOURCE_19,
     )
 
     /**
@@ -79,6 +139,19 @@ object Vpn5gConstants {
         GITHUB_SOURCE_4,
         GITHUB_SOURCE_5,
         GITHUB_SOURCE_6,
+        GITHUB_SOURCE_7,
+        GITHUB_SOURCE_8,
+        GITHUB_SOURCE_9,
+        GITHUB_SOURCE_10,
+        GITHUB_SOURCE_11,
+        GITHUB_SOURCE_12,
+        GITHUB_SOURCE_13,
+        GITHUB_SOURCE_14,
+        GITHUB_SOURCE_15,
+        GITHUB_SOURCE_16,
+        GITHUB_SOURCE_17,
+        GITHUB_SOURCE_18,
+        GITHUB_SOURCE_19,
     )
 
     /** True when [url] is a large file whose lines are sampled, not fully ping-tested. Pure. */
@@ -308,8 +381,9 @@ object Vpn5gConstants {
     const val DROP_FAILOVER_DEBOUNCE_MS = 800L
 
     /**
-     * In-session tunnel watchdog (v1.1.11; fast detection v1.1.29):
-     * while CONNECTED, a light single-fetch exit-IP probe runs every
+     * In-session tunnel watchdog (v1.1.11; fast detection v1.1.29;
+     * sub-2-second failover v1.1.34): while CONNECTED, a light
+     * single-fetch exit-IP probe runs every
      * [WATCHDOG_PROBE_INTERVAL_TICKS] seconds (the 1-second ticker
      * counts them). Probe verdicts feed a leaky-bucket score (see
      * [Vpn5gWatchdogScore]): a FAILED probe adds 1.0, an UNKNOWN adds
@@ -317,19 +391,27 @@ object Vpn5gConstants {
      * 1.0; at [WATCHDOG_DROP_SCORE] the tunnel drops so the drop
      * detector can fail over. On the first failure a confirm probe
      * runs after [WATCHDOG_CONFIRM_DELAY_MS] instead of waiting for
-     * the next tick. Worst-case detection: death just after a probe
-     * → next probe ≤5 s (≤3 s timeout) → confirm +2 s (≤3 s) → drop
-     * at ≤ ~13 s (typical ~7–10 s), vs ~60–81 s before 1.1.29. The
+     * the next tick. v1.1.34 (Aref's order: «در کمتر از ۲ ثانیه
+     * کانفینگ های پینگ دار بدون قطع شدن وارد بشن؛ سویچ باید جوری
+     * باشه که تونل خاموش نشه»): interval 5 s → 2 s, confirm delay
+     * 2 s → 0 (immediate confirm; two consecutive failures are
+     * still required, so one transient blip never switches), probe
+     * timeout 3 s → 1.5 s (Vpn5gTunnelCheck). Detection of a dead
+     * server (the usual fast-fail: the probe is refused/reset in
+     * a few hundred ms) now lands in ~1–2 s; the switch itself is
+     * the in-place core restart on the same TUN (~0.3–1 s, TUN
+     * never drops). A silent blackhole (probes only fail at their
+     * timeout) is the worst case: 2 s + 1.5 s + 1.5 s ≈ 5 s. The
      * full 60-second re-verification still runs alongside this as
      * the deeper check.
      */
-    const val WATCHDOG_PROBE_INTERVAL_TICKS = 5
+    const val WATCHDOG_PROBE_INTERVAL_TICKS = 2
     /** Legacy name kept for the drop threshold count (v1.1.29: score-based, see [WATCHDOG_DROP_SCORE]). */
     const val WATCHDOG_MAX_CONSECUTIVE_FAILURES = 2
     /** Leaky-bucket score at which the watchdog drops the tunnel (v1.1.29). */
     const val WATCHDOG_DROP_SCORE = 2.0
-    /** Delay before the confirm probe after a first failed watchdog probe (v1.1.29). */
-    const val WATCHDOG_CONFIRM_DELAY_MS = 2_000L
+    /** Delay before the confirm probe after a first failed watchdog probe (v1.1.29; 0 since v1.1.34 — immediate confirm). */
+    const val WATCHDOG_CONFIRM_DELAY_MS = 0L
 
     /**
      * Drop failover rounds (v1.1.11; never-give-up v1.1.29): the

@@ -72,8 +72,19 @@ object Vpn5gDaemonPick {
         excluding: Set<String>,
         failedGuids: Set<String>,
         standbyQueue: List<String> = emptyList(),
+        pinnedCountry: String? = null,
     ): Candidate? {
-        val eligible = candidates.filter { it.guid !in excluding }
+        // v1.1.34 (Instagram Safe Mode): with a country pinned
+        // the daemon pool is that country only — standby-queue
+        // members outside it never resolve, and an exhausted
+        // pinned country returns null so the daemon failover
+        // loop keeps refreshing/retrying inside the country
+        // instead of switching country. A null pin (mode off)
+        // keeps the pre-1.1.34 behavior.
+        val pool = Vpn5gInstagramSafeMode.filterDaemonCandidates(
+            candidates, pinnedCountry,
+        )
+        val eligible = pool.filter { it.guid !in excluding }
         if (eligible.isEmpty()) return null
         val byGuid = eligible.associateBy { it.guid }
         val queued = standbyQueue.mapNotNull { byGuid[it] }

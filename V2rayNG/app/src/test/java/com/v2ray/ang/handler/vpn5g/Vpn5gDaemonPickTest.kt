@@ -231,4 +231,71 @@ class Vpn5gDaemonPickTest {
         assertFalse(Vpn5gDaemonHeartbeat.isCoreAliveFresh(0L, 1_000L))
         assertFalse(Vpn5gDaemonHeartbeat.isCoreAliveFresh(5_000L, 4_000L))
     }
+
+    // v1.1.34 (Instagram Safe Mode): a pinned country restricts
+    // the daemon pool to that country only.
+    @Test
+    fun test_pinned_country_only_picks_that_country() {
+        val candidates = listOf(
+            candidate("usFast", 10, countryCode = "US"),
+            candidate("deSlow", 900, countryCode = "DE"),
+        )
+        // Without a pin the US candidate wins (country priority);
+        // pinned to DE the slower DE candidate is the only pick.
+        assertEquals(
+            "usFast",
+            Vpn5gDaemonPick.pickNext(candidates, emptySet(), emptySet())?.guid,
+        )
+        assertEquals(
+            "deSlow",
+            Vpn5gDaemonPick.pickNext(
+                candidates, emptySet(), emptySet(), pinnedCountry = "DE",
+            )?.guid,
+        )
+    }
+
+    @Test
+    fun test_pinned_country_exhausted_returns_null() {
+        val candidates = listOf(
+            candidate("us1", 10, countryCode = "US"),
+            candidate("de1", 100, countryCode = "DE"),
+        )
+        // No FR candidate at all → null, never another country.
+        assertNull(
+            Vpn5gDaemonPick.pickNext(
+                candidates, emptySet(), emptySet(), pinnedCountry = "FR",
+            )
+        )
+        // The only DE candidate excluded → null, never the US one.
+        assertNull(
+            Vpn5gDaemonPick.pickNext(
+                candidates, setOf("de1"), emptySet(), pinnedCountry = "DE",
+            )
+        )
+    }
+
+    @Test
+    fun test_pinned_country_standby_queue_outside_pin_skipped() {
+        val candidates = listOf(
+            candidate("queuedUs", 50, countryCode = "US"),
+            candidate("dePlain", 500, countryCode = "DE"),
+        )
+        // Queue head is outside the pin: it never resolves, the
+        // in-country tier pick wins instead.
+        assertEquals(
+            "dePlain",
+            Vpn5gDaemonPick.pickNext(
+                candidates, emptySet(), emptySet(),
+                standbyQueue = listOf("queuedUs"), pinnedCountry = "DE",
+            )?.guid,
+        )
+        // Null pin keeps the pre-1.1.34 queue behavior.
+        assertEquals(
+            "queuedUs",
+            Vpn5gDaemonPick.pickNext(
+                candidates, emptySet(), emptySet(),
+                standbyQueue = listOf("queuedUs"),
+            )?.guid,
+        )
+    }
 }

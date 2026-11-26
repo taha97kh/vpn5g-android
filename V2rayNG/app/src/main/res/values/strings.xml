@@ -757,6 +757,10 @@
     <string name="vpn5g_filter_free">رایگان</string>
     <string name="vpn5g_per_app_title">برنامه‌های فیلترشکن</string>
     <string name="vpn5g_per_app_body">به‌صورت پیش‌فرض اینستاگرام و تلگرام از فیلترشکن استفاده می‌کنند. می‌توانید این انتخاب را تغییر دهید؛ تغییر از اتصال بعدی اعمال می‌شود.</string>
+    <string name="vpn5g_ig_safe_title">حالت امن اینستاگرام</string>
+    <string name="vpn5g_ig_safe_body">اینستاگرام همیشه از یک کشور ثابت وصل می‌شود تا پیجتان دچار چک‌پوینت و قفل نشود</string>
+    <string name="vpn5g_ig_safe_country">کشور ثابت</string>
+    <string name="vpn5g_ig_safe_retrying">در حال تلاش برای اتصال به سرورهای %1$s…</string>
     <string name="vpn5g_per_app_open">انتخاب برنامه‌ها</string>
 
     <!-- v1.1.15: rotating startup texts (verbatim), Premium top, gift button, ads, tamper -->

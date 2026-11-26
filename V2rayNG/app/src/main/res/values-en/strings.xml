@@ -166,6 +166,10 @@
     <string name="vpn5g_filter_free">Free</string>
     <string name="vpn5g_per_app_title">Apps using the VPN</string>
     <string name="vpn5g_per_app_body">By default, Instagram and Telegram use the VPN. You can change this selection; the change applies from the next connection.</string>
+    <string name="vpn5g_ig_safe_title">Instagram Safe Mode</string>
+    <string name="vpn5g_ig_safe_body">Instagram always connects from one fixed country, so your page never hits checkpoints or locks</string>
+    <string name="vpn5g_ig_safe_country">Fixed country</string>
+    <string name="vpn5g_ig_safe_retrying">Trying to connect to %1$s servers…</string>
     <string name="vpn5g_per_app_open">Choose apps</string>
     <string name="vpn5g_startup_text_01">Checking the security of the connection...</string>
     <string name="vpn5g_startup_text_02">Preparing the secure tunnel...</string>

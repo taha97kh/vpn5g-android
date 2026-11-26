@@ -17,6 +17,7 @@ class Vpn5gAutoConnectTest {
         realPing: Boolean = true,
         isSeed: Boolean = false,
         dedupeKey: String = "",
+        countryCode: String = "",
     ) =
         Vpn5gServerUi(
             guid = guid,
@@ -30,6 +31,7 @@ class Vpn5gAutoConnectTest {
             // v1.1.20: a build-time verified seed server.
             isSeed = isSeed,
             dedupeKey = dedupeKey,
+            countryCode = countryCode,
         )
 
     private fun section(servers: List<Vpn5gServerUi>) = Vpn5gCountryUi(
@@ -733,6 +735,56 @@ class Vpn5gAutoConnectTest {
         )
         assertFalse(
             Vpn5gAutoConnect.connectVideoFinished(Vpn5gConnectState.RETRYING),
+        )
+    }
+
+    // -- v1.1.34 Instagram Safe Mode: pinned-country picks -------------------
+
+    @Test
+    fun test_pick_best_server_pinned_country() {
+        val sections = listOf(
+            section(
+                listOf(
+                    server("usFast", 10L, countryCode = "US"),
+                    server("deSlow", 900L, countryCode = "DE"),
+                    server("deFast", 100L, countryCode = "DE"),
+                )
+            ),
+        )
+        // No pin: fastest overall wins.
+        assertEquals("usFast", Vpn5gAutoConnect.pickBestServer(sections)?.guid)
+        // Pinned to DE: only DE servers are candidates.
+        assertEquals(
+            "deFast",
+            Vpn5gAutoConnect.pickBestServer(sections, pinnedCountry = "DE")?.guid,
+        )
+        assertEquals(
+            listOf("deFast", "deSlow"),
+            Vpn5gAutoConnect.rankCandidates(sections, pinnedCountry = "DE")
+                .map { it.guid },
+        )
+    }
+
+    @Test
+    fun test_pick_best_server_pinned_country_exhausted() {
+        val sections = listOf(
+            section(
+                listOf(
+                    server("us1", 10L, countryCode = "US"),
+                    server("de1", 100L, countryCode = "DE"),
+                )
+            ),
+        )
+        // No FR server → null/empty, never another country.
+        assertNull(Vpn5gAutoConnect.pickBestServer(sections, pinnedCountry = "FR"))
+        assertTrue(
+            Vpn5gAutoConnect.rankCandidates(sections, pinnedCountry = "FR").isEmpty()
+        )
+        // The only DE server excluded → null, never the US one.
+        assertNull(
+            Vpn5gAutoConnect.pickBestServer(
+                sections, excluding = setOf("de1"), pinnedCountry = "DE",
+            )
         )
     }
 }

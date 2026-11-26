@@ -2,6 +2,7 @@ package com.v2ray.ang.handler.vpn5g
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
@@ -204,5 +205,72 @@ class Vpn5gFailoverPickTest {
             servers, emptySet(), emptySet(), standbyQueue = listOf("a", "b"),
         )
         assertEquals(listOf("a", "b"), ranked.map { it.guid })
+    }
+
+    // v1.1.34 (Instagram Safe Mode): a pinned country restricts
+    // the failover pool to that country only.
+    @Test
+    fun test_pinned_country_ranked_only_that_country() {
+        val servers = listOf(
+            server("usFast", 10, countryCode = "US"),
+            server("deSlow", 900, countryCode = "DE"),
+            server("deFast", 100, countryCode = "DE"),
+        )
+        val ranked = Vpn5gFailoverPick.ranked(
+            servers, emptySet(), emptySet(), pinnedCountry = "DE",
+        )
+        assertEquals(listOf("deFast", "deSlow"), ranked.map { it.guid })
+        assertEquals(
+            "deFast",
+            Vpn5gFailoverPick.pick(
+                servers, emptySet(), emptySet(), pinnedCountry = "DE",
+            )?.guid,
+        )
+    }
+
+    @Test
+    fun test_pinned_country_exhausted_is_empty() {
+        val servers = listOf(
+            server("us1", 10, countryCode = "US"),
+            server("de1", 100, countryCode = "DE"),
+        )
+        // No FR server → empty ranking, never another country.
+        assertTrue(
+            Vpn5gFailoverPick.ranked(
+                servers, emptySet(), emptySet(), pinnedCountry = "FR",
+            ).isEmpty()
+        )
+        assertNull(
+            Vpn5gFailoverPick.pick(
+                servers, emptySet(), emptySet(), pinnedCountry = "FR",
+            )
+        )
+        // The only DE server excluded → empty, never the US one.
+        assertNull(
+            Vpn5gFailoverPick.pick(
+                servers, setOf("de1"), emptySet(), pinnedCountry = "DE",
+            )
+        )
+    }
+
+    @Test
+    fun test_pinned_country_standby_queue_outside_pin_skipped() {
+        val servers = listOf(
+            server("queuedUs", 50, countryCode = "US"),
+            server("dePlain", 500, countryCode = "DE"),
+        )
+        val ranked = Vpn5gFailoverPick.ranked(
+            servers, emptySet(), emptySet(),
+            standbyQueue = listOf("queuedUs"), pinnedCountry = "DE",
+        )
+        assertEquals(listOf("dePlain"), ranked.map { it.guid })
+        // Null pin keeps the pre-1.1.34 queue behavior.
+        assertEquals(
+            "queuedUs",
+            Vpn5gFailoverPick.pick(
+                servers, emptySet(), emptySet(),
+                standbyQueue = listOf("queuedUs"),
+            )?.guid,
+        )
     }
 }
