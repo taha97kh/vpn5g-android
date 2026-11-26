@@ -202,6 +202,13 @@ fun Vpn5gSubscriptionScreen(
             )
         }
 
+        // v1.1.31 (Aref's order): a user with a PURCHASE
+        // subscription (isSubscriber) sees no purchase UI anywhere
+        // — the plan groups and the purchase area below are hidden
+        // for them («هیچ جایی اسمی از خرید اشتراک نباشه») and every
+        // feature is already active. Free and gift-tier users keep
+        // the full purchase flow.
+        if (!state.isSubscriber) {
         // v1.1.30: TWO big group buttons (not a flat list of 8
         // plans). Tapping one opens its guide + plan rows.
         Vpn5gStaggeredItem(index = 2, visible = entered) {
@@ -335,6 +342,7 @@ fun Vpn5gSubscriptionScreen(
                     )
                 }
             }
+        }
         }
 
         // v1.1.30: share-app referral — personal link, 1 GB gift

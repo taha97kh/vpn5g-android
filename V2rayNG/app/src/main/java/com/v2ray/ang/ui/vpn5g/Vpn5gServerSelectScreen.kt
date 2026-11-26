@@ -758,7 +758,11 @@ fun Vpn5gServerSelectScreen(
                 // the lock notice below instead of the list. Free
                 // servers in these countries stay on the FREE/ALL
                 // tabs, so no free basic is removed.
-                Vpn5gServerTab.SANCTIONED -> if (hasActiveSubscription(state)) {
+                // v1.1.31 (Aref's order): this tab is for PURCHASE
+                // codes only — an active paid subscription
+                // (isSubscriber) opens it; a gift code alone
+                // (isGift) does NOT («فقط با کد هدیه فعال نباشه»).
+                Vpn5gServerTab.SANCTIONED -> if (state.isSubscriber) {
                     sanctionSections.map { it to !it.isFree }
                 } else {
                     emptyList()
@@ -784,7 +788,10 @@ fun Vpn5gServerSelectScreen(
                             color = Vpn5gOnDarkMuted,
                             fontSize = 13.sp,
                         )
-                        if (!hasActiveSubscription(state)) {
+                        // v1.1.31: the lock shows for everyone
+                        // without a PURCHASE subscription — gift
+                        // tier included (Aref's order).
+                        if (!state.isSubscriber) {
                             Vpn5gPremiumLockNotice(onOpenPremium = onOpenPremium)
                         } else if (sanctionSections.isEmpty()) {
                             Text(
