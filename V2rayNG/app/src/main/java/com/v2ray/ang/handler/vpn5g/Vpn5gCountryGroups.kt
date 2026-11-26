@@ -32,6 +32,65 @@ object Vpn5gCountryGroups {
     /** The Premium country list shows at most this many countries (Aref: 100). */
     const val MAX_COUNTRIES = 100
 
+    // -- Country priority + sanction-bypass set (v1.1.30) ----------------------
+    //
+    // Aref's order (2026-11-26): failover must exhaust ALL servers of
+    // one country before jumping to the next, in this priority —
+    // آمریکا (US) → آلمان (DE) → کانادا (CA) → the other countries
+    // that bypass sanctions (Google Flow / Gemini geo-blocks) →
+    // everything else. The same set backs the «مخصوص اپ‌های
+    // تحریم‌شده» menu on the server screen.
+
+    /**
+     * Countries whose IPs generally pass the geo-checks of
+     * sanction-blocked services (Google Flow, Gemini, …): not
+     * sanctioned regions, so a tunnel exit there is treated as a
+     * normal user. Upper-case ISO codes. Pure data, JVM-tested.
+     */
+    val SANCTION_BYPASS_CODES: Set<String> = setOf(
+        "US", "CA", "GB", "DE", "FR", "NL", "FI", "SE", "NO", "DK",
+        "CH", "AT", "BE", "IE", "IT", "ES", "PT", "PL", "CZ", "SK",
+        "HU", "RO", "BG", "GR", "JP", "KR", "SG", "AU", "NZ", "IL",
+        "AE", "TR", "IN", "BR", "MX", "AR", "CL", "ZA", "MY", "TH",
+        "VN", "ID", "PH", "TW", "HK",
+    )
+
+    /**
+     * Failover priority of a country code (lower = tried first):
+     * US 0, DE 1, CA 2, other sanction-bypassing countries 3, any
+     * other known country 4, unknown 5. Case-insensitive; blank =
+     * unknown. Pure, JVM-tested.
+     */
+    fun priorityOf(countryCode: String?): Int {
+        val code = countryCode?.trim()?.uppercase().orEmpty()
+        return when (code) {
+            "US" -> 0
+            "DE" -> 1
+            "CA" -> 2
+            "" -> 5
+            else -> if (code in SANCTION_BYPASS_CODES) 3 else 4
+        }
+    }
+
+    /** True when [countryCode] is a sanction-bypassing country. Pure. */
+    fun isSanctionBypass(countryCode: String?): Boolean {
+        val code = countryCode?.trim()?.uppercase().orEmpty()
+        return code in SANCTION_BYPASS_CODES
+    }
+
+    /**
+     * Country groups for the «مخصوص اپ‌های تحریم‌شده» menu: only
+     * sanction-bypassing countries, in failover-priority order
+     * (US, DE, CA, then the rest by group size). Pure, JVM-tested.
+     */
+    fun sanctionBypassGroups(sections: List<Vpn5gCountryUi>): List<CountryGroup> {
+        return groupByCountry(sections)
+            .filter { isSanctionBypass(it.code) }
+            .sortedWith(
+                compareBy<CountryGroup>({ priorityOf(it.code) }, { -it.servers.size })
+            )
+    }
+
     /**
      * Groups the home-screen sections by country code. Servers whose
      * remark/enrichment never produced a code group under their section

@@ -142,3 +142,15 @@ jobs:
       with:
         name: vpn5g-release-apk
         path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/playstore/release/*universal*.apk
+
+    # Per-ABI arm64 APK (v1.1.30): Telegram caps bot file sends at
+    # 50 MB and the universal APK is ~76 MB, so the arm64 split is
+    # uploaded too for bot delivery. Splits are already enabled in
+    # build.gradle.kts; if the file is absent the step is a no-op.
+    - name: Upload arm64 release APK (bot delivery)
+      uses: actions/upload-artifact@v7
+      if: ${{ success() }}
+      with:
+        name: vpn5g-release-apk-arm64
+        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/playstore/release/*arm64-v8a*.apk
+        if-no-files-found: ignore

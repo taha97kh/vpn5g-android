@@ -966,4 +966,75 @@
     <string name="vpn5g_exit_yes">Bəli</string>
     <string name="vpn5g_exit_no">Xeyr</string>
     <string name="vpn5g_other_vpn_notice">Telefonunuzda başqa bir VPN aktivdir. VPN 5G ilə qoşulanda o VPN dayanacaq ki, qarışmasınlar.</string>
+
+    <!-- v1.1.30 additions -->
+    <string name="vpn5g_sub_group_gb_title">📦 Həcm (GB) paketləri</string>
+    <string name="vpn5g_sub_group_gb_guide">Sabit həcmli paket alırsan və həcmi bitənə və ya müddəti dolana qədər istifadə edirsən — hansı əvvəl gəlsə.
+
+Az və ara-sıra istifadə üçün uyğundur.</string>
+    <string name="vpn5g_sub_group_time_title">📅 Limitsiz (vaxt) paketlər</string>
+    <string name="vpn5g_sub_group_time_guide">Abunəlik müddətində həcm limiti olmadan qoşulursan — yalnız bitmə tarixi vacibdir.
+
+Gündəlik, daimi istifadə üçün uyğundur.</string>
+    <string name="vpn5g_sub_status_none">Aktiv abunəliyin yoxdur</string>
+    <string name="vpn5g_sub_remaining_gb">Qalan həcm: %1$s GB</string>
+    <string name="vpn5g_sub_buy_from_bot_guide">Botdan al: Telegram botunda paketi seç, dəqiq (unikal) məbləği kartla ödə, 6 rəqəmli kodu al və burada daxil et.</string>
+    <string name="vpn5g_sub_buy_from_bot_button">Telegram botundan al</string>
+    <string name="vpn5g_sub_purchase_title">Abunəlik al</string>
+    <string name="vpn5g_sub_choose_group">Abunəlik növünü seç:</string>
+    <string name="vpn5g_pay_link_default_name">Onlayn ödəniş</string>
+    <string name="vpn5g_pay_link_guide_default">Bu linklə ödənişi et; ödənişdən sonra abunəlik kodunu bu ekranda daxil et.</string>
+    <string name="vpn5g_pay_usdt_default_name">Tether (USDT) ilə ödə</string>
+    <string name="vpn5g_pay_usdt_address">Tether pul kisəsi ünvanı:</string>
+    <string name="vpn5g_pay_usdt_network">Şəbəkə: %1$s</string>
+    <string name="vpn5g_pay_usdt_copy">Ünvanı kopyala</string>
+    <string name="vpn5g_pay_usdt_copied">Ünvan kopyalandı</string>
+    <string name="vpn5g_pay_usdt_guide_default">Paketin ekvivalent məbləğini bu ünvana göndər və qəbzi botda göndər ki, kodun verilsin.</string>
+    <string name="vpn5g_referral_title">Tətbiqi paylaş, 1 GB hədiyyə qazan</string>
+    <string name="vpn5g_referral_body">Şəxsi linkini dostlarına göndər. Linkinlə qoşulub qeydiyyatdan keçən hər kəs — həm sən, həm o, bütün serverlərdə 1 GB hədiyyə alırsınız!
+
+Nə qədər çox paylaşsan, o qədər çox qazanarsan. Linkini indi göndər 🎁</string>
+    <string name="vpn5g_referral_your_link">Şəxsi linkin:</string>
+    <string name="vpn5g_referral_share_button">Linkimi paylaş</string>
+    <string name="vpn5g_referral_copy">Linki kopyala</string>
+    <string name="vpn5g_referral_copied">Link kopyalandı</string>
+    <string name="vpn5g_referral_captured">Dəvət linki saxlanıldı; qeydiyyatdan sonra 1 GB hədiyyə alacaqsan 🎁</string>
+    <string name="vpn5g_referral_signin_needed">Şəxsi linkini almaq üçün əvvəlcə daxil ol.</string>
+    <string name="vpn5g_referral_share_text">Bu linklə VPN 5G-yə qoşul və bütün serverlərdə 1 GB hədiyyə al 🎁
+%1$s</string>
+    <string name="vpn5g_stats_title">İstifadə statistikası</string>
+    <string name="vpn5g_stats_session">Bu sessiya</string>
+    <string name="vpn5g_stats_total">Ümumi abunəlik istifadəsi</string>
+    <string name="vpn5g_stats_remaining_gb">Qalan həcm</string>
+    <string name="vpn5g_stats_remaining_time">Qalan vaxt</string>
+    <string name="vpn5g_stats_ping">Ping</string>
+    <string name="vpn5g_stats_unlimited">Limitsiz</string>
+    <string name="vpn5g_stats_no_session">Aktiv sessiya yoxdur</string>
+    <string name="vpn5g_stats_days">%1$d gün</string>
+    <string name="vpn5g_stats_hours">%1$d saat</string>
+    <string name="vpn5g_stats_minutes">%1$d dəqiqə</string>
+    <string name="vpn5g_stats_gb_value">%1$s GB</string>
+    <string name="vpn5g_sanctioned_title">Sanksiyalı tətbiqlər üçün</string>
+    <string name="vpn5g_tab_sanctioned">Sanksiyalı tətbiqlər</string>
+    <string name="vpn5g_sanctioned_body">Google Flow, Gemini və oxşar xidmətlərin blokunu aşan ölkələrin serverləri. Bu tətbiqlər üçün bunlardan birini seç.</string>
+    <string name="vpn5g_sanctioned_none">Bu ölkələrdən hələ server yoxdur; siyahını yenilə.</string>
+    <string name="vpn5g_about_title">Tətbiq haqqında</string>
+    <string name="vpn5g_about_desc">VPN 5G bir toxunuşla səni ən yaxşı serverə qoşan sürətli və təhlükəsiz VPN-dir. Server kəsilərsə, internetin dayanmasın deyə özü növbəti serverə keçir.</string>
+    <string name="vpn5g_about_speed_title">Sürət</string>
+    <string name="vpn5g_about_speed_body">Serverlər real tunel pingi ilə ölçülür və ən sürətliləri əvvəl seçilir ki, yükləmə və video dayanmadan işləsin.</string>
+    <string name="vpn5g_about_ping_title">Ping</string>
+    <string name="vpn5g_about_ping_body">Gördüyün ping realdır: tuneldən həqiqi sorğu göndərilir. Rəqəm nə qədər kiçik olsa, bağlantı o qədər sürətli və sabitdir.</string>
+    <string name="vpn5g_about_creator_title">Yaradan</string>
+    <string name="vpn5g_about_creator_body">Yaradan: AREF KH
+Instagram: @4ref.ai
+Telegram: @Aref_5G</string>
+    <string name="vpn5g_about_security_title">Təhlükəsizlik və məxfilik</string>
+    <string name="vpn5g_about_security_body">Trafikin şifrələnir və DNS də tuneldən keçir, sızma olmur. Tətbiq ziyarət etdiyin saytların tarixçəsini saxlamır.</string>
+    <string name="vpn5g_premium_feature_locked">Bu funksiya premium istifadəçilər üçündür</string>
+    <string name="vpn5g_premium_unlock_button">Premiuma keç</string>
+    <string name="vpn5g_drawer_premium_badge">Premium aktivdir</string>
+    <string name="vpn5g_drawer_share_app">Tətbiqi paylaş</string>
+    <string name="vpn5g_drawer_share_subtitle">Hər ikinizə 1 GB hədiyyə</string>
+    <string name="vpn5g_drawer_sanctioned">Sanksiyalı tətbiqlər</string>
+    <string name="vpn5g_drawer_sanctioned_subtitle">Google Flow, Gemini…</string>
 </resources>

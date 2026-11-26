@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
 import com.v2ray.ang.handler.vpn5g.Vpn5gConnectMode
+import com.v2ray.ang.handler.vpn5g.Vpn5gCountryGroups
 import com.v2ray.ang.handler.vpn5g.Vpn5gCountryUi
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerUi
 import com.v2ray.ang.ui.compose.colorPing
@@ -84,6 +85,9 @@ fun Vpn5gServerSelectScreen(
     // Premium tab (v1.1.2): country groups start collapsed; tapping a
     // country reveals its servers. Transient presentation state only.
     var specialExpanded by remember { mutableStateOf(setOf<String>()) }
+    // Sanctioned-apps tab (v1.1.30): same collapsed-country pattern,
+    // its own expansion set. Transient presentation state only.
+    var sanctionedExpanded by remember { mutableStateOf(setOf<String>()) }
     LaunchedEffect(Unit) { entered = true }
 
     val displayCountries = state.countries
@@ -117,6 +121,23 @@ fun Vpn5gServerSelectScreen(
     val freeSections = splitSections.filter { it.isFree }
     val lockedSections = splitSections.filter { !it.isFree }
     val freeCount = freeSections.sumOf { it.servers.size }
+    // Sanctioned-apps tab (v1.1.30, Aref's order): only the
+    // sanction-bypassing countries (Google Flow, Gemini…), tier-split
+    // like every other tab and ordered by failover priority
+    // (US → DE → CA → the rest). Locked sections keep the standard
+    // lock behaviour; free servers in these countries stay free.
+    val sanctionSections = splitSections
+        .filter { section ->
+            section.servers.any { Vpn5gCountryGroups.isSanctionBypass(it.countryCode) }
+        }
+        .sortedWith(
+            compareBy(
+                { section: Vpn5gCountryUi ->
+                    section.servers.minOf { Vpn5gCountryGroups.priorityOf(it.countryCode) }
+                },
+                { section: Vpn5gCountryUi -> section.label },
+            )
+        )
     // Free servers always have a real through-the-proxy ping (v1.1.7
     // top-20 selection), so the fastest free server is the best one;
     // never fall back to a TCP-only, no-ping or locked server.
@@ -205,7 +226,9 @@ fun Vpn5gServerSelectScreen(
             // persisted and validated exactly like the auto pick; a bad
             // pick is refused with the precise reason, never silently
             // replaced. The list below (tabs + sections) is untouched.
-            if (freeSections.isNotEmpty() && serverTab != Vpn5gServerTab.SPECIAL) {
+            if (freeSections.isNotEmpty() && serverTab != Vpn5gServerTab.SPECIAL &&
+                serverTab != Vpn5gServerTab.SANCTIONED
+            ) {
                 item(key = "free_servers_row") {
                     val manualServer = state.manualGuid?.let { guid ->
                         freeSections.flatMap { it.servers }
@@ -404,7 +427,9 @@ fun Vpn5gServerSelectScreen(
             // panel explaining auto mode and, while a manual pick is
             // active, offers the return to auto. On this screen it is
             // the smart-location card: the fastest server, flag + ms.
-            if (bestServer != null && serverTab != Vpn5gServerTab.SPECIAL) {
+            if (bestServer != null && serverTab != Vpn5gServerTab.SPECIAL &&
+                serverTab != Vpn5gServerTab.SANCTIONED
+            ) {
                 item(key = "auto_row") {
                     Vpn5gExpandableSection(
                         title = stringResource(R.string.vpn5g_auto_server),
@@ -464,6 +489,7 @@ fun Vpn5gServerSelectScreen(
                             Vpn5gServerTab.FREE -> R.string.vpn5g_tab_free
                             Vpn5gServerTab.ALL -> R.string.vpn5g_tab_all
                             Vpn5gServerTab.SPECIAL -> R.string.vpn5g_tab_special
+                            Vpn5gServerTab.SANCTIONED -> R.string.vpn5g_tab_sanctioned
                         }
                         Box(
                             contentAlignment = Alignment.Center,
@@ -542,7 +568,8 @@ fun Vpn5gServerSelectScreen(
             // v1.1.14: on the FIRST page (home) — shown on the Free tab
             // too, not only on All. Hidden on the Special tab only.
             if (bestServer != null && searchQuery.isBlank() &&
-                serverTab != Vpn5gServerTab.SPECIAL
+                serverTab != Vpn5gServerTab.SPECIAL &&
+                serverTab != Vpn5gServerTab.SANCTIONED
             ) {
                 item(key = "recommended_header") {
                     Text(
@@ -725,6 +752,49 @@ fun Vpn5gServerSelectScreen(
                         freeSections.map { it to false }
                 }
                 Vpn5gServerTab.SPECIAL -> lockedSections.map { it to true }
+                // v1.1.30: sanction-bypassing countries only, in
+                // failover-priority order. Premium-only (Aref's
+                // order — most features premium): free users see
+                // the lock notice below instead of the list. Free
+                // servers in these countries stay on the FREE/ALL
+                // tabs, so no free basic is removed.
+                Vpn5gServerTab.SANCTIONED -> if (hasActiveSubscription(state)) {
+                    sanctionSections.map { it to !it.isFree }
+                } else {
+                    emptyList()
+                }
+            }
+            // Sanctioned-apps tab header (v1.1.30): what this menu is
+            // for, the premium lock for free users, and the empty
+            // state when no such country is in the current pool.
+            if (serverTab == Vpn5gServerTab.SANCTIONED) {
+                item(key = "sanctioned_header") {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_sanctioned_title),
+                            color = Vpn5gOnDark,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = stringResource(R.string.vpn5g_sanctioned_body),
+                            color = Vpn5gOnDarkMuted,
+                            fontSize = 13.sp,
+                        )
+                        if (!hasActiveSubscription(state)) {
+                            Vpn5gPremiumLockNotice(onOpenPremium = onOpenPremium)
+                        } else if (sanctionSections.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.vpn5g_sanctioned_none),
+                                color = Vpn5gOnDarkMuted,
+                                fontSize = 14.sp,
+                            )
+                        }
+                    }
+                }
             }
             // Pro locations (Lantern): on the ALL tab the locked
             // countries come first, one Lantern row each — flag, country,
@@ -758,7 +828,15 @@ fun Vpn5gServerSelectScreen(
                 item(key = "country_${if (locked) "locked" else "free"}_${country.label}") {
                     // Premium tab (v1.1.2): fast servers grouped by
                     // country; tapping a country reveals its servers.
-                    val expandable = serverTab == Vpn5gServerTab.SPECIAL
+                    // v1.1.30: the sanctioned-apps tab uses the same
+                    // collapsed-country pattern (its own set).
+                    val expandable = serverTab == Vpn5gServerTab.SPECIAL ||
+                        serverTab == Vpn5gServerTab.SANCTIONED
+                    val expandedSet = if (serverTab == Vpn5gServerTab.SANCTIONED) {
+                        sanctionedExpanded
+                    } else {
+                        specialExpanded
+                    }
                     Vpn5gCountrySection(
                         country = country,
                         onServerTap = if (locked) {
@@ -773,15 +851,24 @@ fun Vpn5gServerSelectScreen(
                         },
                         expandable = expandable,
                         expanded = !expandable ||
-                            country.label in specialExpanded,
+                            country.label in expandedSet,
                         onToggleExpand = if (expandable) {
                             {
-                                specialExpanded =
-                                    if (country.label in specialExpanded) {
-                                        specialExpanded - country.label
-                                    } else {
-                                        specialExpanded + country.label
-                                    }
+                                if (serverTab == Vpn5gServerTab.SANCTIONED) {
+                                    sanctionedExpanded =
+                                        if (country.label in sanctionedExpanded) {
+                                            sanctionedExpanded - country.label
+                                        } else {
+                                            sanctionedExpanded + country.label
+                                        }
+                                } else {
+                                    specialExpanded =
+                                        if (country.label in specialExpanded) {
+                                            specialExpanded - country.label
+                                        } else {
+                                            specialExpanded + country.label
+                                        }
+                                }
                             }
                         } else {
                             null

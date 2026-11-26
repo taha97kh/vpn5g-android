@@ -61,6 +61,15 @@ class CoreVpnService : VpnService(), ServiceControl {
 //        super.onLowMemory()
 //    }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // v1.1.30: swiping the app off recents must not kill the
+        // tunnel — schedule a restart while the session is
+        // persistent (the user left the switch ON). After an
+        // explicit disconnect nothing is scheduled.
+        TaskRemovedRestart.scheduleIfPersistent(this, CoreVpnService::class.java)
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         LogUtil.i(AppConfig.TAG, "StartCore-VPN: Service destroyed")

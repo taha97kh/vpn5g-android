@@ -260,4 +260,54 @@ class Vpn5gAdsTest {
         assertEquals(1, other.entries["ad-1"]?.total)
         assertEquals(1, other.entries["ad-2"]?.total)
     }
+
+    // -- Premium daily cap (v1.1.30) --------------------------------------------
+
+    @Test
+    fun test_premium_daily_cap_reached_by_any_ad_today() {
+        val today = "2026-11-26"
+        val empty = Vpn5gAds.AdImpressionStore()
+        assertFalse(Vpn5gAds.premiumDailyCapReached(empty, today))
+        // One impression of any ad today fills the premium slot.
+        val once = Vpn5gAds.recordImpression(empty, "ad-1", today)
+        assertTrue(Vpn5gAds.premiumDailyCapReached(once, today))
+        // A link-bearing announcement consumes the same slot.
+        val announced = Vpn5gAds.recordImpression(
+            empty, Vpn5gAds.announcementImpressionId("ann-1"), today,
+        )
+        assertTrue(Vpn5gAds.premiumDailyCapReached(announced, today))
+        // Yesterday's impressions do not count.
+        assertFalse(Vpn5gAds.premiumDailyCapReached(once, "2026-11-27"))
+        assertEquals(1, Vpn5gAds.PREMIUM_DAILY_AD_CAP)
+    }
+
+    @Test
+    fun test_premium_interstitial_blocked_after_daily_slot_used() {
+        val today = "2026-11-26"
+        // Config includes subscribers (applies_to_free_only = false).
+        val config = ads(interstitial(freeOnly = false))
+        // No impression yet today: the one daily ad may show.
+        assertTrue(
+            Vpn5gAds.shouldShowInterstitial(
+                config, 1, true, false, Vpn5gAds.AdImpressionStore(), today,
+            )
+        )
+        // Slot used (by an ad or an announcement): no more today.
+        val used = Vpn5gAds.recordImpression(
+            Vpn5gAds.AdImpressionStore(),
+            Vpn5gAds.announcementImpressionId("ann-1"),
+            today,
+        )
+        assertFalse(
+            Vpn5gAds.shouldShowInterstitial(config, 1, true, false, used, today)
+        )
+        // Free users are unaffected by the premium cap.
+        assertTrue(
+            Vpn5gAds.shouldShowInterstitial(config, 1, false, false, used, today)
+        )
+        // A new day resets the slot.
+        assertTrue(
+            Vpn5gAds.shouldShowInterstitial(config, 1, true, false, used, "2026-11-27")
+        )
+    }
 }

@@ -27,9 +27,18 @@ package com.v2ray.ang.handler.vpn5g
  *     server that failed hours ago beats no server at all.
  *
  * Excluded guids (the dropped server, already-tried servers)
- * never appear. Within the returned order a different-country
- * candidate is preferred over the dropped server's country (see
- * [pick]). Pure, JVM-tested.
+ * never appear.
+ *
+ * v1.1.30 (Aref's order 2026-11-26): WITHIN each tier the order is
+ * country-grouped — all servers of one country come before the
+ * next country, in the priority US → DE → CA → sanction-bypassing
+ * countries → the rest ([Vpn5gCountryGroups.priorityOf]), then by
+ * the tier's own comparator. The failover chain therefore exhausts
+ * one country before jumping to the next, exactly as ordered,
+ * while the relaxation tiers above still guarantee the chain never
+ * strands. [pick] follows the same grouped order (the dropped
+ * server itself is excluded by the caller; its country-mates are
+ * still tried before the next country). Pure, JVM-tested.
  */
 object Vpn5gFailoverPick {
 
@@ -53,38 +62,58 @@ object Vpn5gFailoverPick {
             Vpn5gHealthScore.adjustedPing(
                 server.pingMillis, healthScores[server.dedupeKey] ?: 0.0
             )
-        val byPing = compareBy<Vpn5gServerUi>({ !it.hasRealPing }, { healthAdjusted(it) })
+        // v1.1.30: country-grouped order — country priority first
+        // (US → DE → CA → sanction-bypass → rest → unknown), then
+        // the tier comparator (real-pinged first, fastest first).
+        val byCountryThenPing = compareBy<Vpn5gServerUi>(
+            { Vpn5gCountryGroups.priorityOf(it.countryCode) },
+            { !it.hasRealPing },
+            { healthAdjusted(it) },
+        )
 
         val tiers = mutableListOf<List<Vpn5gServerUi>>()
-        // Tier 1: standby queue, in queue order (still-valid guids only).
+        // Tier 1: standby queue, country-grouped within the queue
+        // (stable sort keeps queue order inside one country).
         tiers += standbyQueue.mapNotNull { byGuid[it] }
             .filter { it.guid !in excluding && it.guid !in failedGuids }
+            .sortedBy { Vpn5gCountryGroups.priorityOf(it.countryCode) }
         // Tier 2: tier-unlocked with a measured ping.
         tiers += eligible
             .filter { it.isFree && it.pingMillis > 0 && it.guid !in failedGuids }
-            .sortedWith(byPing)
+            .sortedWith(byCountryThenPing)
         // Tier 3: any server with a measured ping.
         tiers += eligible
             .filter { it.pingMillis > 0 && it.guid !in failedGuids }
-            .sortedWith(byPing)
+            .sortedWith(byCountryThenPing)
         // Tier 4: tier-unlocked, unknown ping allowed (seed / TCP fallback).
         tiers += eligible
             .filter { it.isFree && it.pingMillis >= 0 && it.guid !in failedGuids }
-            .sortedWith(byPing)
+            .sortedWith(byCountryThenPing)
         // Tier 5: anything left, failed-store members last.
         tiers += eligible
-            .sortedWith(compareBy({ it.guid in failedGuids }, { !it.hasRealPing }, { healthAdjusted(it) }))
+            .sortedWith(
+                compareBy<Vpn5gServerUi>(
+                    { it.guid in failedGuids },
+                    { Vpn5gCountryGroups.priorityOf(it.countryCode) },
+                    { !it.hasRealPing },
+                    { healthAdjusted(it) },
+                )
+            )
 
         val seen = mutableSetOf<String>()
         return tiers.flatten().filter { seen.add(it.guid) }
     }
 
     /**
-     * The next failover target: the best ranked candidate,
-     * preferring a different country than [differentCountryThan]
-     * (the dropped server's country is avoided first); falls back
-     * to the same country when nothing else is left. Null only
-     * when every server is excluded.
+     * The next failover target: the first candidate in the
+     * country-grouped [ranked] order (v1.1.30). The caller excludes
+     * the dropped server and everything already tried, so the chain
+     * exhausts one country before moving to the next, in priority
+     * order. [differentCountryThan] is kept for call-site
+     * compatibility but no longer reorders: Aref's 2026-11-26 order
+     * (exhaust the country first) supersedes the old
+     * different-country preference. Null only when every server is
+     * excluded.
      */
     fun pick(
         servers: List<Vpn5gServerUi>,
@@ -94,9 +123,7 @@ object Vpn5gFailoverPick {
         healthScores: Map<String, Double> = emptyMap(),
         differentCountryThan: String? = null,
     ): Vpn5gServerUi? {
-        val candidates = ranked(servers, excluding, failedGuids, standbyQueue, healthScores)
-        if (differentCountryThan.isNullOrBlank()) return candidates.firstOrNull()
-        return candidates.firstOrNull { it.country != differentCountryThan }
-            ?: candidates.firstOrNull()
+        return ranked(servers, excluding, failedGuids, standbyQueue, healthScores)
+            .firstOrNull()
     }
 }

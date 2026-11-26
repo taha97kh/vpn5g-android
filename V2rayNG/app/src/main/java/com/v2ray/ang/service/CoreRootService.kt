@@ -65,6 +65,13 @@ class CoreRootService : Service(), ServiceControl {
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // v1.1.30: recents removal must not kill the session —
+        // schedule a restart while it is persistent.
+        TaskRemovedRestart.scheduleIfPersistent(this, CoreRootService::class.java)
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         // Wait for any in-flight async setup to finish before tearing down. The rules are

@@ -966,4 +966,75 @@
     <string name="vpn5g_exit_yes">آره</string>
     <string name="vpn5g_exit_no">نه</string>
     <string name="vpn5g_other_vpn_notice">یک فیلترشکن دیگر روی گوشی شما فعال است. با اتصال VPN 5G آن فیلترشکن متوقف می‌شود تا تداخلی پیش نیاید.</string>
+
+    <!-- v1.1.30 additions -->
+    <string name="vpn5g_sub_group_gb_title">📦 اشتراک حجمی (گیگ)</string>
+    <string name="vpn5g_sub_group_gb_guide">بسته‌ای با حجم مشخص می‌خری و تا وقتی حجمش تمام نشده یا مهلتش نرسیده، استفاده می‌کنی — هرکدام زودتر برسد، بسته تمام می‌شود.
+
+برای مصرف کم و مقطعی مناسب است.</string>
+    <string name="vpn5g_sub_group_time_title">📅 اشتراک نامحدود (زمانی)</string>
+    <string name="vpn5g_sub_group_time_guide">در مدت اشتراک، بدون محدودیت حجم وصل می‌شوی — فقط تاریخ انقضا مهم است.
+
+برای مصرف روزانه و همیشگی مناسب است.</string>
+    <string name="vpn5g_sub_status_none">اشتراک فعالی نداری</string>
+    <string name="vpn5g_sub_remaining_gb">حجم باقی‌مانده: %1$s گیگابایت</string>
+    <string name="vpn5g_sub_buy_from_bot_guide">خرید از ربات: در ربات تلگرام طرح را انتخاب کن، با کارت به مبلغ دقیق (یکتا) پرداخت کن، کد ۶ رقمی بگیر و همین‌جا واردش کن تا اشتراکت فعال شود.</string>
+    <string name="vpn5g_sub_buy_from_bot_button">خرید از ربات تلگرام</string>
+    <string name="vpn5g_sub_purchase_title">خرید اشتراک</string>
+    <string name="vpn5g_sub_choose_group">نوع اشتراک را انتخاب کن:</string>
+    <string name="vpn5g_pay_link_default_name">پرداخت آنلاین</string>
+    <string name="vpn5g_pay_link_guide_default">با این لینک پرداخت را انجام بده؛ بعد از پرداخت، کد اشتراک را در همین صفحه وارد کن.</string>
+    <string name="vpn5g_pay_usdt_default_name">پرداخت با تتر (USDT)</string>
+    <string name="vpn5g_pay_usdt_address">آدرس کیف پول تتر:</string>
+    <string name="vpn5g_pay_usdt_network">شبکه: %1$s</string>
+    <string name="vpn5g_pay_usdt_copy">کپی آدرس</string>
+    <string name="vpn5g_pay_usdt_copied">آدرس کپی شد</string>
+    <string name="vpn5g_pay_usdt_guide_default">مبلغ معادل طرح را به این آدرس بفرست و رسید را در ربات ارسال کن تا کد اشتراکت صادر شود.</string>
+    <string name="vpn5g_referral_title">اشتراک‌گذاری اپ و هدیه ۱ گیگابایتی</string>
+    <string name="vpn5g_referral_body">لینک اختصاصی خودت را برای دوستانت بفرست. هر کسی با لینک تو وارد شود و ثبت‌نام کند، هم تو و هم او ۱ گیگابایت هدیه روی همه سرورها می‌گیرید — بدون هیچ محدودیتی!
+
+هرچه بیشتر به اشتراک بگذاری، بیشتر هدیه می‌گیری. همین حالا لینکت را بفرست 🎁</string>
+    <string name="vpn5g_referral_your_link">لینک اختصاصی تو:</string>
+    <string name="vpn5g_referral_share_button">اشتراک‌گذاری لینک من</string>
+    <string name="vpn5g_referral_copy">کپی لینک</string>
+    <string name="vpn5g_referral_copied">لینک کپی شد</string>
+    <string name="vpn5g_referral_captured">لینک دعوت ثبت شد؛ بعد از ثبت‌نام، ۱ گیگابایت هدیه می‌گیری 🎁</string>
+    <string name="vpn5g_referral_signin_needed">برای گرفتن لینک اختصاصی، اول وارد حسابت شو.</string>
+    <string name="vpn5g_referral_share_text">با این لینک وارد VPN 5G شو و ۱ گیگابایت هدیه روی همه سرورها بگیر 🎁
+%1$s</string>
+    <string name="vpn5g_stats_title">آمار مصرف</string>
+    <string name="vpn5g_stats_session">مصرف این اتصال</string>
+    <string name="vpn5g_stats_total">مصرف کل اشتراک</string>
+    <string name="vpn5g_stats_remaining_gb">حجم باقی‌مانده</string>
+    <string name="vpn5g_stats_remaining_time">زمان باقی‌مانده</string>
+    <string name="vpn5g_stats_ping">پینگ</string>
+    <string name="vpn5g_stats_unlimited">نامحدود</string>
+    <string name="vpn5g_stats_no_session">اتصال فعالی نیست</string>
+    <string name="vpn5g_stats_days">%1$d روز</string>
+    <string name="vpn5g_stats_hours">%1$d ساعت</string>
+    <string name="vpn5g_stats_minutes">%1$d دقیقه</string>
+    <string name="vpn5g_stats_gb_value">%1$s گیگابایت</string>
+    <string name="vpn5g_sanctioned_title">مخصوص اپ‌های تحریم‌شده</string>
+    <string name="vpn5g_tab_sanctioned">اپ‌های تحریم‌شده</string>
+    <string name="vpn5g_sanctioned_body">سرورهای کشورهایی که تحریم‌های گوگل فلو، جمینای و سرویس‌های مشابه را دور می‌زنند. برای استفاده از این اپ‌ها، یکی از این سرورها را انتخاب کن.</string>
+    <string name="vpn5g_sanctioned_none">هنوز سروری از این کشورها در دسترس نیست؛ لیست را بروز کنید.</string>
+    <string name="vpn5g_about_title">درباره برنامه</string>
+    <string name="vpn5g_about_desc">VPN 5G یک فیلترشکن سریع و امن است که با یک دکمه تو را به بهترین سرور وصل می‌کند. اگر سروری قطع شود، خودش بدون دخالت تو به سرور بعدی وصل می‌شود تا اینترنتت قطع نماند.</string>
+    <string name="vpn5g_about_speed_title">سرعت</string>
+    <string name="vpn5g_about_speed_body">سرورها با پینگ واقعی (از داخل خود تونل) سنجیده می‌شوند و سریع‌ترین‌ها اول انتخاب می‌شوند تا دانلود و تماشای ویدیو بدون گیرکردن انجام شود.</string>
+    <string name="vpn5g_about_ping_title">پینگ</string>
+    <string name="vpn5g_about_ping_body">پینگی که در برنامه می‌بینی واقعی است: درخواست واقعی از داخل تونل فرستاده می‌شود. هرچه عدد کمتر باشد، اتصال سریع‌تر و پایدارتر است.</string>
+    <string name="vpn5g_about_creator_title">سازنده</string>
+    <string name="vpn5g_about_creator_body">سازنده: AREF KH
+اینستاگرام: @4ref.ai
+تلگرام: @Aref_5G</string>
+    <string name="vpn5g_about_security_title">امنیت و حریم خصوصی</string>
+    <string name="vpn5g_about_security_body">ترافیک تو رمزنگاری می‌شود و DNS هم از داخل تونل انجام می‌شود تا نشتی نداشته باشی. برنامه هیچ سابقه‌ای از سایت‌هایی که باز می‌کنی نگه نمی‌دارد.</string>
+    <string name="vpn5g_premium_feature_locked">این امکان ویژه کاربران پریمیوم است</string>
+    <string name="vpn5g_premium_unlock_button">ارتقا به پریمیوم</string>
+    <string name="vpn5g_drawer_premium_badge">پریمیوم فعال</string>
+    <string name="vpn5g_drawer_share_app">اشتراک‌گذاری اپ</string>
+    <string name="vpn5g_drawer_share_subtitle">۱ گیگابایت هدیه برای هر دو</string>
+    <string name="vpn5g_drawer_sanctioned">اپ‌های تحریم‌شده</string>
+    <string name="vpn5g_drawer_sanctioned_subtitle">گوگل فلو، جمینای و…</string>
 </resources>

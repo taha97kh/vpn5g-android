@@ -79,4 +79,56 @@ class Vpn5gCountryGroupsTest {
         // The fastest server still resolves (locking is a UI gate, not grouping).
         assertEquals("x", groups.single().fastestGuid)
     }
+
+    // -- Failover priority + sanction-bypass (v1.1.30) --------------------------
+
+    @Test
+    fun test_priority_order_us_de_ca_then_sanction_bypass() {
+        assertEquals(0, Vpn5gCountryGroups.priorityOf("US"))
+        assertEquals(1, Vpn5gCountryGroups.priorityOf("DE"))
+        assertEquals(2, Vpn5gCountryGroups.priorityOf("CA"))
+        // Other sanction-bypassing countries.
+        assertEquals(3, Vpn5gCountryGroups.priorityOf("NL"))
+        assertEquals(3, Vpn5gCountryGroups.priorityOf("GB"))
+        assertEquals(3, Vpn5gCountryGroups.priorityOf("JP"))
+        // Known but not sanction-bypassing.
+        assertEquals(4, Vpn5gCountryGroups.priorityOf("IR"))
+        assertEquals(4, Vpn5gCountryGroups.priorityOf("RU"))
+        // Unknown / blank / null last; case-insensitive.
+        assertEquals(5, Vpn5gCountryGroups.priorityOf(""))
+        assertEquals(5, Vpn5gCountryGroups.priorityOf(null))
+        assertEquals(0, Vpn5gCountryGroups.priorityOf("us"))
+        assertEquals(1, Vpn5gCountryGroups.priorityOf(" de "))
+    }
+
+    @Test
+    fun test_is_sanction_bypass() {
+        assertTrue(Vpn5gCountryGroups.isSanctionBypass("US"))
+        assertTrue(Vpn5gCountryGroups.isSanctionBypass("nl"))
+        assertEquals(false, Vpn5gCountryGroups.isSanctionBypass("IR"))
+        assertEquals(false, Vpn5gCountryGroups.isSanctionBypass(""))
+        assertEquals(false, Vpn5gCountryGroups.isSanctionBypass(null))
+    }
+
+    @Test
+    fun test_sanction_bypass_groups_only_bypass_in_priority_order() {
+        val sections = listOf(
+            Vpn5gCountryUi(
+                label = "بین‌الملل",
+                isFree = true,
+                servers = listOf(
+                    server("ir1", "IR", "ایران", 10),
+                    server("nl1", "NL", "هلند", 20),
+                    server("de1", "DE", "آلمان", 30),
+                    server("us1", "US", "آمریکا", 40),
+                    server("ca1", "CA", "کانادا", 50),
+                    server("de2", "DE", "آلمان", 60),
+                ),
+            )
+        )
+        val groups = Vpn5gCountryGroups.sanctionBypassGroups(sections)
+        // IR is excluded; priority order US → DE → CA → NL.
+        assertEquals(listOf("US", "DE", "CA", "NL"), groups.map { it.code })
+        assertEquals(2, groups[1].servers.size)
+    }
 }

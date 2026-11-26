@@ -256,6 +256,13 @@ object Vpn5gAuthService {
                         // registration row so the per-user subscription
                         // lookup can see it. Best effort only.
                         linkUserIdBestEffort(session)
+                        // v1.1.30: referral — when this signup arrived
+                        // through someone's share link, report it so
+                        // the server credits both sides 1 GB. Best
+                        // effort: the pending code is cleared only
+                        // when the server confirms; a failure never
+                        // turns a good signup into an error.
+                        reportPendingReferral(email)
                         AuthResult.SignedIn(session)
                     } ?: AuthResult.Error("email_not_confirmed")
                 } else {
@@ -710,6 +717,49 @@ object Vpn5gAuthService {
         }
         val body = result.second.trim()
         return body == "true" || Regex("\"verified\"\\s*:\\s*true").containsMatchIn(body)
+    }
+
+    /**
+     * Reports the pending referrer code (if any) for a just-created
+     * account (v1.1.30). Best effort; clears the pending code only
+     * on server confirmation. A self-referral (the pending code is
+     * the user's own) is dropped without a call. Never throws.
+     */
+    private suspend fun reportPendingReferral(email: String) {
+        val pending = Vpn5gReferral.pendingReferrer() ?: return
+        if (pending == Vpn5gReferral.ownCode(email)) {
+            Vpn5gReferral.clearPendingReferrer()
+            return
+        }
+        if (recordReferral(pending, email)) {
+            Vpn5gReferral.clearPendingReferrer()
+        }
+    }
+
+    /**
+     * Reports a referral (PostgREST RPC `record_referral`, v1.1.30):
+     * the new user [email] joined through [referrerCode] — the
+     * server credits BOTH sides 1 GB of gift usage on all servers.
+     * Same best-effort contract as [recordAdView]: a failure (or a
+     * not-yet-implemented RPC on the guard side) never blocks
+     * signup, sign-in or a connect. The caller keeps the pending
+     * code until this returns true. Never throws.
+     */
+    suspend fun recordReferral(referrerCode: String, email: String): Boolean {
+        val code = Vpn5gReferral.normalizeCode(referrerCode) ?: return false
+        val result = postRaw(
+            path = "/rest/v1/rpc/record_referral",
+            body = """{"p_referrer_code":"${jsonEscape(code)}","p_email":"${jsonEscape(Vpn5gEmailPolicy.normalize(email))}"}""",
+        ) ?: return false
+        if (result.first !in 200..299) {
+            LogUtil.e(
+                AppConfig.TAG,
+                "Vpn5gAuthService: record_referral HTTP ${result.first}",
+            )
+            return false
+        }
+        val body = result.second.trim()
+        return body == "true" || Regex("\"recorded\"\\s*:\\s*true").containsMatchIn(body)
     }
 
     /** Result of the server subscription lookup (v1.1.15). */

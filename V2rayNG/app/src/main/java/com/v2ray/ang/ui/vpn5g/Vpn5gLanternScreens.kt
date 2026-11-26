@@ -34,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
@@ -110,6 +111,10 @@ fun Vpn5gDrawerContent(
     onOpenSupport: () -> Unit,
     onLanguageChange: (String) -> Unit,
     onThemeModeChange: (String) -> Unit,
+    /** v1.1.30: share the app (referral link) via the share sheet. */
+    onShareApp: () -> Unit = {},
+    /** v1.1.30: open the server list («اپ‌های تحریم‌شده» row). */
+    onOpenServerSelect: () -> Unit = {},
 ) {
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showAppearanceDialog by remember { mutableStateOf(false) }
@@ -131,6 +136,10 @@ fun Vpn5gDrawerContent(
         else R.string.vpn5g_routing_smart
     )
 
+    // v1.1.30 (Aref's order): premium users get a visibly different,
+    // more chic drawer — gold gradient header + premium badge; free
+    // users keep the plain header.
+    val isPremium = hasActiveSubscription(state)
     Column(
         modifier = Modifier
             .fillMaxHeight()
@@ -139,8 +148,28 @@ fun Vpn5gDrawerContent(
             .padding(horizontal = 16.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Header: shield mark + wordmark + account line.
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Header: shield mark + wordmark + account line. Premium
+        // (v1.1.30): gold gradient card + «پریمیوم فعال» badge.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = if (isPremium) {
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                Vpn5gGold.copy(alpha = 0.35f),
+                                Vpn5gGold.copy(alpha = 0.08f),
+                            )
+                        )
+                    )
+                    .border(1.dp, Vpn5gGold, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            } else {
+                Modifier.fillMaxWidth()
+            },
+        ) {
             Vpn5gShieldLogo(width = 44.dp)
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -153,6 +182,22 @@ fun Vpn5gDrawerContent(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (isPremium) {
+                    Spacer(Modifier.height(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50.dp))
+                            .background(Vpn5gGold)
+                            .padding(horizontal = 10.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.vpn5g_drawer_premium_badge),
+                            color = Color.Black,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
             }
         }
 
@@ -236,6 +281,20 @@ fun Vpn5gDrawerContent(
                 subtitle = stringResource(R.string.vpn5g_subscription_title),
                 onClick = onOpenMe,
             ) { Vpn5gBoltIcon(color = Vpn5gTeal, size = 22.dp) }
+            Vpn5gDrawerDivider()
+            // v1.1.30: share-app referral (1 GB gift for both sides).
+            Vpn5gDrawerRow(
+                title = stringResource(R.string.vpn5g_drawer_share_app),
+                subtitle = stringResource(R.string.vpn5g_drawer_share_subtitle),
+                onClick = onShareApp,
+            ) { Vpn5gGiftIcon(color = Vpn5gGold, size = 22.dp) }
+            Vpn5gDrawerDivider()
+            // v1.1.30: sanctioned-apps servers (Google Flow, Gemini…).
+            Vpn5gDrawerRow(
+                title = stringResource(R.string.vpn5g_drawer_sanctioned),
+                subtitle = stringResource(R.string.vpn5g_drawer_sanctioned_subtitle),
+                onClick = onOpenServerSelect,
+            ) { Vpn5gGlobeIcon(color = Vpn5gTeal, size = 22.dp) }
             Vpn5gDrawerDivider()
             Vpn5gDrawerRow(
                 title = stringResource(R.string.vpn5g_drawer_language),
@@ -415,6 +474,55 @@ private fun Vpn5gDrawerDivider() {
     )
 }
 
+/**
+ * Premium lock notice (v1.1.30, Aref's order — most features are
+ * premium-only): shown in place of an advanced feature for free
+ * users — lock icon, «این امکان ویژه کاربران پریمیوم است» and a
+ * gold upgrade button to Premium. Shared by the routing screen
+ * (FULL mode) and the sanctioned-apps tab.
+ */
+@Composable
+internal fun Vpn5gPremiumLockNotice(onOpenPremium: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Vpn5gGold.copy(alpha = 0.12f))
+            .border(1.dp, Vpn5gGold.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+            .padding(16.dp),
+    ) {
+        Vpn5gLockIcon(color = Vpn5gGold, size = 28.dp)
+        Text(
+            text = stringResource(R.string.vpn5g_premium_feature_locked),
+            color = Vpn5gOnDark,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+        )
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(50.dp))
+                .background(Vpn5gGold)
+                .clickable(
+                    role = Role.Button,
+                    onClickLabel = stringResource(R.string.vpn5g_premium_unlock_button),
+                ) { onOpenPremium() }
+                .padding(vertical = 12.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.vpn5g_premium_unlock_button),
+                color = Color.Black,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
 // ------------------------------------------------------- routing screen
 
 /**
@@ -431,10 +539,19 @@ fun Vpn5gRoutingScreen(
     onModeChange: (Vpn5gRoutingMode) -> Unit,
     onDirectFirstChange: (Boolean) -> Unit,
     onOpenPerAppBypass: () -> Unit,
+    /** v1.1.30: premium gate — FULL routing is premium-only. */
+    onOpenPremium: () -> Unit = {},
 ) {
     var entered by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { entered = true }
     val smart = state.routingMode == Vpn5gRoutingMode.SMART
+    // v1.1.30 (Aref's order — most features premium-only): the FULL
+    // tunnel mode is an advanced feature. Free users keep SMART (the
+    // default) and can always switch back to it; picking FULL shows
+    // the premium lock instead of switching. Per-app selection stays
+    // free (the 1.1.29 Instagram+Telegram default depends on it).
+    val isPremium = hasActiveSubscription(state)
+    var fullLockShown by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -462,12 +579,23 @@ fun Vpn5gRoutingScreen(
             )
         }
         Vpn5gStaggeredItem(index = 2, visible = entered) {
-            Vpn5gRoutingModeCard(
-                title = stringResource(R.string.vpn5g_routing_full),
-                body = stringResource(R.string.vpn5g_routing_full_desc),
-                selected = !smart,
-                onClick = { onModeChange(Vpn5gRoutingMode.FULL) },
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Vpn5gRoutingModeCard(
+                    title = stringResource(R.string.vpn5g_routing_full),
+                    body = stringResource(R.string.vpn5g_routing_full_desc),
+                    selected = !smart,
+                    onClick = {
+                        if (isPremium) {
+                            onModeChange(Vpn5gRoutingMode.FULL)
+                        } else {
+                            fullLockShown = true
+                        }
+                    },
+                )
+                if (fullLockShown && !isPremium) {
+                    Vpn5gPremiumLockNotice(onOpenPremium = onOpenPremium)
+                }
+            }
         }
         Vpn5gStaggeredItem(index = 3, visible = entered) {
             Column(

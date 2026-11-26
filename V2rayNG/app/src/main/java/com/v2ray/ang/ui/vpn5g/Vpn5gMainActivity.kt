@@ -2,9 +2,12 @@ package com.v2ray.ang.ui.vpn5g
 
 import android.app.Application
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.widget.Toast
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -69,6 +72,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -205,8 +209,13 @@ enum class Vpn5gDestination {
     FEATURES,
 }
 
-/** Server-list tabs on the home screen (X-VPN server-list style). */
-enum class Vpn5gServerTab { FREE, ALL, SPECIAL }
+/**
+ * Server-list tabs on the home screen (X-VPN server-list style).
+ * SANCTIONED (v1.1.30, Aref's order): «مخصوص اپ‌های تحریم‌شده» —
+ * only sanction-bypassing countries (Google Flow, Gemini…), in
+ * failover-priority order.
+ */
+enum class Vpn5gServerTab { FREE, ALL, SPECIAL, SANCTIONED }
 
 /** Post-connect tunnel state. The UI must never show a false "connected". */
 enum class Vpn5gTunnelState { IDLE, VERIFYING, VERIFIED, FAILED, UNKNOWN, SWITCHING }
@@ -307,6 +316,14 @@ data class Vpn5gHomeUiState(
      * grant's volume cap; 0 when there is no grant to meter.
      */
     val volumeConsumedBytes: Long = 0L,
+    /**
+     * On-device measured tunnel bytes of the CURRENT connection
+     * session (v1.1.30, usage stats): [volumeConsumedBytes] minus
+     * the counter value when the user tapped connect. Failover
+     * restarts keep the session (the baseline survives them); a
+     * fresh user connect resets it. 0 when no session has run.
+     */
+    val sessionConsumedBytes: Long = 0L,
     val subscriptionStatus: SubscriptionStatusRemote? = null,
     val errorMessage: String? = null,
     val tunnelState: Vpn5gTunnelState = Vpn5gTunnelState.IDLE,
@@ -526,6 +543,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     private var suppressAutoFailover = false
     private var sessionActive = false
     private var sessionStartedAtMs = 0L
+    /**
+     * Volume counter value when the current session's connect was
+     * tapped (v1.1.30): the session-usage baseline. Null until the
+     * first connect (or the first ticker read mid-session, which
+     * adopts the then-current value so the session counts from
+     * there). Survives failover restarts; reset by a fresh
+     * user-initiated connect.
+     */
+    private var sessionBaselineBytes: Long? = null
     private var droppedCountry: String? = null
     private var autoFailoverAttempts = 0
     private var autoFailoverPending = false
@@ -558,14 +584,36 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      * The announcement to show from a fetched remote config, or null
      * when there is none, it is disabled, its text is blank, or the
      * user already dismissed this version of it.
+     *
+     * v1.1.30 (Aref's order): a premium user (subscriber or gift)
+     * gets at most ONE ad or link-bearing announcement per day. A
+     * link-bearing announcement shown to a premium user consumes
+     * today's slot (recorded in the same impression ledger as the
+     * interstitial); once the slot is used — by an ad or an earlier
+     * announcement — no further link announcement shows that day.
+     * Free users keep the existing dismiss-based behaviour.
      */
     private fun visibleAnnouncement(cached: AppConfigRemote): AnnouncementRemote? {
         val announcement = cached.announcement
-        return if (Vpn5gAnnouncement.shouldShow(announcement, dismissedAnnouncementKey)) {
-            announcement
-        } else {
-            null
+        if (!Vpn5gAnnouncement.shouldShow(announcement, dismissedAnnouncementKey)) {
+            return null
         }
+        val state = _uiState.value
+        val isPremium = state.isSubscriber || state.isGift
+        val hasLink = !announcement?.link_url.isNullOrBlank()
+        if (isPremium && hasLink && announcement != null) {
+            val today = java.time.LocalDate.now().toString()
+            if (Vpn5gAds.premiumDailyCapReached(adImpressions, today)) return null
+            adImpressions = Vpn5gAds.recordImpression(
+                adImpressions,
+                Vpn5gAds.announcementImpressionId(
+                    Vpn5gAnnouncement.dismissKey(announcement)
+                ),
+                today,
+            )
+            saveAdImpressions()
+        }
+        return announcement
     }
 
     /**
@@ -1069,7 +1117,19 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     // live, and catch a cap reached mid-session.
                     val consumed = Vpn5gVolumeStore.consumedBytes()
                     if (consumed != state.volumeConsumedBytes) {
-                        _uiState.update { it.copy(volumeConsumedBytes = consumed) }
+                        // v1.1.30 (usage stats): session usage = the
+                        // counter minus the connect-time baseline
+                        // (adopted now when the app opened mid-session).
+                        val baseline = sessionBaselineBytes ?: consumed.also {
+                            sessionBaselineBytes = it
+                        }
+                        _uiState.update {
+                            it.copy(
+                                volumeConsumedBytes = consumed,
+                                sessionConsumedBytes =
+                                    (consumed - baseline).coerceAtLeast(0L),
+                            )
+                        }
                     }
                     if ((state.isSubscriber || state.isGift) &&
                         Vpn5gSubscriptionStatus.isVolumeExhausted(
@@ -2013,7 +2073,15 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     fun beginConnect(userInitiated: Boolean = false) {
         // v1.1.15 (forced-ad rule): count user-initiated connects only.
-        if (userInitiated) completedSessions += 1
+        if (userInitiated) {
+            completedSessions += 1
+            // v1.1.30 (usage stats): a fresh user connect starts a
+            // new session — the session-usage counter restarts from
+            // the current volume total. Failover/auto reconnects
+            // (userInitiated = false) keep the baseline.
+            sessionBaselineBytes = Vpn5gVolumeStore.consumedBytes()
+            _uiState.update { it.copy(sessionConsumedBytes = 0L) }
+        }
         connectChainJob?.cancel()
         connectChainJob = viewModelScope.launch {
             // v1.1.16 (crash fix): this coroutine runs on the Main
@@ -3214,6 +3282,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             completedSessions = completedSessions,
             isSubscriber = state.isSubscriber,
             isGift = state.isGift,
+            // v1.1.30: premium users get at most one ad per day —
+            // the ledger decides whether today's slot is used.
+            impressions = adImpressions,
         )
     }
 
@@ -4502,6 +4573,31 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                     },
                     onLanguageChange = { viewModel.setLanguage(it) },
                     onThemeModeChange = { viewModel.setThemeMode(it) },
+                    // v1.1.30: share the app — the personal referral
+                    // link when signed in (1 GB gift for both sides),
+                    // the plain bot link otherwise.
+                    onShareApp = {
+                        drawerScope.launch { drawerState.close() }
+                        val code = com.v2ray.ang.handler.vpn5g.Vpn5gReferral
+                            .ownCode(uiState.signedInEmail)
+                        val link = if (code != null) {
+                            com.v2ray.ang.handler.vpn5g.Vpn5gReferral.shareLink(code)
+                        } else {
+                            BOT_URL
+                        }
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(
+                                Intent.EXTRA_TEXT,
+                                getString(R.string.vpn5g_referral_share_text, link),
+                            )
+                        }
+                        startActivity(Intent.createChooser(share, null))
+                    },
+                    // v1.1.30: «اپ‌های تحریم‌شده» opens the server list.
+                    onOpenServerSelect = {
+                        closeDrawerAndNavigate(Vpn5gDestination.SERVER_SELECT)
+                    },
                 )
             },
         ) {
@@ -4527,7 +4623,41 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                     modifier = Modifier.padding(innerPadding),
                 ) { dest ->
                     when (dest) {
-                        Vpn5gDestination.HOME -> Vpn5gHomeScreen(
+                        // v1.1.30 (Aref's orders): video background on
+                        // the first page — the entrance video normally
+                        // («این پس زمینه برای ورودی باشه»), the globe
+                        // video while connecting («وقتی کاربر روی وصل
+                        // شدن زده، این تصویر دیده بشه بعد که وصل شد
+                        // تموم بشه ویدیو»). It ends the moment the
+                        // tunnel is CONNECTED (or fails/disconnects).
+                        // All texts/UI stay exactly as before, over
+                        // the video; the scrim keeps them readable.
+                        Vpn5gDestination.HOME -> Box(Modifier.fillMaxSize()) {
+                            val connecting = uiState.connectState in setOf(
+                                Vpn5gConnectState.CHECKING_INTERNET,
+                                Vpn5gConnectState.FINDING_SERVER,
+                                Vpn5gConnectState.CONNECTING,
+                                Vpn5gConnectState.CREATING_TUNNEL,
+                                Vpn5gConnectState.VERIFYING_TUNNEL,
+                                Vpn5gConnectState.SWITCHING_SERVER,
+                                Vpn5gConnectState.RETRYING,
+                            )
+                            key(if (connecting) "connecting" else "entrance") {
+                                Vpn5gLoopingVideo(
+                                    rawResId = if (connecting) {
+                                        R.raw.connecting_background
+                                    } else {
+                                        R.raw.entrance_background
+                                    },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.45f))
+                            )
+                            Vpn5gHomeScreen(
                             state = uiState,
                             onRefresh = { viewModel.refresh() },
                             onToggleConnect = { toggleConnect() },
@@ -4574,7 +4704,8 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                                 }
                             },
                             onDismissCrashReport = { viewModel.dismissCrashReport() },
-                        )
+                            )
+                        }
                         // v1.1.21: the server list moved out of home
                         // into its own Lantern-style screen.
                         Vpn5gDestination.SERVER_SELECT -> Vpn5gServerSelectScreen(
@@ -4598,6 +4729,7 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             onBack = { destination = Vpn5gDestination.HOME },
                             onModeChange = { viewModel.setRoutingMode(it) },
                             onDirectFirstChange = { viewModel.setDirectFirst(it) },
+                            onOpenPremium = { destination = Vpn5gDestination.PREMIUM },
                             onOpenPerAppBypass = {
                                 startActivity(
                                     Intent(
@@ -4645,6 +4777,26 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                             },
                             onCountryServerTap = { guid -> onServerTap(guid) },
                             onLockedCountryTap = { lockedCountry = it },
+                            // v1.1.30: referral share sheet + clipboard copy
+                            // (referral link / USDT wallet address).
+                            onShareReferral = { text ->
+                                val share = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, text)
+                                }
+                                startActivity(Intent.createChooser(share, null))
+                            },
+                            onCopyText = { text, toast ->
+                                val clipboard =
+                                    getSystemService(Context.CLIPBOARD_SERVICE)
+                                        as ClipboardManager
+                                clipboard.setPrimaryClip(
+                                    ClipData.newPlainText("vpn5g", text)
+                                )
+                                Toast.makeText(
+                                    this@Vpn5gMainActivity, toast, Toast.LENGTH_SHORT
+                                ).show()
+                            },
                         )
                         Vpn5gDestination.GUIDE -> Vpn5gGuideScreen(
                             onBack = { destination = Vpn5gDestination.HOME },
@@ -5016,6 +5168,19 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         // valid recovery link is rejected here (never passed to the
         // config importer, which would only toast "import failed").
         if (scheme.equals("vpn5g", ignoreCase = true)) {
+            // v1.1.30: referral deep link (vpn5g://ref/<code>) —
+            // capture the referrer code; it is reported to the
+            // server when the new user registers, so both sides
+            // get the 1 GB gift. Checked before the recovery parse:
+            // a ref link is not a recovery link.
+            val referrerCode = com.v2ray.ang.handler.vpn5g.Vpn5gReferral
+                .parseIncomingLink(uri.toString())
+            if (referrerCode != null) {
+                com.v2ray.ang.handler.vpn5g.Vpn5gReferral
+                    .storePendingReferrer(referrerCode)
+                toast(R.string.vpn5g_referral_captured)
+                return
+            }
             val link = Vpn5gRecoveryLink.parse(uri.toString())
             if (link != null) {
                 recoveryLinkFlow.value = link

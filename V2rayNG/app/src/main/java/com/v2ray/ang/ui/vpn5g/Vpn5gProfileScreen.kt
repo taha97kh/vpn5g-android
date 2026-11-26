@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -39,11 +40,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
+import com.v2ray.ang.extension.toSpeedString
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.CHANNEL_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_BOT_URL
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.SUPPORT_URL
+import com.v2ray.ang.handler.vpn5g.Vpn5gPlans
 import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
+import com.v2ray.ang.handler.vpn5g.Vpn5gVolume
 
 /**
  * "Me" screen: account (email auth), subscription remaining, and about
@@ -66,7 +70,9 @@ fun Vpn5gProfileScreen(
     // §4). v1.1.15: all sections start CLOSED — the user opens them.
     var accountExpanded by remember { mutableStateOf(false) }
     var subscriptionExpanded by remember { mutableStateOf(false) }
+    var statsExpanded by remember { mutableStateOf(false) }
     var perAppExpanded by remember { mutableStateOf(false) }
+    var aboutExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { entered = true }
 
     Column(
@@ -154,9 +160,12 @@ fun Vpn5gProfileScreen(
                     // days prominent (bold, larger) for subscribers.
                     Vpn5gPremiumPill()
                     Spacer(Modifier.height(8.dp))
-                    val planName = state.plans
-                        ?.firstOrNull { it.id == ownSubscription.plan }?.name_fa
-                        ?: ownSubscription.plan
+                    // v1.1.30 (Aref's order): Persian plan name,
+                    // never the raw id ("sub_12" is never shown).
+                    val planName = Vpn5gPlans.displayNameForPlanId(
+                        ownSubscription.plan,
+                        state.plans,
+                    )
                     planName?.let { plan ->
                         Text(
                             text = stringResource(R.string.vpn5g_subscription_plan, plan),
@@ -247,6 +256,22 @@ fun Vpn5gProfileScreen(
             }
         }
 
+        // Usage stats (v1.1.30, Aref's order): clean stat cards —
+        // this session's measured usage, the grant's total measured
+        // usage, remaining GB (or «نامحدود» when the plan has no
+        // cap), remaining time, live speeds and the real ping.
+        // Every number is measured on-device or read from the
+        // server truth; nothing is invented.
+        Vpn5gStaggeredItem(index = 4, visible = entered) {
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_stats_title),
+                expanded = statsExpanded,
+                onToggleExpand = { statsExpanded = !statsExpanded },
+            ) {
+                Vpn5gUsageStatsCards(state)
+            }
+        }
+
         // Per-app selection (v1.1.14, default changed v1.1.29): the
         // mechanism already exists upstream (PerAppProxyActivity +
         // CoreVpnService.configurePerAppProxy, applied at service
@@ -257,7 +282,7 @@ fun Vpn5gProfileScreen(
         // Instagram + Telegram use the VPN (allowlist seed in
         // Vpn5gRouting.seedPerAppDefaultsIfNeeded); the picker still
         // offers both directions.
-        Vpn5gStaggeredItem(index = 4, visible = entered) {
+        Vpn5gStaggeredItem(index = 5, visible = entered) {
             Vpn5gExpandableSection(
                 title = stringResource(R.string.vpn5g_per_app_title),
                 expanded = perAppExpanded,
@@ -286,7 +311,7 @@ fun Vpn5gProfileScreen(
         // order): exactly three buttons, exactly these names, in this
         // order — no extra text, address or description under them.
         // The version lines below are app info, not link descriptions.
-        Vpn5gStaggeredItem(index = 5, visible = entered) {
+        Vpn5gStaggeredItem(index = 6, visible = entered) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Spacer(Modifier.height(8.dp))
                 // Channel / Bot / Support as neomorphism buttons (v1.1.2).
@@ -345,7 +370,75 @@ fun Vpn5gProfileScreen(
                 )
             }
         }
-        Vpn5gStaggeredItem(index = 6, visible = entered) {
+        // About («درباره برنامه», v1.1.30, Aref's order): filled with
+        // real descriptions — what the app does, speed, ping, the
+        // creator, security. Persian text in resources (fa/en/az).
+        Vpn5gStaggeredItem(index = 7, visible = entered) {
+            Vpn5gExpandableSection(
+                title = stringResource(R.string.vpn5g_about_title),
+                expanded = aboutExpanded,
+                onToggleExpand = { aboutExpanded = !aboutExpanded },
+            ) {
+                Text(
+                    text = stringResource(R.string.vpn5g_about_desc),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_about_speed_title),
+                    color = Vpn5gOnDark,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_about_speed_body),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_about_ping_title),
+                    color = Vpn5gOnDark,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_about_ping_body),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_about_security_title),
+                    color = Vpn5gOnDark,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_about_security_body),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_about_creator_title),
+                    color = Vpn5gOnDark,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_about_creator_body),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                )
+            }
+        }
+        Vpn5gStaggeredItem(index = 8, visible = entered) {
             TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = stringResource(R.string.vpn5g_nav_home),
@@ -354,9 +447,157 @@ fun Vpn5gProfileScreen(
                 )
             }
         }
-        Vpn5gStaggeredItem(index = 7, visible = entered) {
+        Vpn5gStaggeredItem(index = 9, visible = entered) {
             Vpn5gFooter()
         }
+    }
+}
+
+/**
+ * Usage-stats cards (v1.1.30, Aref's order): a clean 2-column grid
+ * of stat cards — this session's measured usage, the grant's total
+ * measured usage, remaining GB (or «نامحدود» when the plan has no
+ * cap), remaining time (days for subscribers, hours for the gift
+ * tier, minutes for the free 30-minute session), live download /
+ * upload speeds and the real ping. Every value is measured
+ * on-device or read from the server truth; nothing is invented —
+ * an unknown value shows «—».
+ */
+@Composable
+private fun Vpn5gUsageStatsCards(state: Vpn5gHomeUiState) {
+    val subscription = state.userSubscription
+    val capBytes = subscription?.volumeCapBytes
+    val sessionValue = if (!state.isRunning && state.sessionConsumedBytes <= 0L) {
+        stringResource(R.string.vpn5g_stats_no_session)
+    } else {
+        stringResource(
+            R.string.vpn5g_stats_gb_value,
+            Vpn5gVolume.formatGb(state.sessionConsumedBytes),
+        )
+    }
+    val totalValue = stringResource(
+        R.string.vpn5g_stats_gb_value,
+        Vpn5gVolume.formatGb(state.volumeConsumedBytes),
+    )
+    val remainingGbValue = if (capBytes == null) {
+        stringResource(R.string.vpn5g_stats_unlimited)
+    } else {
+        stringResource(
+            R.string.vpn5g_stats_gb_value,
+            Vpn5gVolume.formatGb(
+                Vpn5gVolume.remainingBytes(state.volumeConsumedBytes, capBytes) ?: 0L
+            ),
+        )
+    }
+    val remainingTimeValue = when {
+        state.isSubscriber && subscription != null -> stringResource(
+            R.string.vpn5g_stats_days,
+            Vpn5gSubscriptionStatus.remainingDays(
+                subscription,
+                System.currentTimeMillis() / 1000,
+            ),
+        )
+        state.isGift -> stringResource(
+            R.string.vpn5g_stats_hours,
+            state.giftRemainingHours,
+        )
+        state.isRunning && state.remainingMillis != null -> stringResource(
+            R.string.vpn5g_stats_minutes,
+            (state.remainingMillis / 60_000L).coerceAtLeast(0L),
+        )
+        else -> "—"
+    }
+    val downloadValue = if (state.isRunning && state.downloadSpeedBps > 0L) {
+        state.downloadSpeedBps.toSpeedString()
+    } else {
+        "—"
+    }
+    val uploadValue = if (state.isRunning && state.uploadSpeedBps > 0L) {
+        state.uploadSpeedBps.toSpeedString()
+    } else {
+        "—"
+    }
+    val pingValue = if (state.currentHasRealPing && state.currentPingMillis > 0L) {
+        "${state.currentPingMillis} ms"
+    } else {
+        "—"
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Vpn5gStatCard(
+                label = stringResource(R.string.vpn5g_stats_session),
+                value = sessionValue,
+                modifier = Modifier.weight(1f),
+            )
+            Vpn5gStatCard(
+                label = stringResource(R.string.vpn5g_stats_total),
+                value = totalValue,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Vpn5gStatCard(
+                label = stringResource(R.string.vpn5g_stats_remaining_gb),
+                value = remainingGbValue,
+                modifier = Modifier.weight(1f),
+            )
+            Vpn5gStatCard(
+                label = stringResource(R.string.vpn5g_stats_remaining_time),
+                value = remainingTimeValue,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Vpn5gStatCard(
+                label = stringResource(R.string.vpn5g_speed_download),
+                value = downloadValue,
+                modifier = Modifier.weight(1f),
+            )
+            Vpn5gStatCard(
+                label = stringResource(R.string.vpn5g_speed_upload),
+                value = uploadValue,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Vpn5gStatCard(
+            label = stringResource(R.string.vpn5g_stats_ping),
+            value = pingValue,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/** One stat card: small muted label over a bold value (v1.1.30). */
+@Composable
+private fun Vpn5gStatCard(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(Vpn5gCard)
+            .border(1.dp, Vpn5gOnDarkMuted.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = label,
+            color = Vpn5gOnDarkMuted,
+            fontSize = 12.sp,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = value,
+            color = Vpn5gOnDark,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 

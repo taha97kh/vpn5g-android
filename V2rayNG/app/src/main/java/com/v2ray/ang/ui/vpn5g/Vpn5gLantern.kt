@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
+import com.v2ray.ang.handler.vpn5g.Vpn5gPlans
 import com.v2ray.ang.handler.vpn5g.Vpn5gSubscriptionStatus
 
 /**
@@ -122,13 +123,16 @@ internal fun hasActiveSubscription(state: Vpn5gHomeUiState): Boolean {
 
 /**
  * Plan display name for the active subscription (v1.1.22): the
- * published plan's Persian name, falling back to the plan id, or null
- * when there is no subscription row at all. Shared by the details
- * card and the drawer pill — the same name the status section shows.
+ * published plan's Persian name, or null when there is no
+ * subscription row at all. Shared by the details card and the
+ * drawer pill — the same name the status section shows.
+ * v1.1.30 (Aref's order): the raw plan id ("sub_12") is NEVER
+ * shown — [Vpn5gPlans.displayNameForPlanId] always resolves to a
+ * Persian label.
  */
 internal fun subscriptionPlanDisplayName(state: Vpn5gHomeUiState): String? {
     val planId = state.userSubscription?.plan ?: return null
-    return state.plans?.firstOrNull { it.id == planId }?.name_fa ?: planId
+    return Vpn5gPlans.displayNameForPlanId(planId, state.plans)
 }
 
 /**

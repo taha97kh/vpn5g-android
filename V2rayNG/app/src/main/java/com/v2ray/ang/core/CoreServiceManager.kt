@@ -30,6 +30,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
 import com.v2ray.ang.handler.vpn5g.Vpn5gDaemonHeartbeat
 import com.v2ray.ang.handler.vpn5g.Vpn5gDaemonPick
 import com.v2ray.ang.handler.vpn5g.Vpn5gFailedServers
+import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
 import com.v2ray.ang.handler.vpn5g.Vpn5gHealthScore
 import com.v2ray.ang.handler.vpn5g.Vpn5gRealPing
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerValidator
@@ -662,6 +663,10 @@ object CoreServiceManager {
                 adjustedDelayMs = Vpn5gHealthScore.adjustedPing(
                     delay, healthScores[key] ?: 0.0
                 ),
+                // v1.1.30: country from the remark (synchronous,
+                // no I/O) so the daemon pick exhausts one country
+                // before the next, like the UI pick.
+                countryCode = Vpn5gGeoIp.countryFromRemark(profile.remarks)?.code ?: "",
             )
         }
         val failed = Vpn5gFailedServers.prune(

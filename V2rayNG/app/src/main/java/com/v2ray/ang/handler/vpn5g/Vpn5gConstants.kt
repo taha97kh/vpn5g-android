@@ -445,6 +445,16 @@ object Vpn5gConstants {
     const val KEY_AD_IMPRESSIONS_JSON = "vpn5g_ad_impressions_json"
 
     /**
+     * Share-app referral (v1.1.30): the user's own referral code +
+     * the email it belongs to, and an incoming referrer code
+     * captured from a deep link, held until registration reports
+     * it to the server. See [Vpn5gReferral].
+     */
+    const val KEY_REFERRAL_CODE = "vpn5g_referral_code"
+    const val KEY_REFERRAL_CODE_EMAIL = "vpn5g_referral_code_email"
+    const val KEY_PENDING_REFERRER_CODE = "vpn5g_pending_referrer_code"
+
+    /**
      * On-device volume metering (v1.1.18, Model B): the grant key
      * (plan + expiry, see [Vpn5gVolume.grantKeyFor]) the consumption
      * counter belongs to, and the cumulative real tunnel bytes for

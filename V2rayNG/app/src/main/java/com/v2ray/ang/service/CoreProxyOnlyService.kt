@@ -47,6 +47,13 @@ class CoreProxyOnlyService : Service(), ServiceControl {
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // v1.1.30: recents removal must not kill the session —
+        // schedule a restart while it is persistent.
+        TaskRemovedRestart.scheduleIfPersistent(this, CoreProxyOnlyService::class.java)
+        super.onTaskRemoved(rootIntent)
+    }
+
     /**
      * Destroys the service.
      */

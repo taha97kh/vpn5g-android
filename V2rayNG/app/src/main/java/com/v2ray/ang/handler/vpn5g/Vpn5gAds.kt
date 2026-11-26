@@ -64,6 +64,30 @@ object Vpn5gAds {
         return s.coerceIn(MIN_DURATION_SECONDS, MAX_DURATION_SECONDS)
     }
 
+    /** Hard daily cap of ads/announcements for premium users (v1.1.30). */
+    const val PREMIUM_DAILY_AD_CAP = 1
+
+    /**
+     * True when a premium user already saw an ad (or a link-bearing
+     * announcement recorded under an `announcement:` id) TODAY
+     * (v1.1.30, Aref's order: premium users get at most ONE ad or
+     * link announcement per day). The cap is per USER per day —
+     * impressions are summed across every ad id whose stored day is
+     * [today]. Pure, JVM-tested.
+     */
+    fun premiumDailyCapReached(
+        store: AdImpressionStore,
+        today: String = java.time.LocalDate.now().toString(),
+    ): Boolean {
+        val shownToday = store.entries.values.sumOf { impressions ->
+            if (impressions.day == today) impressions.today else 0
+        }
+        return shownToday >= PREMIUM_DAILY_AD_CAP
+    }
+
+    /** Impression id under which a shown announcement consumes the premium daily slot. */
+    fun announcementImpressionId(dismissKey: String): String = "announcement:$dismissKey"
+
     /**
      * Whether a forced interstitial is due on the NEXT connect.
      * [completedSessions] counts sessions STARTED so far in this app
@@ -72,12 +96,19 @@ object Vpn5gAds {
      * [InterstitialAdRemote.show_from_connect_number] and may include
      * subscribers with [InterstitialAdRemote.applies_to_free_only]
      * false (default true = free tier only).
+     *
+     * v1.1.30: a premium user (subscriber or gift) the config DOES
+     * include still gets at most ONE ad per day — when
+     * [premiumDailyCapReached] says today's slot is used (by an ad
+     * or a link-bearing announcement), no interstitial shows.
      */
     fun shouldShowInterstitial(
         ads: AdsRemote?,
         completedSessions: Int,
         isSubscriber: Boolean,
         isGift: Boolean,
+        impressions: AdImpressionStore = AdImpressionStore(),
+        today: String = java.time.LocalDate.now().toString(),
     ): Boolean {
         val interstitial = ads?.interstitial ?: return false
         if (interstitial.enabled != true) return false
@@ -85,6 +116,9 @@ object Vpn5gAds {
             ?: DEFAULT_SHOW_FROM_CONNECT_NUMBER).coerceAtLeast(1)
         if (completedSessions + 1 < from) return false
         if (interstitial.applies_to_free_only != false && (isSubscriber || isGift)) return false
+        if ((isSubscriber || isGift) && premiumDailyCapReached(impressions, today)) {
+            return false
+        }
         return true
     }
 

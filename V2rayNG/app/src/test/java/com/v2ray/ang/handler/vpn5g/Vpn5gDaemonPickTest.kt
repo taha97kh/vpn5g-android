@@ -17,11 +17,13 @@ class Vpn5gDaemonPickTest {
         delay: Long,
         realPing: Boolean = true,
         adjusted: Long = delay,
+        countryCode: String = "",
     ) = Vpn5gDaemonPick.Candidate(
         guid = guid,
         delayMs = delay,
         hasRealPing = realPing,
         adjustedDelayMs = adjusted,
+        countryCode = countryCode,
     )
 
     @Test
@@ -128,5 +130,31 @@ class Vpn5gDaemonPickTest {
             )
         )
         assertFalse(Vpn5gDaemonHeartbeat.isFailoverFresh(0L, now))
+    }
+
+    @Test
+    fun test_country_grouped_order_us_de_ca() {
+        // v1.1.30: country priority beats delay — the daemon
+        // exhausts one country before the next (US → DE → CA),
+        // mirroring the UI pick.
+        val candidates = listOf(
+            candidate("caFast", 50, countryCode = "CA"),
+            candidate("deFast", 60, countryCode = "DE"),
+            candidate("usSlow", 900, countryCode = "US"),
+        )
+        assertEquals(
+            "usSlow",
+            Vpn5gDaemonPick.pickNext(candidates, emptySet(), emptySet())?.guid,
+        )
+        assertEquals(
+            "deFast",
+            Vpn5gDaemonPick.pickNext(candidates, setOf("usSlow"), emptySet())?.guid,
+        )
+        assertEquals(
+            "caFast",
+            Vpn5gDaemonPick.pickNext(
+                candidates, setOf("usSlow", "deFast"), emptySet()
+            )?.guid,
+        )
     }
 }

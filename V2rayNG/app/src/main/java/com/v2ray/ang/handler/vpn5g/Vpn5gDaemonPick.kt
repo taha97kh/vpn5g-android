@@ -34,6 +34,13 @@ object Vpn5gDaemonPick {
         val hasRealPing: Boolean,
         /** Health-adjusted delay used for ordering. */
         val adjustedDelayMs: Long,
+        /**
+         * ISO country code from the profile remark (v1.1.30), ""
+         * when unknown. Drives the country-grouped order below —
+         * the daemon exhausts one country before the next, in the
+         * same priority as the UI pick.
+         */
+        val countryCode: String = "",
     )
 
     /**
@@ -43,6 +50,11 @@ object Vpn5gDaemonPick {
      * is the 6-hour failed store (deprioritized, not excluded —
      * the daemon must never strand a session for lack of a
      * candidate while the switch is ON).
+     *
+     * v1.1.30: within each tier the order is country-grouped
+     * ([Vpn5gCountryGroups.priorityOf]: US → DE → CA →
+     * sanction-bypassing → rest → unknown), then real-pinged
+     * first, then health-adjusted delay — mirroring the UI pick.
      */
     fun pickNext(
         candidates: List<Candidate>,
@@ -60,7 +72,11 @@ object Vpn5gDaemonPick {
         for (tier in tiers) {
             if (tier.isEmpty()) continue
             return tier.sortedWith(
-                compareBy({ !it.hasRealPing }, { it.adjustedDelayMs })
+                compareBy<Candidate>(
+                    { Vpn5gCountryGroups.priorityOf(it.countryCode) },
+                    { !it.hasRealPing },
+                    { it.adjustedDelayMs },
+                )
             ).first()
         }
         return null

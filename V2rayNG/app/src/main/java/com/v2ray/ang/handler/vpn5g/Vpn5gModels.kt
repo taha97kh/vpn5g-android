@@ -252,6 +252,16 @@ data class SubscriptionPlanRemote(
  * configured it opens the published checkout URL in the browser; while
  * it is not configured the option is shown as coming soon and routes the
  * user to the bot to complete the purchase manually.
+ *
+ * v1.1.30 (config-driven payment methods, Aref's order): the same
+ * published block also carries the admin's PAYMENT LINK (a URL +
+ * Persian name + guide text the admin can add/change from the bot
+ * panel at any time) and the USDT (Tether) wallet (address + network
+ * + guide). Every field is nullable: an unpublished method is simply
+ * not shown — never a dead button. A future bot-side exchange
+ * integration only has to publish these fields; the app needs no
+ * update. Payment confirmation/crediting stays server-side through
+ * the existing code flow — the app only displays and opens.
  */
 data class PaymentGatewayRemote(
     /** True when the gateway is configured and usable. */
@@ -264,6 +274,27 @@ data class PaymentGatewayRemote(
     val callback_url: String? = null,
     /** Display name, e.g. "درگاه پرداخت مستقیم بانکی". */
     val name_fa: String? = null,
+    /**
+     * Admin payment link (v1.1.30): a payment URL the admin manages
+     * from the bot panel. Null/blank = the entry is hidden.
+     */
+    val payment_link_url: String? = null,
+    /** Payment-link display name in Persian (null = UI default label). */
+    val payment_link_name_fa: String? = null,
+    /** Payment-link guide text in Persian, shown under the entry. */
+    val payment_link_guide_fa: String? = null,
+    /**
+     * USDT (Tether) wallet address (v1.1.30). Null/blank = the USDT
+     * method is hidden. The app only displays it (copyable); the
+     * payment itself is confirmed server-side via the code flow.
+     */
+    val usdt_address: String? = null,
+    /** USDT network label, e.g. "TRC20" (informational). */
+    val usdt_network: String? = null,
+    /** USDT display name in Persian (null = UI default label). */
+    val usdt_name_fa: String? = null,
+    /** USDT guide text in Persian, shown under the address. */
+    val usdt_guide_fa: String? = null,
 )
 
 /**

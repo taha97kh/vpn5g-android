@@ -63,8 +63,12 @@ class Vpn5gSubscriptionDetailsTest {
     }
 
     @Test
-    fun test_plan_name_falls_back_to_plan_id() {
-        val state = Vpn5gHomeUiState(
+    fun test_plan_name_never_shows_raw_plan_id() {
+        // v1.1.30 (Aref's order): subscription labels are Persian —
+        // the raw id ("gb_50" / "sub_12") is never shown. An unknown
+        // id reads «اشتراک ویژه»; a known sub_* id reads from its
+        // duration.
+        val unknown = Vpn5gHomeUiState(
             userSubscription = Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
                 "active", 1_800_000_000L, "gb_50"
             ),
@@ -72,7 +76,15 @@ class Vpn5gSubscriptionDetailsTest {
                 SubscriptionPlanRemote(id = "sub_1", name_fa = "ماهانه"),
             ),
         )
-        assertEquals("gb_50", subscriptionPlanDisplayName(state))
+        assertEquals("اشتراک ویژه", subscriptionPlanDisplayName(unknown))
+
+        val yearly = Vpn5gHomeUiState(
+            userSubscription = Vpn5gSubscriptionStatus.Vpn5gUserSubscription(
+                "active", 1_800_000_000L, "sub_12"
+            ),
+            plans = emptyList(),
+        )
+        assertEquals("اشتراک ۱ ساله ویژه", subscriptionPlanDisplayName(yearly))
     }
 
     @Test

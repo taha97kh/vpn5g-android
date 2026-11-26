@@ -390,4 +390,75 @@
     <string name="vpn5g_exit_yes">Yes</string>
     <string name="vpn5g_exit_no">No</string>
     <string name="vpn5g_other_vpn_notice">Another VPN is active on your phone. Connecting with VPN 5G will stop it so the two do not interfere.</string>
+
+    <!-- v1.1.30 additions -->
+    <string name="vpn5g_sub_group_gb_title">📦 Volume (GB) plans</string>
+    <string name="vpn5g_sub_group_gb_guide">You buy a package with a fixed volume and use it until the volume runs out or its time ends — whichever comes first.
+
+Good for light, occasional use.</string>
+    <string name="vpn5g_sub_group_time_title">📅 Unlimited (time) plans</string>
+    <string name="vpn5g_sub_group_time_guide">During the subscription you connect with no volume limit — only the expiry date matters.
+
+Good for daily, always-on use.</string>
+    <string name="vpn5g_sub_status_none">You have no active subscription</string>
+    <string name="vpn5g_sub_remaining_gb">Remaining volume: %1$s GB</string>
+    <string name="vpn5g_sub_buy_from_bot_guide">Buy via the bot: pick the plan in the Telegram bot, pay the exact (unique) amount by card, get a 6-digit code and enter it here to activate.</string>
+    <string name="vpn5g_sub_buy_from_bot_button">Buy via the Telegram bot</string>
+    <string name="vpn5g_sub_purchase_title">Buy a subscription</string>
+    <string name="vpn5g_sub_choose_group">Choose the subscription type:</string>
+    <string name="vpn5g_pay_link_default_name">Online payment</string>
+    <string name="vpn5g_pay_link_guide_default">Pay through this link; after paying, enter your subscription code on this screen.</string>
+    <string name="vpn5g_pay_usdt_default_name">Pay with Tether (USDT)</string>
+    <string name="vpn5g_pay_usdt_address">Tether wallet address:</string>
+    <string name="vpn5g_pay_usdt_network">Network: %1$s</string>
+    <string name="vpn5g_pay_usdt_copy">Copy address</string>
+    <string name="vpn5g_pay_usdt_copied">Address copied</string>
+    <string name="vpn5g_pay_usdt_guide_default">Send the plan's equivalent amount to this address and send the receipt in the bot to get your subscription code.</string>
+    <string name="vpn5g_referral_title">Share the app, get 1 GB gift</string>
+    <string name="vpn5g_referral_body">Send your personal link to your friends. Anyone who joins and registers through your link — both you and they get 1 GB gift on ALL servers, no limits!
+
+The more you share, the more you get. Send your link now 🎁</string>
+    <string name="vpn5g_referral_your_link">Your personal link:</string>
+    <string name="vpn5g_referral_share_button">Share my link</string>
+    <string name="vpn5g_referral_copy">Copy link</string>
+    <string name="vpn5g_referral_copied">Link copied</string>
+    <string name="vpn5g_referral_captured">Invite link saved; after you register you get 1 GB gift 🎁</string>
+    <string name="vpn5g_referral_signin_needed">Sign in first to get your personal link.</string>
+    <string name="vpn5g_referral_share_text">Join VPN 5G with this link and get 1 GB gift on all servers 🎁
+%1$s</string>
+    <string name="vpn5g_stats_title">Usage stats</string>
+    <string name="vpn5g_stats_session">This session</string>
+    <string name="vpn5g_stats_total">Total subscription usage</string>
+    <string name="vpn5g_stats_remaining_gb">Remaining volume</string>
+    <string name="vpn5g_stats_remaining_time">Time remaining</string>
+    <string name="vpn5g_stats_ping">Ping</string>
+    <string name="vpn5g_stats_unlimited">Unlimited</string>
+    <string name="vpn5g_stats_no_session">No active session</string>
+    <string name="vpn5g_stats_days">%1$d days</string>
+    <string name="vpn5g_stats_hours">%1$d hours</string>
+    <string name="vpn5g_stats_minutes">%1$d min</string>
+    <string name="vpn5g_stats_gb_value">%1$s GB</string>
+    <string name="vpn5g_sanctioned_title">For sanctioned apps</string>
+    <string name="vpn5g_tab_sanctioned">Sanctioned apps</string>
+    <string name="vpn5g_sanctioned_body">Servers in countries that bypass the blocks on Google Flow, Gemini and similar services. Pick one of these servers to use those apps.</string>
+    <string name="vpn5g_sanctioned_none">No servers from these countries yet; refresh the list.</string>
+    <string name="vpn5g_about_title">About the app</string>
+    <string name="vpn5g_about_desc">VPN 5G is a fast, secure VPN that connects you to the best server with one tap. If a server drops, it switches to the next one by itself so your internet never stops.</string>
+    <string name="vpn5g_about_speed_title">Speed</string>
+    <string name="vpn5g_about_speed_body">Servers are measured with a real through-the-tunnel ping and the fastest are picked first, so downloads and video play without stalling.</string>
+    <string name="vpn5g_about_ping_title">Ping</string>
+    <string name="vpn5g_about_ping_body">The ping you see is real: an actual request goes through the tunnel. The lower the number, the faster and steadier the connection.</string>
+    <string name="vpn5g_about_creator_title">Creator</string>
+    <string name="vpn5g_about_creator_body">Creator: AREF KH
+Instagram: @4ref.ai
+Telegram: @Aref_5G</string>
+    <string name="vpn5g_about_security_title">Security &amp; privacy</string>
+    <string name="vpn5g_about_security_body">Your traffic is encrypted and DNS also goes through the tunnel, so nothing leaks. The app keeps no history of the sites you visit.</string>
+    <string name="vpn5g_premium_feature_locked">This feature is for premium users</string>
+    <string name="vpn5g_premium_unlock_button">Upgrade to premium</string>
+    <string name="vpn5g_drawer_premium_badge">Premium active</string>
+    <string name="vpn5g_drawer_share_app">Share the app</string>
+    <string name="vpn5g_drawer_share_subtitle">1 GB gift for both of you</string>
+    <string name="vpn5g_drawer_sanctioned">Sanctioned apps</string>
+    <string name="vpn5g_drawer_sanctioned_subtitle">Google Flow, Gemini…</string>
 </resources>
