@@ -480,9 +480,18 @@ private fun Vpn5gUsageStatsCards(state: Vpn5gHomeUiState) {
             Vpn5gVolume.formatGb(state.sessionConsumedBytes),
         )
     }
+    // v1.1.33 (real consumption): with a subscription the total is
+    // the grant's cumulative measured bytes; without one (free /
+    // gift) there is no grant counter, so the total shows the
+    // session's real measured bytes instead of a fake 0.
+    val totalBytes = if (subscription != null) {
+        state.volumeConsumedBytes
+    } else {
+        state.sessionConsumedBytes
+    }
     val totalValue = stringResource(
         R.string.vpn5g_stats_gb_value,
-        Vpn5gVolume.formatGb(state.volumeConsumedBytes),
+        Vpn5gVolume.formatGb(totalBytes),
     )
     val remainingGbValue = if (capBytes == null) {
         stringResource(R.string.vpn5g_stats_unlimited)

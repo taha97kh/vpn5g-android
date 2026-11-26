@@ -353,6 +353,51 @@ object Vpn5gAutoConnect {
     // (Aref's order: the app must not connect by itself on entry —
     // connection happens only when the user taps the switch).
     // Auto-failover/reconnect AFTER a user-initiated connect stays.
+
+    /**
+     * The connect-chain states during which the globe video may
+     * cover the screen (v1.1.31): every in-progress connect step.
+     * The video ends the moment the state leaves this set
+     * (CONNECTED, FAILED, IDLE...).
+     */
+    val CONNECTING_STATES: Set<Vpn5gConnectState> = setOf(
+        Vpn5gConnectState.CHECKING_INTERNET,
+        Vpn5gConnectState.FINDING_SERVER,
+        Vpn5gConnectState.CONNECTING,
+        Vpn5gConnectState.CREATING_TUNNEL,
+        Vpn5gConnectState.VERIFYING_TUNNEL,
+        Vpn5gConnectState.SWITCHING_SERVER,
+        Vpn5gConnectState.RETRYING,
+    )
+
+    /**
+     * Whether the full-screen connecting video shows (v1.1.33,
+     * Aref's order: «فقط بار اول که کاربر خودش استارت میزند دیده
+     * شود؛ هنگام سویچ اتومات به سرور دیگه دیده نشود» — only on the
+     * first activation the user starts by hand, never on an
+     * automatic switch to another server). [armed] is set by the
+     * ViewModel only for a user-initiated connect from a
+     * non-connected state and cleared the moment the tunnel
+     * CONNECTS (or the chain ends), so a later auto-failover
+     * (SWITCHING_SERVER / RETRYING after CONNECTED) can never
+     * re-show it. Pure, JVM-tested.
+     */
+    fun shouldShowConnectVideo(
+        armed: Boolean,
+        connectState: Vpn5gConnectState,
+    ): Boolean = armed && connectState in CONNECTING_STATES
+
+    /**
+     * States that end a connect-video showing (v1.1.33): the
+     * tunnel connected, the chain gave up, or the session is
+     * ending — the armed flag must not survive into a later
+     * automatic switch. Pure, JVM-tested.
+     */
+    fun connectVideoFinished(connectState: Vpn5gConnectState): Boolean =
+        connectState == Vpn5gConnectState.CONNECTED ||
+            connectState == Vpn5gConnectState.FAILED ||
+            connectState == Vpn5gConnectState.IDLE ||
+            connectState == Vpn5gConnectState.DISCONNECTING
 }
 
 /**

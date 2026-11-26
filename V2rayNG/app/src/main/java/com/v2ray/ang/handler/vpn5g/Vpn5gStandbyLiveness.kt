@@ -2,6 +2,7 @@ package com.v2ray.ang.handler.vpn5g
 
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.dto.entities.ProfileItem
+import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SpeedtestManager
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.Dispatchers
@@ -119,4 +120,34 @@ object Vpn5gStandbyLiveness {
             .sortedWith(compareBy({ !it.tlsOk }, { it.tcpDelayMs }))
             .take(limit)
             .map { it.guid }
+
+    /** Queue → MMKV string (comma-joined guids). Pure, JVM-tested. */
+    fun encodeQueue(guids: List<String>): String =
+        guids.filter { it.isNotBlank() }.joinToString(",")
+
+    /** MMKV string → queue (blank-safe, order kept). Pure, JVM-tested. */
+    fun decodeQueue(raw: String?): List<String> =
+        raw.orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
+
+    /**
+     * Persists the replacement queue (v1.1.33) so the daemon
+     * failover pick can use it with the UI process dead. Written by
+     * both the UI standby job and the daemon standby job (last
+     * writer wins — both rank the same way). Never throws.
+     */
+    fun persistQueue(guids: List<String>) {
+        runCatching {
+            MmkvManager.encodeSettings(
+                Vpn5gConstants.KEY_STANDBY_QUEUE_GUIDS, encodeQueue(guids),
+            )
+        }
+    }
+
+    /** The persisted replacement queue, or empty. Never throws. */
+    fun loadQueue(): List<String> = runCatching {
+        decodeQueue(MmkvManager.decodeSettingsString(Vpn5gConstants.KEY_STANDBY_QUEUE_GUIDS))
+    }.getOrDefault(emptyList())
+
+    /** Clears the persisted queue (manual disconnect). Never throws. */
+    fun clearQueue() = persistQueue(emptyList())
 }

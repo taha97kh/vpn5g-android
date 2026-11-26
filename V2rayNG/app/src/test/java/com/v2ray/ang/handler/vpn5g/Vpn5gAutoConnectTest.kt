@@ -671,4 +671,68 @@ class Vpn5gAutoConnectTest {
         assertEquals(10_000, Vpn5gAutoConnect.verifyTimeoutMsForAttempt(2))
         assertEquals(25_000, Vpn5gAutoConnect.verifyTimeoutMsForAttempt(3))
     }
+
+    // v1.1.33 (Aref's order): the connecting video shows ONLY on
+    // the first manual activation, never on an automatic switch.
+    @Test
+    fun test_connect_video_only_while_armed_and_connecting() {
+        assertTrue(
+            Vpn5gAutoConnect.shouldShowConnectVideo(
+                armed = true, connectState = Vpn5gConnectState.CONNECTING,
+            ),
+        )
+        assertTrue(
+            Vpn5gAutoConnect.shouldShowConnectVideo(
+                armed = true, connectState = Vpn5gConnectState.SWITCHING_SERVER,
+            ),
+        )
+        // Not armed (auto-failover after CONNECTED): never shows,
+        // even in a connecting state.
+        assertFalse(
+            Vpn5gAutoConnect.shouldShowConnectVideo(
+                armed = false, connectState = Vpn5gConnectState.SWITCHING_SERVER,
+            ),
+        )
+        assertFalse(
+            Vpn5gAutoConnect.shouldShowConnectVideo(
+                armed = false, connectState = Vpn5gConnectState.RETRYING,
+            ),
+        )
+        // Armed but settled: never shows.
+        assertFalse(
+            Vpn5gAutoConnect.shouldShowConnectVideo(
+                armed = true, connectState = Vpn5gConnectState.CONNECTED,
+            ),
+        )
+        assertFalse(
+            Vpn5gAutoConnect.shouldShowConnectVideo(
+                armed = true, connectState = Vpn5gConnectState.IDLE,
+            ),
+        )
+    }
+
+    @Test
+    fun test_connect_video_finished_states() {
+        assertTrue(
+            Vpn5gAutoConnect.connectVideoFinished(Vpn5gConnectState.CONNECTED),
+        )
+        assertTrue(
+            Vpn5gAutoConnect.connectVideoFinished(Vpn5gConnectState.FAILED),
+        )
+        assertTrue(
+            Vpn5gAutoConnect.connectVideoFinished(Vpn5gConnectState.IDLE),
+        )
+        assertTrue(
+            Vpn5gAutoConnect.connectVideoFinished(Vpn5gConnectState.DISCONNECTING),
+        )
+        assertFalse(
+            Vpn5gAutoConnect.connectVideoFinished(Vpn5gConnectState.CONNECTING),
+        )
+        assertFalse(
+            Vpn5gAutoConnect.connectVideoFinished(Vpn5gConnectState.SWITCHING_SERVER),
+        )
+        assertFalse(
+            Vpn5gAutoConnect.connectVideoFinished(Vpn5gConnectState.RETRYING),
+        )
+    }
 }

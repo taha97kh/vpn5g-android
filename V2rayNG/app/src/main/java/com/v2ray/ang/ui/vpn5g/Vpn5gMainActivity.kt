@@ -317,12 +317,22 @@ data class Vpn5gHomeUiState(
     val volumeConsumedBytes: Long = 0L,
     /**
      * On-device measured tunnel bytes of the CURRENT connection
-     * session (v1.1.30, usage stats): [volumeConsumedBytes] minus
-     * the counter value when the user tapped connect. Failover
-     * restarts keep the session (the baseline survives them); a
-     * fresh user connect resets it. 0 when no session has run.
+     * session (v1.1.30 usage stats; v1.1.33: read from the daemon's
+     * dedicated session counter, which accumulates real tunnel
+     * bytes for EVERY user — the free tier included — and survives
+     * failover restarts; a fresh user connect resets it). 0 when
+     * no session has run.
      */
     val sessionConsumedBytes: Long = 0L,
+    /**
+     * Connecting-video gate (v1.1.33, Aref's order): true only
+     * between a USER-initiated connect tap from a non-connected
+     * state and the tunnel connecting — the full-screen globe
+     * video shows on that first manual activation only, never on
+     * an automatic failover/switch. See
+     * [Vpn5gAutoConnect.shouldShowConnectVideo].
+     */
+    val connectVideoArmed: Boolean = false,
     val subscriptionStatus: SubscriptionStatusRemote? = null,
     val errorMessage: String? = null,
     val tunnelState: Vpn5gTunnelState = Vpn5gTunnelState.IDLE,
@@ -558,15 +568,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
     private var suppressAutoFailover = false
     private var sessionActive = false
     private var sessionStartedAtMs = 0L
-    /**
-     * Volume counter value when the current session's connect was
-     * tapped (v1.1.30): the session-usage baseline. Null until the
-     * first connect (or the first ticker read mid-session, which
-     * adopts the then-current value so the session counts from
-     * there). Survives failover restarts; reset by a fresh
-     * user-initiated connect.
-     */
-    private var sessionBaselineBytes: Long? = null
+    // v1.1.33: the v1.1.30 session-usage baseline field is gone —
+    // the daemon now keeps a dedicated session byte counter
+    // (Vpn5gVolumeStore.sessionBytes), real for every tier.
     private var droppedCountry: String? = null
     private var autoFailoverAttempts = 0
     private var autoFailoverPending = false
@@ -1057,6 +1061,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                 }.awaitAll()
                 standbyQueue = Vpn5gStandbyLiveness.rankQueue(results)
+                // v1.1.33: persist the queue so the daemon failover
+                // pick (tier 0) can use it with this process dead.
+                Vpn5gStandbyLiveness.persistQueue(standbyQueue)
                 // Refresh the shown TCP delays for probed servers so
                 // the ranking the user sees is not minutes old.
                 val delays = results.filter { it.alive }
@@ -1130,21 +1137,30 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     // real tunnel bytes into MMKV; re-read the counter
                     // every second so the subscription panel stays
                     // live, and catch a cap reached mid-session.
+                    // v1.1.33: session usage comes from the daemon's
+                    // dedicated session counter (real bytes, every
+                    // tier — the old grant-minus-baseline math always
+                    // showed 0 for the free tier).
                     val consumed = Vpn5gVolumeStore.consumedBytes()
-                    if (consumed != state.volumeConsumedBytes) {
-                        // v1.1.30 (usage stats): session usage = the
-                        // counter minus the connect-time baseline
-                        // (adopted now when the app opened mid-session).
-                        val baseline = sessionBaselineBytes ?: consumed.also {
-                            sessionBaselineBytes = it
-                        }
+                    val sessionBytes = Vpn5gVolumeStore.sessionBytes()
+                    if (consumed != state.volumeConsumedBytes ||
+                        sessionBytes != state.sessionConsumedBytes
+                    ) {
                         _uiState.update {
                             it.copy(
                                 volumeConsumedBytes = consumed,
-                                sessionConsumedBytes =
-                                    (consumed - baseline).coerceAtLeast(0L),
+                                sessionConsumedBytes = sessionBytes,
                             )
                         }
+                    }
+                    // v1.1.33: the connecting video belongs to the
+                    // first manual activation only — disarm as soon
+                    // as the chain settles so a later automatic
+                    // switch never re-shows it.
+                    if (state.connectVideoArmed &&
+                        Vpn5gAutoConnect.connectVideoFinished(state.connectState)
+                    ) {
+                        _uiState.update { it.copy(connectVideoArmed = false) }
                     }
                     if ((state.isSubscriber || state.isGift) &&
                         Vpn5gSubscriptionStatus.isVolumeExhausted(
@@ -2144,11 +2160,18 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         if (userInitiated) {
             completedSessions += 1
             // v1.1.30 (usage stats): a fresh user connect starts a
-            // new session — the session-usage counter restarts from
-            // the current volume total. Failover/auto reconnects
-            // (userInitiated = false) keep the baseline.
-            sessionBaselineBytes = Vpn5gVolumeStore.consumedBytes()
-            _uiState.update { it.copy(sessionConsumedBytes = 0L) }
+            // new session. v1.1.33: reset the daemon's session byte
+            // counter (real tunnel bytes, every tier). Failover/
+            // auto reconnects (userInitiated = false) keep counting.
+            Vpn5gVolumeStore.resetSessionBytes()
+            // v1.1.33 (Aref: video «فقط بار اول که کاربر خودش استارت
+            // میزند»): arm the connecting video only when the user
+            // starts from a non-connected state — never for an
+            // automatic switch later in the session.
+            val armVideo = _uiState.value.connectState != Vpn5gConnectState.CONNECTED
+            _uiState.update {
+                it.copy(sessionConsumedBytes = 0L, connectVideoArmed = armVideo)
+            }
         }
         connectChainJob?.cancel()
         connectChainJob = viewModelScope.launch {
@@ -2619,6 +2642,11 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         // persistent flag cleared below.
         Vpn5gDaemonHeartbeat.clearPendingFailoverGuid()
         standbyQueue = emptyList()
+        // v1.1.33: the persisted queue dies with the session too,
+        // and the connecting video disarms (a disconnect mid-chain
+        // must not leave it armed for the next state change).
+        Vpn5gStandbyLiveness.clearQueue()
+        _uiState.update { it.copy(connectVideoArmed = false) }
         watchdogScore = 0.0
         // v1.1.12: a manual disconnect ends the persistent session —
         // no reconnect may follow it.
@@ -3893,6 +3921,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                                 tunnelMessage = null,
                                 verifiedExitIp = result.exitIp,
                                 verifiedExitFlag = flag,
+                                // v1.1.33: the first manual activation
+                                // is done — the connecting video must
+                                // not reappear on a later auto switch.
+                                connectVideoArmed = false,
                             )
                         }
                         return@launch
@@ -4608,9 +4640,13 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
                 // v1.1.32 (Back audit, Aref's order): while the
                 // full-screen connecting video is up, Back cancels
                 // the connect — the same as its «لغو» button —
-                // instead of asking to exit.
+                // instead of asking to exit. v1.1.33: the video
+                // only covers the FIRST manual activation, so the
+                // cancel applies exactly while it shows.
                 destination == Vpn5gDestination.HOME &&
-                    uiState.connectState in VPN5G_CONNECTING_STATES ->
+                    Vpn5gAutoConnect.shouldShowConnectVideo(
+                        uiState.connectVideoArmed, uiState.connectState
+                    ) ->
                     toggleConnect()
                 destination == Vpn5gDestination.AUTH ->
                     destination = Vpn5gDestination.ME
@@ -4890,8 +4926,15 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             // Scaffold so it also covers the bottom bar; the cancel
             // button runs the same toggleConnect() as the switch
             // (a tap while connecting cancels the chain).
+            // v1.1.33 (Aref's order): the video shows ONLY on the
+            // first manual activation («فقط بار اول که کاربر خودش
+            // استارت میزند») — an automatic failover/switch later in
+            // the session never re-shows it (connectVideoArmed is
+            // cleared the moment the tunnel connects).
             if (destination == Vpn5gDestination.HOME &&
-                uiState.connectState in VPN5G_CONNECTING_STATES
+                Vpn5gAutoConnect.shouldShowConnectVideo(
+                    uiState.connectVideoArmed, uiState.connectState
+                )
             ) {
                 Vpn5gConnectingOverlay(
                     connectState = uiState.connectState,
@@ -5398,22 +5441,6 @@ private fun Vpn5gUpdateCard(
 }
 
 /**
- * The connect-chain states during which the globe video covers the
- * screen (v1.1.31, Aref's order). Same set that drove the v1.1.30
- * home background video: every in-progress connect step, ending the
- * moment the state leaves this set (CONNECTED, FAILED, IDLE...).
- */
-private val VPN5G_CONNECTING_STATES = setOf(
-    Vpn5gConnectState.CHECKING_INTERNET,
-    Vpn5gConnectState.FINDING_SERVER,
-    Vpn5gConnectState.CONNECTING,
-    Vpn5gConnectState.CREATING_TUNNEL,
-    Vpn5gConnectState.VERIFYING_TUNNEL,
-    Vpn5gConnectState.SWITCHING_SERVER,
-    Vpn5gConnectState.RETRYING,
-)
-
-/**
  * Full-screen connecting overlay (v1.1.31, Aref's order): when the
  * user taps connect, the globe video itself fills the whole screen
  * («هنگام وصل زدن اون ویدیو کامل بیاد رو صفحه و فقط ویدیو گفته نشون
@@ -5421,11 +5448,12 @@ private val VPN5G_CONNECTING_STATES = setOf(
  * status text (the same connect-state texts as the home screen)
  * sits on the video, with a cancel button that runs the same
  * toggleConnect() as the switch (a tap while connecting cancels
- * the chain). The overlay is composed only while the connect state
- * is in [VPN5G_CONNECTING_STATES], so the video ends the moment the
- * tunnel is CONNECTED (or fails/disconnects). If playback fails,
- * the video renders nothing and the texts + cancel stay usable
- * over the home UI.
+ * the chain). v1.1.33: composed only while
+ * [Vpn5gAutoConnect.shouldShowConnectVideo] holds — the first
+ * manual activation only, never an automatic switch — so the
+ * video ends the moment the tunnel is CONNECTED (or
+ * fails/disconnects). If playback fails, the video renders
+ * nothing and the texts + cancel stay usable over the home UI.
  */
 /**
  * Exit confirmation (v1.1.29, extracted in v1.1.32 so the startup

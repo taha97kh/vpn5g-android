@@ -34,6 +34,7 @@ import com.v2ray.ang.handler.vpn5g.Vpn5gGeoIp
 import com.v2ray.ang.handler.vpn5g.Vpn5gHealthScore
 import com.v2ray.ang.handler.vpn5g.Vpn5gRealPing
 import com.v2ray.ang.handler.vpn5g.Vpn5gServerValidator
+import com.v2ray.ang.handler.vpn5g.Vpn5gStandbyLiveness
 import com.v2ray.ang.handler.vpn5g.Vpn5gSync
 import com.v2ray.ang.handler.vpn5g.Vpn5gTunnelCheck
 import com.v2ray.ang.handler.vpn5g.Vpn5gWatchdogScore
@@ -54,6 +55,9 @@ import kotlinx.coroutines.cancelChildren
 // imports com.v2ray.ang.extension.delay (Int/Long wrappers over
 // kotlinx delay); importing both makes every delay(Long) call
 // ambiguous (broke the 1.1.29 CI compile).
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -107,6 +111,15 @@ object CoreServiceManager {
      */
     private val daemonWatchdogScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var daemonWatchdogJob: Job? = null
+
+    /**
+     * Daemon standby liveness (v1.1.33): keeps several good-ping
+     * configs probed-alive and pre-ranked in MMKV while a session
+     * runs, so a drop replaces the dead server from the queue
+     * instead of a stale stored delay. Same gate as the watchdog
+     * (persistent + AUTO); cancelled with it in [stopCoreLoop].
+     */
+    private var daemonStandbyJob: Job? = null
 
     @Volatile
     private var daemonWatchdogScore = 0.0
@@ -244,6 +257,11 @@ object CoreServiceManager {
         // persistent sessions from here on (no-op when already running,
         // e.g. across a reload).
         startDaemonWatchdog()
+        // v1.1.33: keep the hot standby queue fresh from the daemon
+        // too — the UI standby job dies with the UI process, and a
+        // drop after that must still switch onto a probed-alive
+        // server (Aref: «همیشه چندین کانفینگ پینگ خوب در انتظار باشد»).
+        startDaemonStandby()
         // v1.1.32: arm the session-resurrection backstop — if the
         // whole daemon process is killed (recents swipe on an
         // aggressive OEM that never delivers onTaskRemoved), a
@@ -267,9 +285,14 @@ object CoreServiceManager {
         // that the daemon no longer owns detection.
         daemonWatchdogJob?.cancel()
         daemonWatchdogJob = null
+        daemonStandbyJob?.cancel()
+        daemonStandbyJob = null
         daemonWatchdogScore = 0.0
         daemonTriedGuids.clear()
         Vpn5gDaemonHeartbeat.writeHeartbeat(0L)
+        // v1.1.33: capture the last interval's real tunnel bytes
+        // before the core stops — the native counters die with it.
+        flushTrafficStats()
         connectionTestScope.coroutineContext.cancelChildren()
         val service = getService() ?: return false
 
@@ -344,6 +367,7 @@ object CoreServiceManager {
             connectionTestScope.coroutineContext.cancelChildren()
             LogUtil.i(AppConfig.TAG, "StartCore-Manager: Core reload start...")
 
+            flushTrafficStats()
             coreController.stopLoop()
             launchCore(service, tunFd, isReload = true)
 
@@ -357,6 +381,22 @@ object CoreServiceManager {
         } finally {
             isReloading = false
         }
+    }
+
+    /**
+     * Final traffic-stats flush (v1.1.33): one last native-counter
+     * read before the core stops, so the bytes since the previous
+     * ~1 s round land in the real volume counters instead of
+     * dying with the core. Delegates to the single querier
+     * ([NotificationManager.flushStatsOnce]); a no-op when the
+     * core is not running. Never throws.
+     */
+    private fun flushTrafficStats() {
+        if (!isRunning()) return
+        runCatching { NotificationManager.flushStatsOnce() }
+            .onFailure { e ->
+                LogUtil.e(AppConfig.TAG, "StartCore-Manager: traffic flush failed", e)
+            }
     }
 
     /**
@@ -606,6 +646,7 @@ object CoreServiceManager {
         return try {
             isReloading = true
             connectionTestScope.coroutineContext.cancelChildren()
+            flushTrafficStats()
             coreController.stopLoop()
             val stopDeadline = System.currentTimeMillis() + RESTART_STOP_WAIT_MS
             while (shouldKeepWaitingForCoreStop(
@@ -652,15 +693,15 @@ object CoreServiceManager {
     /**
      * Builds the daemon candidate list from MMKV (stored VPN 5G
      * profiles + stored delays + real-ping identities + health
-     * scores) and picks the next failover target. Null only when
-     * every stored profile is excluded.
+     * scores). Shared by the failover pick and the standby
+     * liveness job (v1.1.33).
      */
-    private fun daemonPickNext(): String? {
+    private fun daemonCandidates(): List<Vpn5gDaemonPick.Candidate> {
         val subId = runCatching { Vpn5gSync.ensureSubscriptionId() }.getOrNull()
-            ?: return null
+            ?: return emptyList()
         val realKeys = Vpn5gRealPing.loadRealPingKeys()
         val healthScores = Vpn5gHealthScore.currentScores()
-        val candidates = MmkvManager.decodeServerList(subId).mapNotNull { guid ->
+        return MmkvManager.decodeServerList(subId).mapNotNull { guid ->
             val profile = MmkvManager.decodeServerConfig(guid) ?: return@mapNotNull null
             val key = Vpn5gServerValidator.dedupeKey(profile)
             val delay = MmkvManager.decodeServerAffiliationInfo(guid)?.testDelayMillis ?: 0L
@@ -677,6 +718,17 @@ object CoreServiceManager {
                 countryCode = Vpn5gGeoIp.countryFromRemark(profile.remarks)?.code ?: "",
             )
         }
+    }
+
+    /**
+     * Picks the next daemon failover target from [daemonCandidates]
+     * (v1.1.33: the persisted standby queue is tier 0 — a
+     * just-probed-alive server beats a stale stored delay). Null
+     * only when every stored profile is excluded.
+     */
+    private fun daemonPickNext(): String? {
+        val candidates = daemonCandidates()
+        if (candidates.isEmpty()) return null
         val failed = Vpn5gFailedServers.prune(
             Vpn5gFailedServers.load(), System.currentTimeMillis()
         )
@@ -684,7 +736,72 @@ object CoreServiceManager {
             candidates = candidates,
             excluding = daemonTriedGuids,
             failedGuids = failed.keys,
+            standbyQueue = Vpn5gStandbyLiveness.loadQueue(),
         )?.guid
+    }
+
+    /**
+     * Daemon standby liveness (v1.1.33): while a persistent AUTO
+     * session runs, probe the top standby candidates directly
+     * (TCP+TLS, no second core — this package is excluded from
+     * the tunnel, so the socket measures the server from the
+     * device network) and keep the pre-ranked replacement queue
+     * persisted in MMKV. The UI standby job does the same while
+     * the UI process lives; this daemon copy keeps the queue
+     * fresh with the screen off / UI dead, so the daemon
+     * failover switches onto a server probed alive seconds ago
+     * instead of one whose stored delay is minutes old. Alive
+     * results also refresh the stored test delays. Child of
+     * [daemonWatchdogScope]; cancelled in [stopCoreLoop].
+     */
+    private fun startDaemonStandby() {
+        if (daemonStandbyJob?.isActive == true) return
+        daemonStandbyJob = daemonWatchdogScope.launch {
+            while (isActive) {
+                delay(Vpn5gConstants.STANDBY_LIVENESS_INTERVAL_MS)
+                if (!isActive) break
+                if (!isRunning() || isReloading) continue
+                if (!daemonWatchdogGateOpen()) continue
+                runCatching { daemonStandbyRound() }
+                    .onFailure { e ->
+                        LogUtil.e(
+                            AppConfig.TAG,
+                            "StartCore-Manager: daemon standby round failed",
+                            e,
+                        )
+                    }
+            }
+        }
+    }
+
+    /** One daemon standby probe round (see [startDaemonStandby]). */
+    private suspend fun daemonStandbyRound() {
+        val currentGuid = MmkvManager.getSelectServer()
+        val candidates = daemonCandidates()
+            .filter { it.guid != currentGuid && it.guid !in daemonTriedGuids }
+            .sortedWith(compareBy({ !it.hasRealPing }, { it.adjustedDelayMs }))
+            .take(Vpn5gConstants.STANDBY_PROBE_K)
+        if (candidates.isEmpty()) return
+        val results = coroutineScope {
+            candidates.map { candidate ->
+                async {
+                    val profile = MmkvManager.decodeServerConfig(candidate.guid)
+                    if (profile == null) {
+                        Vpn5gStandbyLiveness.Result(candidate.guid, -1L, false)
+                    } else {
+                        Vpn5gStandbyLiveness.probe(candidate.guid, profile)
+                    }
+                }
+            }.awaitAll()
+        }
+        Vpn5gStandbyLiveness.persistQueue(Vpn5gStandbyLiveness.rankQueue(results))
+        // Refresh stored delays for probed-alive servers so every
+        // pick (daemon tiers, UI list) orders by fresh numbers.
+        results.filter { it.alive }.forEach { result ->
+            runCatching {
+                MmkvManager.encodeServerTestDelayMillis(result.guid, result.tcpDelayMs)
+            }
+        }
     }
 
     /** Records a daemon-side tunnel failure in the 6-hour failed store. */
@@ -823,6 +940,34 @@ object CoreServiceManager {
                     val pendingResult = goAsync()
                     CoroutineScope(Dispatchers.Default).launch {
                         try {
+                            // v1.1.33 (seamless failover): when this
+                            // restart IS a failover onto the persisted
+                            // pending target and the TUN is up, restart
+                            // the core IN PLACE (same TUN, same service
+                            // — the daemon failover discipline) instead
+                            // of tearing the whole service down. The
+                            // user-visible gap shrinks to the core
+                            // stop/start; the tunnel interface never
+                            // disappears. Any other restart (settings,
+                            // notification button, manual switch) keeps
+                            // the full stop/start below, which also
+                            // re-applies VPN setup.
+                            val pendingGuid = Vpn5gDaemonHeartbeat.pendingFailoverGuid()
+                            val selected = MmkvManager.getSelectServer()
+                            val inPlaceFailover = pendingGuid.isNotBlank() &&
+                                pendingGuid == selected &&
+                                currentVpnInterface != null &&
+                                isRunning() &&
+                                daemonWatchdogJob?.isActive == true
+                            if (inPlaceFailover && daemonRestartOnto(pendingGuid)) {
+                                Vpn5gDaemonHeartbeat.clearPendingFailoverGuid()
+                                MessageHelper.sendMsg2UI(
+                                    serviceControl.getService(),
+                                    AppConfig.MSG_STATE_START_SUCCESS,
+                                    "",
+                                )
+                                return@launch
+                            }
                             serviceControl.stopService()
                             // v1.1.13: wait for the core to ACTUALLY stop
                             // instead of a fixed 500 ms — starting the new

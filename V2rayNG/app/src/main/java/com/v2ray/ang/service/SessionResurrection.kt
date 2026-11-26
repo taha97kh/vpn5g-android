@@ -33,23 +33,30 @@ import com.v2ray.ang.util.LogUtil
  * it within one interval — the app then stays closed, exactly as
  * the exit confirmation promises.
  *
- * The heartbeat is only written by the daemon watchdog in AUTO
- * mode, so the running-service check is what protects a healthy
- * manual-mode session from a spurious restart; the service start
- * itself is idempotent either way.
+ * v1.1.33: liveness is the core-alive stamp (written by the
+ * daemon speed job every ~1 s while the core answers, in every
+ * mode) instead of the AUTO-only watchdog heartbeat — a stuck
+ * service with a dead core is now restarted too, not just a
+ * fully killed process. The service start itself is idempotent
+ * either way, and checks run every 60 s.
  *
  * Honest limit: a user Force Stop (or an OEM "clear all" that
  * force-stops the app) cancels alarms too — nothing can run
  * until the user opens the app again. That is an Android rule,
  * not something an app can override.
  *
- * The decision ([shouldResurrect]) is pure and JVM-tested; the
+ * The decision ([resurrectAction]) is pure and JVM-tested; the
  * alarm/receiver wiring is the only Android touch point.
  */
 object SessionResurrection {
 
-    /** Interval between resurrection checks (ms). */
-    const val CHECK_INTERVAL_MS = 5 * 60_000L
+    /**
+     * Interval between resurrection checks (ms). v1.1.33: 60 s
+     * (was 5 min) — Aref's order is that the tunnel must never
+     * stay down («فیلتر هیچ وقت از کار نیفتد»); a killed daemon is
+     * now back within about a minute worst case instead of five.
+     */
+    const val CHECK_INTERVAL_MS = 60_000L
 
     /** Request code for the check PendingIntent. */
     private const val REQUEST_CODE = 30_132
@@ -61,16 +68,38 @@ object SessionResurrection {
         CoreRootService::class.java.name,
     )
 
+    /** What one resurrection check should do. Pure, JVM-tested. */
+    enum class Action { NONE, START, RESTART }
+
     /**
-     * Pure decision: resurrect only a persistent session whose
-     * daemon shows no sign of life (stale heartbeat and no core
-     * service running).
+     * Pure decision (v1.1.33): resurrect a persistent session
+     * whose CORE shows no sign of life. The signal is the
+     * core-alive stamp (written every ~1 s by the daemon speed
+     * job in every mode while the core answers stats queries),
+     * NOT the watchdog heartbeat — the heartbeat is AUTO-only,
+     * so before 1.1.33 a manual-mode session whose service stayed
+     * up with a dead core was invisible here (serviceRunning
+     * blocked the restart forever). Now:
+     * - core alive → [Action.NONE] (healthy tunnel, never touch);
+     * - core dead + no service → [Action.START];
+     * - core dead + service up → [Action.RESTART] (stuck service:
+     *   a plain start would be refused by the start lock, so the
+     *   service itself must restart).
+     * A non-persistent session (explicit user disconnect) is
+     * always [Action.NONE].
      */
-    fun shouldResurrect(
+    fun resurrectAction(
         isPersistentConnection: Boolean,
-        heartbeatFresh: Boolean,
+        coreAliveFresh: Boolean,
         serviceRunning: Boolean,
-    ): Boolean = isPersistentConnection && !heartbeatFresh && !serviceRunning
+    ): Action = when {
+        !isPersistentConnection -> Action.NONE
+        coreAliveFresh -> Action.NONE
+        serviceRunning -> Action.RESTART
+        else -> Action.START
+    }
+
+
 
     /** Arms the next resurrection check. Never throws. */
     fun arm(context: Context) {
@@ -119,15 +148,31 @@ object SessionResurrection {
             return
         }
         runCatching {
-            val heartbeatFresh = Vpn5gDaemonHeartbeat.isHeartbeatFresh()
+            // v1.1.33: the core-alive stamp (speed job, every mode)
+            // is the liveness signal — the AUTO-only watchdog
+            // heartbeat left manual-mode stuck services invisible.
+            val coreAliveFresh = Vpn5gDaemonHeartbeat.isCoreAliveFresh()
             val serviceRunning = isCoreServiceRunning(context)
-            if (shouldResurrect(persistent, heartbeatFresh, serviceRunning)) {
-                LogUtil.w(
-                    AppConfig.TAG,
-                    "SessionResurrection: persistent session but daemon dead " +
-                        "(mode=VPN phase=resurrection) — restarting service",
-                )
-                LauncherManager.startService(context)
+            when (resurrectAction(persistent, coreAliveFresh, serviceRunning)) {
+                Action.START -> {
+                    LogUtil.w(
+                        AppConfig.TAG,
+                        "SessionResurrection: persistent session but daemon dead " +
+                            "(mode=VPN phase=resurrection) — starting service",
+                    )
+                    LauncherManager.startService(context)
+                }
+
+                Action.RESTART -> {
+                    LogUtil.w(
+                        AppConfig.TAG,
+                        "SessionResurrection: service up but core dead " +
+                            "(mode=VPN phase=resurrection) — restarting service",
+                    )
+                    LauncherManager.restartService(context)
+                }
+
+                Action.NONE -> Unit
             }
         }.onFailure { e ->
             LogUtil.e(AppConfig.TAG, "SessionResurrection: check failed", e)

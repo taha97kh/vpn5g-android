@@ -150,6 +150,20 @@ object Vpn5gVolume {
     }
 
     /**
+     * Next session counter after one interval of real tunnel bytes
+     * (v1.1.33): the grant-independent session total. Unlike
+     * [accumulate] there is no grant key — the session counter runs
+     * for every user (free tier included) so the displayed session
+     * consumption is always the real measured bytes. Saturates
+     * instead of wrapping. Pure, JVM-tested.
+     */
+    fun accumulateSession(currentBytes: Long, intervalBytes: Long): Long {
+        val current = currentBytes.coerceAtLeast(0L)
+        val bytes = intervalBytes.coerceAtLeast(0L)
+        return if (current > Long.MAX_VALUE - bytes) Long.MAX_VALUE else current + bytes
+    }
+
+    /**
      * Gigabytes with one decimal, e.g. "12.3" (v1.1.18). The unit
      * ("گیگابایت") lives in the string resource, not here. Uses the
      * given locale (the app's fa locale renders Persian digits, like

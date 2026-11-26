@@ -164,4 +164,20 @@ class Vpn5gVolumeTest {
         assertEquals("0.0", Vpn5gVolume.formatGb(0L, Locale.US))
         assertEquals("0.0", Vpn5gVolume.formatGb(-10L, Locale.US))
     }
+
+    // v1.1.33: grant-independent session accumulation (real bytes
+    // for every tier, free included).
+    @Test
+    fun test_accumulate_session() {
+        assertEquals(0L, Vpn5gVolume.accumulateSession(0L, 0L))
+        assertEquals(1_500L, Vpn5gVolume.accumulateSession(1_000L, 500L))
+        // Negative inputs clamp to 0, never subtract.
+        assertEquals(1_000L, Vpn5gVolume.accumulateSession(1_000L, -5L))
+        assertEquals(500L, Vpn5gVolume.accumulateSession(-1_000L, 500L))
+        // Saturates instead of wrapping.
+        assertEquals(
+            Long.MAX_VALUE,
+            Vpn5gVolume.accumulateSession(Long.MAX_VALUE - 10L, 100L),
+        )
+    }
 }

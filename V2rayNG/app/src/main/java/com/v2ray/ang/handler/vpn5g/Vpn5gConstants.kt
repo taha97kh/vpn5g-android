@@ -465,6 +465,40 @@ object Vpn5gConstants {
     const val KEY_VOLUME_GRANT_KEY = "vpn5g_volume_grant_key"
     const val KEY_VOLUME_CONSUMED_BYTES = "vpn5g_volume_consumed_bytes"
 
+    /**
+     * Session volume counter (v1.1.33, Aref's order: «حجم مصرف شده
+     * کاربر واقعی نشان داده شود»): real tunnel bytes of the CURRENT
+     * connection session, accumulated by the :daemon speed job for
+     * EVERY user — including the free tier, whose grant counter
+     * above never runs (no grant key) and therefore always showed
+     * 0. Reset by the UI process on a fresh user-initiated connect;
+     * failover restarts keep counting (same session).
+     */
+    const val KEY_VOLUME_SESSION_BYTES = "vpn5g_volume_session_bytes"
+
+    /**
+     * Persisted standby replacement queue (v1.1.33): the pre-ranked
+     * guids from the in-session liveness probes, comma-joined. The
+     * UI standby job and the daemon standby job both write it; the
+     * daemon failover pick reads it so a drop with the UI process
+     * dead still switches onto a just-probed-alive server instead
+     * of a stale stored delay.
+     */
+    const val KEY_STANDBY_QUEUE_GUIDS = "vpn5g_standby_queue_guids"
+
+    /**
+     * Daemon core-alive stamp (v1.1.33): the :daemon speed job
+     * writes this epoch-millis stamp on every stats round (~1 s)
+     * while the core runs, in EVERY mode. Unlike the watchdog
+     * heartbeat (AUTO mode only, the UI↔daemon coordination
+     * signal), this stamp means exactly "the native core answered
+     * a stats query just now" — the session-resurrection backstop
+     * uses it to tell a live tunnel from a stuck service whose
+     * core died.
+     */
+    const val KEY_DAEMON_CORE_ALIVE_MS = "vpn5g_daemon_core_alive_ms"
+    const val DAEMON_CORE_ALIVE_FRESH_MS = 30_000L
+
     /** Unique WorkManager name for the 30-minute disconnect work. */
     const val DISCONNECT_WORK_NAME = "vpn5g_30min_disconnect"
 

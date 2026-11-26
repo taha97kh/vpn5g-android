@@ -17,6 +17,7 @@ import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.extension.delay
 import com.v2ray.ang.extension.toSpeedString
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants
+import com.v2ray.ang.handler.vpn5g.Vpn5gDaemonHeartbeat
 import com.v2ray.ang.handler.vpn5g.Vpn5gVolumeStore
 import com.v2ray.ang.helper.NotificationHelper
 import com.v2ray.ang.ui.vpn5g.Vpn5gMainActivity
@@ -37,6 +38,19 @@ object NotificationManager {
     private const val QUERY_INTERVAL_MS = 1000L
 
     private var lastQueryTime = 0L
+
+    /**
+     * Screen-off mute (v1.1.33): while true, the speed job keeps
+     * QUERYING and accumulating real tunnel bytes (volume metering
+     * + core-alive stamp) but does not refresh the notification
+     * text. Before 1.1.33 SCREEN_OFF cancelled the job outright,
+     * so consumption during screen-off was only counted if the
+     * core survived until the next query — a failover or stop in
+     * between silently lost those bytes.
+     */
+    @Volatile
+    private var screenOff = false
+
     private var mBuilder: NotificationCompat.Builder? = null
     private var speedNotificationJob: Job? = null
     private var mNotificationManager: NotificationManager? = null
@@ -52,6 +66,9 @@ object NotificationManager {
      * @param currentConfig The current profile configuration.
      */
     fun startSpeedNotification(force: Boolean = false) {
+        // v1.1.33: SCREEN_ON un-mutes the notification text; the
+        // job itself never stopped (see [screenOff]).
+        screenOff = false
         if (!force && MmkvManager.decodeSettingsBool(AppConfig.PREF_SPEED_ENABLED) != true) return
         if (speedNotificationJob != null || CoreServiceManager.isRunning() == false) return
 
@@ -151,16 +168,41 @@ object NotificationManager {
         speedNotificationJob?.cancel()
         speedNotificationJob = null
         mNotificationManager = null
+        screenOff = false
     }
 
     /**
-     * Stops the speed notification.
+     * Screen-off (v1.1.33): mute the notification text only. The
+     * stats job KEEPS RUNNING — it is the single querier of the
+     * native counters and the only writer of the real volume
+     * counters, so cancelling it here (the pre-1.1.33 behaviour)
+     * left screen-off consumption uncounted whenever the core
+     * restarted before the next query. The job still ends with
+     * the service via [cancelNotification].
      */
     fun stopSpeedNotification() {
-        speedNotificationJob?.let {
-            it.cancel()
-            speedNotificationJob = null
-            updateNotification("", 0, 0)
+        screenOff = true
+        updateNotification("", 0, 0)
+    }
+
+    /**
+     * Final stats flush (v1.1.33): one last query + accumulation
+     * before the core stops, so the <1 s tail since the previous
+     * round is counted instead of lost. Called by
+     * CoreServiceManager on every core-stop path (stop, failover
+     * restart, reload) while the core is still running; the
+     * native counters reset on query, so a racing job round can
+     * never double-count. Never throws.
+     */
+    fun flushStatsOnce() {
+        if (CoreServiceManager.isRunning() == false) return
+        runCatching {
+            // Bypass the too-short-interval guard: this is the last
+            // chance to read the counters before they are gone.
+            lastQueryTime = 0L
+            updateSpeedNotificationOnce(lastZeroSpeed = true)
+        }.onFailure { e ->
+            LogUtil.e(AppConfig.TAG, "NotificationManager: final stats flush failed", e)
         }
     }
 
@@ -282,12 +324,18 @@ object NotificationManager {
         // tunnel bytes of this interval — accumulating them here, in
         // the single querier, is a true byte count, not a rate
         // sample. The counter is keyed to the current grant (set by
-        // the UI process) and survives restarts; bytes in the <1 s
-        // tail after the last query before the service stops are not
-        // counted. Direct (bypassed) traffic never counts: it does
-        // not go through the tunnel.
+        // the UI process) and survives restarts. Direct (bypassed)
+        // traffic never counts: it does not go through the tunnel.
+        // v1.1.33: the <1 s tail before a stop is captured by
+        // [flushStatsOnce] on every core-stop path, and the
+        // grant-independent session counter accumulates alongside
+        // so the free tier's displayed consumption is real too.
         Vpn5gVolumeStore.addIntervalBytes(proxyDownlink + proxyUplink)
-        if (!zeroSpeed || !lastZeroSpeed) {
+        Vpn5gVolumeStore.addSessionIntervalBytes(proxyDownlink + proxyUplink)
+        // v1.1.33: core-alive stamp for the resurrection backstop —
+        // written every round while the core answers, every mode.
+        Vpn5gDaemonHeartbeat.writeCoreAlive(queryTime)
+        if (!screenOff && (!zeroSpeed || !lastZeroSpeed)) {
             // v1.1.14: TUNNEL-ONLY speeds with Persian labels — the
             // bypassed (direct) traffic is never shown, and nothing is
             // shown when the tunnel counter is unavailable (zeroSpeed

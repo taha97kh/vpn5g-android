@@ -50,4 +50,24 @@ class Vpn5gStandbyLivenessTest {
             Vpn5gStandbyLiveness.rankQueue(listOf(result("x", -5), result("y", -1))),
         )
     }
+
+    // v1.1.33: persisted queue encode/decode round-trip.
+    @Test
+    fun test_queue_encode_decode_round_trip() {
+        val guids = listOf("a-1", "b-2", "c-3")
+        assertEquals(guids, Vpn5gStandbyLiveness.decodeQueue(
+            Vpn5gStandbyLiveness.encodeQueue(guids),
+        ))
+        assertEquals("", Vpn5gStandbyLiveness.encodeQueue(emptyList()))
+        assertEquals(emptyList<String>(), Vpn5gStandbyLiveness.decodeQueue(null))
+        assertEquals(emptyList<String>(), Vpn5gStandbyLiveness.decodeQueue(""))
+        assertEquals(
+            listOf("x", "y"),
+            Vpn5gStandbyLiveness.decodeQueue(" x ,, y ,"),
+        )
+        assertEquals(
+            "only",
+            Vpn5gStandbyLiveness.encodeQueue(listOf("", "only", " ")),
+        )
+    }
 }

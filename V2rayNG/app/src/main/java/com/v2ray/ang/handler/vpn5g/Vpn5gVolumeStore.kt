@@ -3,6 +3,7 @@ package com.v2ray.ang.handler.vpn5g
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_VOLUME_CONSUMED_BYTES
 import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_VOLUME_GRANT_KEY
+import com.v2ray.ang.handler.vpn5g.Vpn5gConstants.KEY_VOLUME_SESSION_BYTES
 
 /**
  * Persistent on-device consumption counter (v1.1.18, Model B).
@@ -106,11 +107,54 @@ object Vpn5gVolumeStore {
         }
     }
 
+    /** Real tunnel bytes of the current session (v1.1.33), or 0. */
+    fun sessionBytes(): Long {
+        return try {
+            MmkvManager.decodeSettingsLong(KEY_VOLUME_SESSION_BYTES, 0L)
+                .coerceAtLeast(0L)
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    /**
+     * Adds one interval of real tunnel bytes to the session counter
+     * (v1.1.33). Called by the same single daemon querier as
+     * [addIntervalBytes], but grant-independent: the free tier's
+     * session consumption is measured too, so the stats cards never
+     * show a fake 0. No-ops on an empty interval.
+     */
+    fun addSessionIntervalBytes(intervalBytes: Long) {
+        if (intervalBytes <= 0L) return
+        try {
+            MmkvManager.encodeSettings(
+                KEY_VOLUME_SESSION_BYTES,
+                Vpn5gVolume.accumulateSession(sessionBytes(), intervalBytes),
+            )
+        } catch (_: Exception) {
+            // Metering must never crash the notification job.
+        }
+    }
+
+    /**
+     * Starts a fresh session counter (v1.1.33): called by the UI
+     * process on a user-initiated connect. Failover/auto reconnects
+     * never call this — the session (and its bytes) survives them.
+     */
+    fun resetSessionBytes() {
+        try {
+            MmkvManager.encodeSettings(KEY_VOLUME_SESSION_BYTES, 0L)
+        } catch (_: Exception) {
+            // Best effort only.
+        }
+    }
+
     /** Clears the grant key and the counter (sign-out). */
     fun clear() {
         try {
             MmkvManager.encodeSettings(KEY_VOLUME_GRANT_KEY, "")
             MmkvManager.encodeSettings(KEY_VOLUME_CONSUMED_BYTES, 0L)
+            MmkvManager.encodeSettings(KEY_VOLUME_SESSION_BYTES, 0L)
         } catch (_: Exception) {
             // Best effort only.
         }

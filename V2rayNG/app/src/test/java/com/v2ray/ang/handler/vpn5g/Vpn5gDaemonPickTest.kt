@@ -157,4 +157,78 @@ class Vpn5gDaemonPickTest {
             )?.guid,
         )
     }
+
+    // v1.1.33: the persisted standby queue is tier 0 — a
+    // just-probed-alive server beats a faster stale delay.
+    @Test
+    fun test_standby_queue_beats_stale_delay() {
+        val candidates = listOf(
+            candidate("staleFast", 50),
+            candidate("queuedAlive", 800),
+        )
+        val pick = Vpn5gDaemonPick.pickNext(
+            candidates, emptySet(), emptySet(),
+            standbyQueue = listOf("queuedAlive"),
+        )
+        assertEquals("queuedAlive", pick?.guid)
+    }
+
+    @Test
+    fun test_standby_queue_skips_failed_and_excluded() {
+        val candidates = listOf(
+            candidate("queuedFailed", 100),
+            candidate("queuedAlive", 200),
+            candidate("plain", 300),
+        )
+        // First queue member is in the failed store → second wins.
+        assertEquals(
+            "queuedAlive",
+            Vpn5gDaemonPick.pickNext(
+                candidates, emptySet(), setOf("queuedFailed"),
+                standbyQueue = listOf("queuedFailed", "queuedAlive"),
+            )?.guid,
+        )
+        // Both queue members unusable → falls through to the tiers.
+        assertEquals(
+            "plain",
+            Vpn5gDaemonPick.pickNext(
+                candidates, setOf("queuedAlive"), setOf("queuedFailed"),
+                standbyQueue = listOf("queuedFailed", "queuedAlive"),
+            )?.guid,
+        )
+        // Queue guid not among candidates → tiers still work.
+        assertEquals(
+            "plain",
+            Vpn5gDaemonPick.pickNext(
+                candidates, setOf("queuedAlive"), setOf("queuedFailed"),
+                standbyQueue = listOf("gone"),
+            )?.guid,
+        )
+    }
+
+    @Test
+    fun test_standby_queue_country_grouped_within_queue() {
+        val candidates = listOf(
+            candidate("deFirst", 100, countryCode = "DE"),
+            candidate("usSecond", 900, countryCode = "US"),
+        )
+        // US exhausts before DE even when DE is earlier in the queue.
+        assertEquals(
+            "usSecond",
+            Vpn5gDaemonPick.pickNext(
+                candidates, emptySet(), emptySet(),
+                standbyQueue = listOf("deFirst", "usSecond"),
+            )?.guid,
+        )
+    }
+
+    // v1.1.33: core-alive freshness (resurrection backstop signal).
+    @Test
+    fun test_core_alive_freshness() {
+        assertTrue(Vpn5gDaemonHeartbeat.isCoreAliveFresh(1_000L, 2_000L))
+        assertTrue(Vpn5gDaemonHeartbeat.isCoreAliveFresh(1_000L, 31_000L))
+        assertFalse(Vpn5gDaemonHeartbeat.isCoreAliveFresh(1_000L, 31_001L))
+        assertFalse(Vpn5gDaemonHeartbeat.isCoreAliveFresh(0L, 1_000L))
+        assertFalse(Vpn5gDaemonHeartbeat.isCoreAliveFresh(5_000L, 4_000L))
+    }
 }
