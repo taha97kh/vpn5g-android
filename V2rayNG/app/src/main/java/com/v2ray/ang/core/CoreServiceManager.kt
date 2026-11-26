@@ -41,6 +41,7 @@ import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.service.DialerNativeService
 import com.v2ray.ang.service.DialerWebviewService
 import com.v2ray.ang.service.NetworkMonitor
+import com.v2ray.ang.service.SessionResurrection
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.CoroutineScope
@@ -243,6 +244,13 @@ object CoreServiceManager {
         // persistent sessions from here on (no-op when already running,
         // e.g. across a reload).
         startDaemonWatchdog()
+        // v1.1.32: arm the session-resurrection backstop — if the
+        // whole daemon process is killed (recents swipe on an
+        // aggressive OEM that never delivers onTaskRemoved), a
+        // periodic alarm restarts the service while the session is
+        // persistent. The chain self-terminates once the session
+        // ends, so arming here is safe for every consumer.
+        SessionResurrection.arm(service)
     }
 
     /**

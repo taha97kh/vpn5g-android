@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -130,11 +131,11 @@ fun Vpn5gGuideScreen(
                         GuideLinkRow(
                             label = stringResource(R.string.vpn5g_link_channel),
                             onClick = { onOpenUrl(Vpn5gConstants.CHANNEL_URL) },
-                        )
+                        ) { Vpn5gChannelIcon(color = Vpn5gTeal, size = 20.dp) }
                         GuideLinkRow(
                             label = stringResource(R.string.vpn5g_link_bot),
                             onClick = { onOpenUrl(Vpn5gConstants.BOT_URL) },
-                        )
+                        ) { Vpn5gBotIcon(color = Vpn5gTeal, size = 20.dp) }
                         GuideLinkRow(
                             // v1.1.29: this row opens the bot, so it
                             // carries the bot label; «پشتیبانی آنلاین»
@@ -144,7 +145,7 @@ fun Vpn5gGuideScreen(
                             // support section (start=support); the bot
                             // handles membership (not verifiable app-side).
                             onClick = { onOpenUrl(Vpn5gConstants.SUPPORT_BOT_URL) },
-                        )
+                        ) { Vpn5gSupportIcon(color = Vpn5gTeal, size = 20.dp) }
                     }
                 } else {
                     Vpn5gExpandableSection(
@@ -239,13 +240,22 @@ private val guideFaq = listOf(
 )
 
 @Composable
-private fun GuideLinkRow(label: String, onClick: () -> Unit) {
+private fun GuideLinkRow(
+    label: String,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit = {},
+) {
     Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(role = Role.Button, onClickLabel = label) { onClick() }
             .padding(vertical = 6.dp)
     ) {
+        // v1.1.32 (Aref's order): dedicated icon per link button
+        // (channel/bot/support), same as the Me screen.
+        icon()
+        Spacer(Modifier.width(8.dp))
         Text(
             text = label,
             color = Vpn5gTealLight,

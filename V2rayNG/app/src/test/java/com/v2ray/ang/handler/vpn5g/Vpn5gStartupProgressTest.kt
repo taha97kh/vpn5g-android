@@ -43,6 +43,58 @@ class Vpn5gStartupProgressTest {
     }
 
     @Test
+    fun test_gate_holds_until_min_display_and_work_done() {
+        // Work done instantly (cached list): the bar ramps with time
+        // and reaches 100% only at the minimum-display boundary.
+        assertEquals(0f, Vpn5gStartupProgress.gatedFraction(0f, 0L, workDone = true))
+        assertEquals(
+            0.5f,
+            Vpn5gStartupProgress.gatedFraction(0.10f, 4_000L, workDone = true),
+            0.001f,
+        )
+        assertEquals(
+            Vpn5gStartupProgress.MAX_BEFORE_DONE,
+            Vpn5gStartupProgress.gatedFraction(1f, 7_999L, workDone = true),
+        )
+        assertEquals(
+            1f,
+            Vpn5gStartupProgress.gatedFraction(1f, 8_000L, workDone = true),
+        )
+        // Work still running past the window: never 100% yet.
+        assertEquals(
+            Vpn5gStartupProgress.MAX_BEFORE_DONE,
+            Vpn5gStartupProgress.gatedFraction(1f, 30_000L, workDone = false),
+        )
+        // Real progress ahead of the ramp wins.
+        assertEquals(
+            0.80f,
+            Vpn5gStartupProgress.gatedFraction(0.80f, 1_000L, workDone = false),
+            0.001f,
+        )
+    }
+
+    @Test
+    fun test_gate_is_monotonic_in_elapsed() {
+        var previous = 0f
+        var elapsed = 0L
+        while (elapsed <= 12_000L) {
+            val shown = Vpn5gStartupProgress.gatedFraction(0.10f, elapsed, workDone = true)
+            assertTrue(shown >= previous, "gate went backwards at ${elapsed}ms")
+            previous = shown
+            elapsed += 250L
+        }
+        assertEquals(1f, previous)
+    }
+
+    @Test
+    fun test_gate_open_needs_both_conditions() {
+        assertTrue(!Vpn5gStartupProgress.gateOpen(8_000L, workDone = false))
+        assertTrue(!Vpn5gStartupProgress.gateOpen(7_999L, workDone = true))
+        assertTrue(Vpn5gStartupProgress.gateOpen(8_000L, workDone = true))
+        assertTrue(Vpn5gStartupProgress.gateOpen(60_000L, workDone = true))
+    }
+
+    @Test
     fun test_within_is_clamped() {
         // Negative within clamps to the stage START (FETCH_CONFIG starts
         // at 0.10, not 0), over-range within clamps to the stage END.

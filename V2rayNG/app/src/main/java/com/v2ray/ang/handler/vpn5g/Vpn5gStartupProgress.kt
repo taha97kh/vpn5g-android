@@ -7,6 +7,18 @@ package com.v2ray.ang.handler.vpn5g
  * sync stages, not a timer: each stage owns a slice of the bar and the
  * fraction inside a stage comes from real work (sources fetched so
  * far, servers pinged so far). Pure, JVM-tested.
+ *
+ * v1.1.32 (Aref's order): the entry screen must stay visible at
+ * least 8–10 s so his entrance video is actually seen («ورودی اول
+ * که گفتم ویدیو داده بودم اصلا نبود حداقل ۸ الی ۱۰ ثانیه باشه و تو
+ * این چند ثانیه از ۱ تا ۱۰۰ سریع پر بشه») — with a cached list the
+ * real work finishes in well under a second and the screen vanished
+ * before the video could play. [gatedFraction] merges the real
+ * stage fraction with a minimum-display ramp: the bar fills 1→100
+ * across the minimum window, reaches 100% only when the real work
+ * is done AND the window has elapsed, and never runs backwards.
+ * Real work keeps running in the background either way — the gate
+ * only holds the screen, it never blocks the sync.
  */
 object Vpn5gStartupProgress {
 
@@ -49,4 +61,28 @@ object Vpn5gStartupProgress {
         }
         return (from + (to - from) * w).coerceIn(0f, 1f)
     }
+
+    /** Minimum time the entry (1→100) screen stays visible (v1.1.32). */
+    const val MIN_DISPLAY_MS = 8_000L
+
+    /** The bar never shows 100% before the gate opens. */
+    const val MAX_BEFORE_DONE = 0.99f
+
+    /**
+     * Displayed bar fraction (v1.1.32): the further of the REAL
+     * stage fraction and the minimum-display ramp
+     * ([elapsedMs] / [MIN_DISPLAY_MS]), capped at [MAX_BEFORE_DONE]
+     * until the real work is done AND the minimum window has
+     * elapsed — only then is it exactly 1f. Pure.
+     */
+    fun gatedFraction(real: Float, elapsedMs: Long, workDone: Boolean): Float {
+        val r = real.coerceIn(0f, 1f)
+        if (workDone && elapsedMs >= MIN_DISPLAY_MS) return 1f
+        val ramp = (elapsedMs.toFloat() / MIN_DISPLAY_MS).coerceIn(0f, 1f)
+        return maxOf(r, ramp).coerceAtMost(MAX_BEFORE_DONE)
+    }
+
+    /** True when the entry screen may leave (v1.1.32). Pure. */
+    fun gateOpen(elapsedMs: Long, workDone: Boolean): Boolean =
+        workDone && elapsedMs >= MIN_DISPLAY_MS
 }

@@ -395,6 +395,13 @@
             </intent-filter>
         </receiver>
 
+        <!-- v1.1.32: session-resurrection backstop — periodic alarm
+             check that restarts the core service if the daemon
+             process was killed while a persistent session is on. -->
+        <receiver
+            android:name=".service.SessionResurrectionReceiver"
+            android:exported="false" />
+
         <service
             android:name=".service.QSTileService"
             android:exported="true"

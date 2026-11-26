@@ -637,6 +637,10 @@ fun Vpn5gSubscriptionScreen(
         }
 
         // Free vs Premium comparison (counts come from the live list).
+        // v1.1.32 (Aref's order): hidden for paid subscribers too —
+        // a purchase-code user sees NO purchase-related content
+        // anywhere («هیچ جایی اسمی از خرید اشتراک نباشه»).
+        if (!state.isSubscriber) {
         Vpn5gStaggeredItem(index = 9, visible = entered) {
             Vpn5gExpandableSection(
                 title = stringResource(R.string.vpn5g_premium_title),
@@ -683,6 +687,7 @@ fun Vpn5gSubscriptionScreen(
                     premium = "✓",
                 )
             }
+        }
         }
 
         // Account (v1.1.11): sign-in only while signed out; a

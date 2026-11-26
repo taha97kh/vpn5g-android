@@ -678,6 +678,12 @@
     <string name="vpn5g_connect_connecting">در حال اتصال…</string>
     <string name="vpn5g_connect_creating_tunnel">در حال ایجاد تونل امن…</string>
     <string name="vpn5g_connect_retrying">در حال تلاش مجدد برای اتصال…</string>
+    <string name="vpn5g_connect_tip_01">اتصال فقط چند ثانیه طول می‌کشد؛ اگر سروری قطع شود، برنامه خودش به سرور بعدی وصل می‌شود.</string>
+    <string name="vpn5g_connect_tip_02">از بخش «برنامه‌های فیلترشکن» می‌توانی انتخاب کنی کدام برنامه‌ها از فیلترشکن استفاده کنند.</string>
+    <string name="vpn5g_connect_tip_03">در ربات تلگرام می‌توانی اشتراک بخری، کد هدیه بگیری و از پشتیبانی کمک بخواهی.</string>
+    <string name="vpn5g_connect_tip_04">تب «اپ‌های تحریم‌شده» سرورهای مناسب گوگل فلو و جمینای را یکجا نشان می‌دهد.</string>
+    <string name="vpn5g_connect_tip_05">با اشتراک‌گذاری اپ، هم تو و هم دوستت ۱ گیگابایت هدیه روی همهٔ سرورها می‌گیرید.</string>
+    <string name="vpn5g_connect_tip_06">آمار مصرف و پینگ واقعی را در صفحهٔ خانه می‌بینی؛ پینگ کمتر یعنی اتصال سریع‌تر.</string>
     <string name="vpn5g_disconnecting">در حال قطع اتصال…</string>
     <string name="vpn5g_no_internet">اینترنت در دسترس نیست؛ اتصال را بررسی کنید</string>
     <string name="vpn5g_loading_servers">در حال دریافت سرورها…</string>
@@ -1026,7 +1032,6 @@
     <string name="vpn5g_about_ping_body">پینگی که در برنامه می‌بینی واقعی است: درخواست واقعی از داخل تونل فرستاده می‌شود. هرچه عدد کمتر باشد، اتصال سریع‌تر و پایدارتر است.</string>
     <string name="vpn5g_about_creator_title">سازنده</string>
     <string name="vpn5g_about_creator_body">سازنده: AREF KH
-اینستاگرام: @4ref.ai
 تلگرام: @Aref_5G</string>
     <string name="vpn5g_about_security_title">امنیت و حریم خصوصی</string>
     <string name="vpn5g_about_security_body">ترافیک تو رمزنگاری می‌شود و DNS هم از داخل تونل انجام می‌شود تا نشتی نداشته باشی. برنامه هیچ سابقه‌ای از سایت‌هایی که باز می‌کنی نگه نمی‌دارد.</string>

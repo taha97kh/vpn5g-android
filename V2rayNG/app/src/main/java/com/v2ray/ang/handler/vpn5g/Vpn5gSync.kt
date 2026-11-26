@@ -88,28 +88,109 @@ object Vpn5gSync {
 
     /**
      * TCP-pings the candidates (8-way concurrency, 1.5 s each) and
-     * returns only the live ones. Shared by both refresh paths.
+     * returns (live, unpinged). Shared by both refresh paths.
+     *
+     * v1.1.32 (fast manual refresh ≤ 5 s): [concurrency] and
+     * [startDeadlineMs] bound the stage for the fast path — no new
+     * ping STARTS after the deadline (in-flight pings finish
+     * within their own 1.5 s timeout), and whatever was not
+     * reached comes back as unpinged so the caller can carry over
+     * previously stored servers instead of shrinking the list.
+     * The defaults reproduce the pre-1.1.32 behaviour exactly
+     * (8-way, no deadline, unpinged always empty).
      */
     private suspend fun tcpPingCandidates(
         unique: List<Pair<ProfileItem, Candidate>>,
-    ): List<Triple<ProfileItem, Long, String>> = coroutineScope {
-        val semaphore = Semaphore(MAX_CONCURRENT_PINGS)
-        val pinged = unique.map { (profile, _) ->
-            async {
-                semaphore.withPermit {
-                    val host = profile.server.orEmpty()
-                    val port = profile.serverPort?.toIntOrNull() ?: -1
-                    val delay = if (host.isBlank() || port <= 0) {
-                        -1L
-                    } else {
-                        SpeedtestManager.socketConnectTime(host, port, PING_TIMEOUT_MS)
+        concurrency: Int = MAX_CONCURRENT_PINGS,
+        startDeadlineMs: Long = Long.MAX_VALUE,
+    ): Pair<List<Triple<ProfileItem, Long, String>>, List<Pair<ProfileItem, Candidate>>> =
+        coroutineScope {
+            val semaphore = Semaphore(concurrency)
+            val startMs = System.currentTimeMillis()
+            val pinged = unique.map { pair ->
+                async {
+                    semaphore.withPermit {
+                        if (System.currentTimeMillis() - startMs > startDeadlineMs) {
+                            // Past the start deadline: not pinged this
+                            // round (the caller decides carry-over).
+                            return@withPermit pair to null
+                        }
+                        val profile = pair.first
+                        val host = profile.server.orEmpty()
+                        val port = profile.serverPort?.toIntOrNull() ?: -1
+                        val delay = if (host.isBlank() || port <= 0) {
+                            -1L
+                        } else {
+                            SpeedtestManager.socketConnectTime(host, port, PING_TIMEOUT_MS)
+                        }
+                        pair to Triple(profile, delay, profile.country)
                     }
-                    Triple(profile, delay, profile.country)
+                }
+            }.awaitAll()
+            // HARD RULE: dead configs (ping < 0) are never stored or shown.
+            val live = pinged.mapNotNull { it.second }.filter { it.second >= 0 }
+            val unpinged = pinged.filter { it.second == null }.map { it.first }
+            live to unpinged
+        }
+
+    /**
+     * Fetches every URL in parallel (v1.1.24 racing fetch, extracted
+     * v1.1.32 so the fast path can overlap the config fetch with
+     * the default-source fetches). Result order matches [urls];
+     * a failed fetch yields a null body for that URL.
+     */
+    private suspend fun fetchBodies(
+        urls: List<String>,
+        timeoutMs: Int,
+    ): List<Pair<String, String?>> = coroutineScope {
+        urls.map { url ->
+            async {
+                url to try {
+                    HttpUtil.getUrlContent(
+                        UrlContentRequest(url = url, timeout = timeoutMs)
+                    )
+                } catch (e: Exception) {
+                    LogUtil.e(AppConfig.TAG, "Vpn5gSync: fetch failed for $url", e)
+                    null
                 }
             }
         }.awaitAll()
-        // HARD RULE: dead configs (ping < 0) are never stored or shown.
-        pinged.filter { it.second >= 0 }
+    }
+
+    /** Stored profiles of [subId] keyed by server identity, with their stored delays. */
+    private fun storedProfilesWithDelays(
+        subId: String,
+    ): Map<String, Pair<ProfileItem, Long>> =
+        MmkvManager.decodeServerList(subId).mapNotNull { guid ->
+            val profile = MmkvManager.decodeServerConfig(guid) ?: return@mapNotNull null
+            val delay = MmkvManager.decodeServerAffiliationInfo(guid)?.testDelayMillis ?: -1L
+            Vpn5gServerValidator.dedupeKey(profile) to (profile to delay)
+        }.toMap()
+
+    /**
+     * Carry-over profiles for a bounded fast refresh (v1.1.32):
+     * candidates the ping deadline did not reach keep their
+     * previously stored profile + stored delay when that delay is
+     * a real measurement (≥ 0), so publishing the round's results
+     * never shrinks the visible list. A candidate pinged THIS
+     * round and found dead is not in [unpinged] and is never
+     * carried over — fresh evidence beats stale.
+     */
+    private fun carryOverProfiles(
+        subId: String,
+        unpinged: List<Pair<ProfileItem, Candidate>>,
+    ): List<Triple<ProfileItem, Long, String>> {
+        val stored = storedProfilesWithDelays(subId)
+        val unpingedKeys = unpinged.map { (profile, _) ->
+            Vpn5gServerValidator.dedupeKey(profile)
+        }
+        val carryKeys = selectCarryOverKeys(
+            unpingedKeys,
+            stored.mapValues { it.value.second },
+        )
+        return carryKeys.mapNotNull { key ->
+            stored[key]?.let { (profile, delay) -> Triple(profile, delay, profile.country) }
+        }
     }
 
     /**
@@ -286,6 +367,17 @@ object Vpn5gSync {
      */
     private const val FAST_FETCH_TIMEOUT_MS = 4_000
 
+    // v1.1.32 (fast manual refresh ≤ 5 s): the fast path TCP-pings
+    // 32-way and stops STARTING new pings after 2.5 s (in-flight
+    // pings finish within their 1.5 s timeout), so the ping stage
+    // is bounded at ~4 s worst case instead of the unbounded
+    // 8-way sweep over ~800–1500 candidates (tens of seconds).
+    // Candidates not reached keep their stored profile/delay via
+    // carry-over (see [carryOverProfiles]); known servers are
+    // pinged first so the freshest evidence lands on them.
+    private const val FAST_PING_CONCURRENCY = 32
+    private const val FAST_PING_START_DEADLINE_MS = 2_500L
+
     suspend fun refresh(
         context: Context,
         skipRealProbe: Boolean = false,
@@ -297,20 +389,11 @@ object Vpn5gSync {
             // v1.1.26 (fast manual refresh): the config fetch gets
             // the same tight timeout so servers + app config land
             // inside the 5 s budget together.
-            val remoteConfig = Vpn5gRemoteConfig.fetch(
-                timeoutMs = if (fast) FAST_FETCH_TIMEOUT_MS else 10_000,
-            )
-            onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_CONFIG, 1f)
-
-            val sources = linkedSetOf<String>()
-            sources += Vpn5gConstants.DEFAULT_CONFIG_SOURCES
-            remoteConfig.config_sources?.forEach { url ->
-                if (!url.isNullOrBlank()) sources.add(url.trim())
-            }
-
-            val candidates = mutableListOf<Candidate>()
-            var anyFetchOk = false
-            val sourceList = sources.toList()
+            // v1.1.32: in fast mode the config fetch OVERLAPS the
+            // default-source fetches (they were sequential: config
+            // up to 4 s, then sources up to 4 s more). Config-only
+            // extra sources are fetched once the config lands;
+            // candidate order is unchanged (defaults first).
             // v1.1.24 (racing fetch, Lantern-inspired): the sources
             // are fetched IN PARALLEL instead of sequentially — one
             // slow source no longer delays all the others (8 × 10 s
@@ -319,23 +402,43 @@ object Vpn5gSync {
             // list stays untouched (offline return below). The
             // quick path already fetched in parallel; the full
             // refresh now matches it.
-            val bodies = coroutineScope {
-                sourceList.map { url ->
-                    async {
-                        url to try {
-                            HttpUtil.getUrlContent(
-                                UrlContentRequest(
-                                    url = url,
-                                    timeout = if (fast) FAST_FETCH_TIMEOUT_MS else FETCH_TIMEOUT_MS,
-                                )
-                            )
-                        } catch (e: Exception) {
-                            LogUtil.e(AppConfig.TAG, "Vpn5gSync: fetch failed for $url", e)
-                            null
-                        }
+            val (remoteConfig, bodies) = if (fast) {
+                coroutineScope {
+                    val configDeferred = async {
+                        Vpn5gRemoteConfig.fetch(timeoutMs = FAST_FETCH_TIMEOUT_MS)
                     }
-                }.awaitAll()
+                    val defaultBodiesDeferred = async {
+                        fetchBodies(
+                            Vpn5gConstants.DEFAULT_CONFIG_SOURCES,
+                            FAST_FETCH_TIMEOUT_MS,
+                        )
+                    }
+                    val config = configDeferred.await()
+                    onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_CONFIG, 1f)
+                    val extras = config.config_sources.orEmpty()
+                        .mapNotNull { it?.trim()?.takeIf { s -> s.isNotBlank() } }
+                        .filter { it !in Vpn5gConstants.DEFAULT_CONFIG_SOURCES }
+                        .distinct()
+                    val extraBodies = if (extras.isEmpty()) {
+                        emptyList()
+                    } else {
+                        fetchBodies(extras, FAST_FETCH_TIMEOUT_MS)
+                    }
+                    config to (defaultBodiesDeferred.await() + extraBodies)
+                }
+            } else {
+                val config = Vpn5gRemoteConfig.fetch(timeoutMs = 10_000)
+                onProgress?.invoke(Vpn5gStartupProgress.Stage.FETCH_CONFIG, 1f)
+                val sources = linkedSetOf<String>()
+                sources += Vpn5gConstants.DEFAULT_CONFIG_SOURCES
+                config.config_sources?.forEach { url ->
+                    if (!url.isNullOrBlank()) sources.add(url.trim())
+                }
+                config to fetchBodies(sources.toList(), FETCH_TIMEOUT_MS)
             }
+
+            val candidates = mutableListOf<Candidate>()
+            var anyFetchOk = false
             for ((url, body) in bodies) {
                 if (body.isNullOrBlank()) continue
                 anyFetchOk = true
@@ -375,13 +478,41 @@ object Vpn5gSync {
 
             onProgress?.invoke(Vpn5gStartupProgress.Stage.PARSE_VALIDATE, 1f)
             onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 0f)
-            val live = tcpPingCandidates(unique)
-            val dropped = unique.size - live.size
+            // v1.1.32 (fast manual refresh ≤ 5 s): known servers
+            // ping first (most likely live, and they anchor the
+            // carry-over), 32-way, no new ping starts after 2.5 s.
+            // Whatever the deadline did not reach keeps its stored
+            // profile/delay via carry-over, so the published list
+            // never shrinks. The full path is unchanged (8-way,
+            // no deadline, everything pinged).
+            val pingOrder = if (fast) {
+                val storedKeys = storedProfilesWithDelays(subId).keys
+                unique.sortedBy { (profile, _) ->
+                    if (Vpn5gServerValidator.dedupeKey(profile) in storedKeys) 0 else 1
+                }
+            } else {
+                unique
+            }
+            val (live, unpinged) = tcpPingCandidates(
+                pingOrder,
+                concurrency = if (fast) FAST_PING_CONCURRENCY else MAX_CONCURRENT_PINGS,
+                startDeadlineMs = if (fast) {
+                    FAST_PING_START_DEADLINE_MS
+                } else {
+                    Long.MAX_VALUE
+                },
+            )
+            val dropped = (unique.size - unpinged.size) - live.size
+            val liveForPublish = if (fast && unpinged.isNotEmpty()) {
+                live + carryOverProfiles(subId, unpinged)
+            } else {
+                live
+            }
             onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 1f)
 
             val (perCountry, realPingCount) = publishLiveProfiles(
                 context = context,
-                live = live,
+                live = liveForPublish,
                 subId = subId,
                 // v1.1.26 (fast manual refresh): publish the
                 // TCP-live list immediately; the real-ping probe
@@ -396,7 +527,7 @@ object Vpn5gSync {
 
             Vpn5gSyncResult(
                 fetched = candidates.size,
-                live = live.size,
+                live = liveForPublish.size,
                 dropped = dropped,
                 invalid = invalid,
                 realPingCount = realPingCount,
@@ -476,6 +607,21 @@ object Vpn5gSync {
         val assigned = HashMap(existingByKey)
         return keys.map { key -> assigned.getOrPut(key) { newGuid() } }
     }
+
+    /**
+     * Carry-over selection for a bounded fast refresh (v1.1.32,
+     * pure): of the candidates the ping stage did not reach, keep
+     * exactly those the store already knows with a real measured
+     * delay (≥ 0). Unknown identities and stored-dead ones
+     * (delay < 0 or missing) are dropped — an unpinged NEW config
+     * is never shown, and a stored-dead one stays dead. Covered
+     * by JVM unit tests.
+     */
+    fun selectCarryOverKeys(
+        unpingedKeys: List<String>,
+        existingDelays: Map<String, Long>,
+    ): List<String> =
+        unpingedKeys.filter { key -> (existingDelays[key] ?: -1L) >= 0L }
 
     /**
      * Evenly-spread sample of at most [cap] items (pure, v1.1.17):
@@ -623,7 +769,9 @@ object Vpn5gSync {
             val unique = spreadSample(validated, QUICK_CANDIDATE_CAP)
             onProgress?.invoke(Vpn5gStartupProgress.Stage.PARSE_VALIDATE, 1f)
             onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 0f)
-            val live = tcpPingCandidates(unique)
+            // Defaults (8-way, no deadline): the quick path pings
+            // its whole 150-candidate sample exactly as before.
+            val (live, _) = tcpPingCandidates(unique)
             val dropped = unique.size - live.size
             onProgress?.invoke(Vpn5gStartupProgress.Stage.TCP_PING, 1f)
             if (live.isEmpty()) {

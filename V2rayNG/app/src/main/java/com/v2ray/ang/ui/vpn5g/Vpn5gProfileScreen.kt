@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -307,73 +308,14 @@ fun Vpn5gProfileScreen(
             }
         }
 
-        // About links (v1.1.5 §6, labels renamed 2026-11-23 by Aref's
-        // order): exactly three buttons, exactly these names, in this
-        // order — no extra text, address or description under them.
-        // The version lines below are app info, not link descriptions.
-        Vpn5gStaggeredItem(index = 6, visible = entered) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Spacer(Modifier.height(8.dp))
-                // Channel / Bot / Support as neomorphism buttons (v1.1.2).
-                NeuLinkButton(
-                    label = stringResource(R.string.vpn5g_link_channel),
-                    onClick = { onOpenUrl(CHANNEL_URL) },
-                )
-                Spacer(Modifier.height(12.dp))
-                NeuLinkButton(
-                    label = stringResource(R.string.vpn5g_link_bot),
-                    onClick = { onOpenUrl(BOT_URL) },
-                )
-                Spacer(Modifier.height(12.dp))
-                NeuLinkButton(
-                    // v1.1.29 (Aref's order): «پشتیبانی آنلاین» is his
-                    // own account (button below); the bot entry stays
-                    // as «پشتیبانی ربات» so the two are distinct.
-                    label = stringResource(R.string.vpn5g_link_support_bot),
-                    // v1.1.14: support goes DIRECTLY to the bot's support
-                    // section (start=support). Bot membership cannot be
-                    // verified app-side — the bot handles it.
-                    onClick = { onOpenUrl(SUPPORT_BOT_URL) },
-                )
-                Spacer(Modifier.height(12.dp))
-                // v1.1.28 (Aref's order): his personal Telegram
-                // account next to the bot support entry — "هم" (also),
-                // the bot entry above stays. v1.1.29: label is plain
-                // «پشتیبانی آنلاین» (no @handle on the button).
-                NeuLinkButton(
-                    label = stringResource(R.string.vpn5g_link_support_telegram),
-                    onClick = { onOpenUrl(SUPPORT_URL) },
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = stringResource(
-                        R.string.vpn5g_about_version,
-                        BuildConfig.VERSION_NAME,
-                        BuildConfig.VERSION_CODE,
-                    ),
-                    color = Vpn5gOnDarkMuted,
-                    fontSize = 14.sp,
-                )
-                Text(
-                    text = stringResource(
-                        R.string.vpn5g_about_build_date,
-                        BuildConfig.BUILD_TIME,
-                    ),
-                    color = Vpn5gOnDarkMuted,
-                    fontSize = 14.sp,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = stringResource(R.string.vpn5g_about_core),
-                    color = Vpn5gOnDarkMuted,
-                    fontSize = 14.sp,
-                )
-            }
-        }
         // About («درباره برنامه», v1.1.30, Aref's order): filled with
+        // v1.1.32 (Aref's order «درباره برنامه هم بره زیر دکمه برنامه
+        // های فیلترشکن»): this section sits directly BELOW the
+        // per-app («برنامه‌های فیلترشکن») section above; the link
+        // buttons follow it.
         // real descriptions — what the app does, speed, ping, the
         // creator, security. Persian text in resources (fa/en/az).
-        Vpn5gStaggeredItem(index = 7, visible = entered) {
+        Vpn5gStaggeredItem(index = 6, visible = entered) {
             Vpn5gExpandableSection(
                 title = stringResource(R.string.vpn5g_about_title),
                 expanded = aboutExpanded,
@@ -433,6 +375,69 @@ fun Vpn5gProfileScreen(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = stringResource(R.string.vpn5g_about_creator_body),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                )
+            }
+        }
+        // About links (v1.1.5 §6, labels renamed 2026-11-23 by Aref's
+        // order): exactly three buttons, exactly these names, in this
+        // order — no extra text, address or description under them.
+        // The version lines below are app info, not link descriptions.
+        Vpn5gStaggeredItem(index = 7, visible = entered) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Spacer(Modifier.height(8.dp))
+                // Channel / Bot / Support as neomorphism buttons (v1.1.2).
+                NeuLinkButton(
+                    label = stringResource(R.string.vpn5g_link_channel),
+                    onClick = { onOpenUrl(CHANNEL_URL) },
+                ) { Vpn5gChannelIcon(color = Vpn5gTeal, size = 22.dp) }
+                Spacer(Modifier.height(12.dp))
+                NeuLinkButton(
+                    label = stringResource(R.string.vpn5g_link_bot),
+                    onClick = { onOpenUrl(BOT_URL) },
+                ) { Vpn5gBotIcon(color = Vpn5gTeal, size = 22.dp) }
+                Spacer(Modifier.height(12.dp))
+                NeuLinkButton(
+                    // v1.1.29 (Aref's order): «پشتیبانی آنلاین» is his
+                    // own account (button below); the bot entry stays
+                    // as «پشتیبانی ربات» so the two are distinct.
+                    label = stringResource(R.string.vpn5g_link_support_bot),
+                    // v1.1.14: support goes DIRECTLY to the bot's support
+                    // section (start=support). Bot membership cannot be
+                    // verified app-side — the bot handles it.
+                    onClick = { onOpenUrl(SUPPORT_BOT_URL) },
+                ) { Vpn5gSupportIcon(color = Vpn5gTeal, size = 22.dp) }
+                Spacer(Modifier.height(12.dp))
+                // v1.1.28 (Aref's order): his personal Telegram
+                // account next to the bot support entry — "هم" (also),
+                // the bot entry above stays. v1.1.29: label is plain
+                // «پشتیبانی آنلاین» (no @handle on the button).
+                NeuLinkButton(
+                    label = stringResource(R.string.vpn5g_link_support_telegram),
+                    onClick = { onOpenUrl(SUPPORT_URL) },
+                ) { Vpn5gSupportIcon(color = Vpn5gTeal, size = 22.dp) }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(
+                        R.string.vpn5g_about_version,
+                        BuildConfig.VERSION_NAME,
+                        BuildConfig.VERSION_CODE,
+                    ),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                )
+                Text(
+                    text = stringResource(
+                        R.string.vpn5g_about_build_date,
+                        BuildConfig.BUILD_TIME,
+                    ),
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.vpn5g_about_core),
                     color = Vpn5gOnDarkMuted,
                     fontSize = 14.sp,
                 )
@@ -605,9 +610,15 @@ private fun Vpn5gStatCard(label: String, value: String, modifier: Modifier = Mod
  * Neomorphism button (v1.1.2): soft-extruded look on the dark theme —
  * a rounded surface with a light-to-dark diagonal gradient, a light
  * top-left edge and a dark bottom-right edge, plus a soft drop shadow.
+ * v1.1.32 (Aref's order): each link button carries its own dedicated
+ * icon (channel/bot/support) next to the label.
  */
 @Composable
-private fun NeuLinkButton(label: String, onClick: () -> Unit) {
+private fun NeuLinkButton(
+    label: String,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit = {},
+) {
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -642,11 +653,15 @@ private fun NeuLinkButton(label: String, onClick: () -> Unit) {
             )
             .clickable(role = Role.Button, onClickLabel = label) { onClick() },
     ) {
-        Text(
-            text = label,
-            color = Vpn5gOnDark,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            icon()
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = label,
+                color = Vpn5gOnDark,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
     }
 }

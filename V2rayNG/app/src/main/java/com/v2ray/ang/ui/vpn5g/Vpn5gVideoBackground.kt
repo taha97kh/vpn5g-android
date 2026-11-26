@@ -2,10 +2,9 @@ package com.v2ray.ang.ui.vpn5g
 
 import android.net.Uri
 import android.widget.VideoView
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -72,14 +71,20 @@ fun Vpn5gLoopingVideo(
 
     BoxWithConstraints(modifier = modifier.clipToBounds()) {
         val density = LocalDensity.current
-        // Center-crop: scale the video so it covers the whole box
-        // (keeping its own aspect), centered; overflow is clipped.
+        // Center-crop fill (v1.1.32, Aref's order «ویدیو وصل شدن هم
+        // زوم کن تمام صفحه باشه حتما» + the entrance video «تمام صفحه
+        // باشه اونم»): scale the video so it COVERS the whole box on
+        // every screen ratio — no letterbox, no empty edges — centered,
+        // overflow clipped. `requiredSize` is essential: a plain
+        // `size` is coerced into the parent's max constraints, so the
+        // view could never overflow the box and VideoView then
+        // letterboxed inside it (the empty edges Aref saw).
         val contentModifier = if (videoWidth > 0 && videoHeight > 0) {
             val boxW = with(density) { maxWidth.toPx() }
             val boxH = with(density) { maxHeight.toPx() }
             val scale = maxOf(boxW / videoWidth, boxH / videoHeight)
             Modifier
-                .size(
+                .requiredSize(
                     width = with(density) { (videoWidth * scale).toDp() },
                     height = with(density) { (videoHeight * scale).toDp() },
                 )
@@ -102,6 +107,16 @@ fun Vpn5gLoopingVideo(
                         videoHeight = player.videoHeight
                         prepared = true
                         view.start()
+                    }
+                    // Some devices report a 0 size at prepare time and
+                    // deliver the real size here — without this the
+                    // center-crop scale would never engage and the
+                    // video would stay letterboxed (v1.1.32).
+                    view.setOnVideoSizeChangedListener { player, _, _ ->
+                        if (player.videoWidth > 0 && player.videoHeight > 0) {
+                            videoWidth = player.videoWidth
+                            videoHeight = player.videoHeight
+                        }
                     }
                     view.setOnErrorListener { _, _, _ ->
                         // Fallback: render nothing — the animated

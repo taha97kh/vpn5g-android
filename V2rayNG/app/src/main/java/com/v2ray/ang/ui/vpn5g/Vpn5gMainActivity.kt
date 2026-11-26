@@ -460,6 +460,22 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     private var disconnectTimeoutJob: Job? = null
 
+    /**
+     * Entry-screen minimum-display gate (v1.1.32, Aref's order): the
+     * 1→100 screen (with his entrance video) stays visible at least
+     * [Vpn5gStartupProgress.MIN_DISPLAY_MS] so the video is actually
+     * seen; the bar fills across that window and the home opens only
+     * when the real work is done AND the window has elapsed.
+     * [startupRealProgress] is the last REAL stage fraction; the
+     * displayed fraction is the gated merge
+     * ([Vpn5gStartupProgress.gatedFraction]). The sync itself is
+     * never blocked by the gate — only the screen transition waits.
+     */
+    private var startupStartedAtMs: Long = 0L
+    private var startupRealProgress: Float = 0f
+    private var startupWorkDone: Boolean = false
+    private var startupGateJob: Job? = null
+
     /** Periodic tunnel re-verification while connected (v1.1.4 §7). */
     private var reverifyJob: Job? = null
     private var ticksSinceReverify = 0
@@ -1299,6 +1315,53 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** Publishes a REAL startup stage fraction through the gate. */
+    private fun publishStartupProgress(real: Float) {
+        if (real > startupRealProgress) startupRealProgress = real
+        publishGatedStartupProgress()
+    }
+
+    /** Publishes the gated (displayed) startup fraction; never backwards. */
+    private fun publishGatedStartupProgress() {
+        val elapsed = if (startupStartedAtMs > 0L) {
+            System.currentTimeMillis() - startupStartedAtMs
+        } else {
+            0L
+        }
+        val shown = Vpn5gStartupProgress.gatedFraction(
+            startupRealProgress, elapsed, startupWorkDone,
+        )
+        _uiState.update {
+            it.copy(startupProgress = maxOf(it.startupProgress, shown))
+        }
+    }
+
+    /**
+     * Marks the real startup work done and runs the minimum-display
+     * gate (v1.1.32): the entry screen leaves only when the work is
+     * done AND [Vpn5gStartupProgress.MIN_DISPLAY_MS] has elapsed.
+     * No-op once the home is already open.
+     */
+    private fun markStartupWorkDone() {
+        if (_uiState.value.startupDone) return
+        startupWorkDone = true
+        publishGatedStartupProgress()
+        if (startupGateJob?.isActive == true) return
+        startupGateJob = viewModelScope.launch {
+            while (!_uiState.value.startupDone) {
+                val elapsed = System.currentTimeMillis() - startupStartedAtMs
+                if (Vpn5gStartupProgress.gateOpen(elapsed, startupWorkDone)) {
+                    _uiState.update {
+                        it.copy(startupProgress = 1f, startupDone = true)
+                    }
+                    break
+                }
+                publishGatedStartupProgress()
+                delay(100L)
+            }
+        }
+    }
+
     /**
      * Startup sync (v1.1.14): cached list first (with the bundled
      * fallback on a first launch), then the live refresh with REAL
@@ -1307,14 +1370,16 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     private fun runStartupSync() {
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update {
-                it.copy(
-                    startupProgress = Vpn5gStartupProgress.fraction(
-                        Vpn5gStartupProgress.Stage.LOADING_CACHE, 0f
-                    ),
-                    startupError = false,
+            // v1.1.32: the minimum-display clock starts with the sync.
+            startupStartedAtMs = System.currentTimeMillis()
+            startupRealProgress = 0f
+            startupWorkDone = false
+            _uiState.update { it.copy(startupError = false) }
+            publishStartupProgress(
+                Vpn5gStartupProgress.fraction(
+                    Vpn5gStartupProgress.Stage.LOADING_CACHE, 0f
                 )
-            }
+            )
             val cached = Vpn5gRemoteConfig.cached()
             // A failure to read the stored list must never leave the
             // home screen stuck on "loading": fall back to an empty list.
@@ -1384,11 +1449,13 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     crashReportAvailable = Vpn5gCrashHandler.hasCrashReport(
                         getApplication()
                     ),
-                    startupProgress = Vpn5gStartupProgress.fraction(
-                        Vpn5gStartupProgress.Stage.LOADING_CACHE, 1f
-                    ),
                 )
             }
+            publishStartupProgress(
+                Vpn5gStartupProgress.fraction(
+                    Vpn5gStartupProgress.Stage.LOADING_CACHE, 1f
+                )
+            )
             refreshSelection()
             enrichCountries()
             // v1.1.15 (fast startup, D): with a cached list the home is
@@ -1397,9 +1464,10 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             // only when the home is truly ready (the cached list is
             // shown).
             if (countries.isNotEmpty()) {
-                _uiState.update {
-                    it.copy(startupProgress = 1f, startupDone = true)
-                }
+                // v1.1.32: the real work is done; the entry screen
+                // still holds for the minimum-display window so the
+                // entrance video is seen (the gate opens the home).
+                markStartupWorkDone()
                 // v1.1.25: NO startup auto-connect — the app connects
                 // only when the user taps the switch (Aref's order).
                 refreshInternal(onProgress = null, finishStartup = false)
@@ -1419,11 +1487,9 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                     getApplication(),
                     skipRealProbe = false,
                     onProgress = { stage, within ->
-                        _uiState.update {
-                            it.copy(
-                                startupProgress = Vpn5gStartupProgress.fraction(stage, within)
-                            )
-                        }
+                        publishStartupProgress(
+                            Vpn5gStartupProgress.fraction(stage, within)
+                        )
                     },
                 )
             }
@@ -1433,12 +1499,14 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
             _uiState.update {
                 it.copy(
                     countries = quickCountries,
-                    startupProgress = 1f,
-                    startupDone = quickCountries.isNotEmpty(),
                     startupError = quickCountries.isEmpty(),
                     offline = quickResult?.offline ?: true,
                 )
             }
+            // v1.1.32: same gate as the cached path — the error state
+            // shows at once on the same screen; success waits for
+            // the minimum-display window.
+            if (quickCountries.isNotEmpty()) markStartupWorkDone()
             refreshSelection()
             enrichCountries()
             // v1.1.25: no startup auto-connect (user tap only).
@@ -1450,6 +1518,12 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Retries the startup sync from the startup screen's retry button. */
     fun retryStartupSync() {
+        // v1.1.32: a retry gets its own minimum-display window.
+        startupGateJob?.cancel()
+        startupGateJob = null
+        startupStartedAtMs = System.currentTimeMillis()
+        startupRealProgress = 0f
+        startupWorkDone = false
         _uiState.update { it.copy(startupError = false, startupProgress = 0f) }
         runStartupSync()
     }
@@ -1767,19 +1841,6 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         trialEnabled = cached.trial_enabled ?: false,
                         trialHours = Vpn5gRemoteCommands.clampTrialHours(cached.trial_hours),
                         signedInEmail = Vpn5gAuthService.currentSession()?.email,
-                        startupProgress = if (finishStartup) 1f else it.startupProgress,
-                        // v1.1.16: the quick first-screen path may have
-                        // left startupDone=false (empty quick result) —
-                        // a LATER refresh that finally populates the
-                        // list must open the home too, not leave the
-                        // user stuck on the retry screen. After startup
-                        // already succeeded this is a no-op (true stays
-                        // true).
-                        startupDone = if (finishStartup) {
-                            countries.isNotEmpty()
-                        } else {
-                            it.startupDone || countries.isNotEmpty()
-                        },
                         startupError = if (finishStartup) {
                             countries.isEmpty()
                         } else {
@@ -1787,6 +1848,14 @@ class Vpn5gHomeViewModel(application: Application) : AndroidViewModel(applicatio
                         },
                     )
                 }
+                // v1.1.16: the quick first-screen path may have left
+                // startupDone=false (empty quick result) — a LATER
+                // refresh that finally populates the list must open
+                // the home too, not leave the user stuck on the retry
+                // screen. v1.1.32: routed through the minimum-display
+                // gate; after startup already succeeded this is a
+                // no-op.
+                if (countries.isNotEmpty()) markStartupWorkDone()
                 refreshSelection()
                 enrichCountries()
                 // v1.1.26: the config this refresh fetched (or kept)
@@ -4451,17 +4520,38 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             previousDestination = destination
         }
 
+        // Exit confirmation state (v1.1.29; hoisted in v1.1.32 so the
+        // startup screen below can ask the same question — Back on
+        // the entry screen used to leave the app silently).
+        var showExitDialog by remember { mutableStateOf(false) }
+
         // Startup sync screen (v1.1.14): real 0→100% server-update
         // progress — it REPLACES the old fixed 3-second splash, it does
         // not add a second wait on top. The home opens when the sync
         // reaches 100% AND at least one server is available; an empty
         // sync shows a retry state instead of hanging.
         if (!uiState.startupDone) {
+            // v1.1.32 (Back audit): this screen is the root while it
+            // shows, so Back asks «از برنامه خارج می‌شوید؟» here too.
+            androidx.activity.compose.BackHandler {
+                showExitDialog = true
+            }
             Vpn5gStartupScreen(
                 progress = uiState.startupProgress,
                 isError = uiState.startupError,
                 onRetry = { viewModel.retryStartupSync() },
             )
+            if (showExitDialog) {
+                Vpn5gExitDialog(
+                    onDismiss = { showExitDialog = false },
+                    onConfirm = {
+                        showExitDialog = false
+                        viewModel.userDisconnect()
+                        LauncherManager.stopService(this@Vpn5gMainActivity)
+                        finishAffinity()
+                    },
+                )
+            }
             return
         }
 
@@ -4511,11 +4601,17 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
         // (userDisconnect), the VPN service is stopped (which also
         // cancels the daemon watchdog and its notification), and
         // the task finishes — nothing keeps running behind.
-        var showExitDialog by remember { mutableStateOf(false) }
         androidx.activity.compose.BackHandler {
             when {
                 showExitDialog -> showExitDialog = false
                 drawerState.isOpen -> drawerScope.launch { drawerState.close() }
+                // v1.1.32 (Back audit, Aref's order): while the
+                // full-screen connecting video is up, Back cancels
+                // the connect — the same as its «لغو» button —
+                // instead of asking to exit.
+                destination == Vpn5gDestination.HOME &&
+                    uiState.connectState in VPN5G_CONNECTING_STATES ->
+                    toggleConnect()
                 destination == Vpn5gDestination.AUTH ->
                     destination = Vpn5gDestination.ME
                 destination != Vpn5gDestination.HOME ->
@@ -4524,23 +4620,13 @@ class Vpn5gMainActivity : HelperBaseComponentActivity() {
             }
         }
         if (showExitDialog) {
-            AlertDialog(
-                onDismissRequest = { showExitDialog = false },
-                title = { Text(stringResource(R.string.vpn5g_exit_title)) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        showExitDialog = false
-                        viewModel.userDisconnect()
-                        LauncherManager.stopService(this@Vpn5gMainActivity)
-                        finishAffinity()
-                    }) {
-                        Text(stringResource(R.string.vpn5g_exit_yes))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showExitDialog = false }) {
-                        Text(stringResource(R.string.vpn5g_exit_no))
-                    }
+            Vpn5gExitDialog(
+                onDismiss = { showExitDialog = false },
+                onConfirm = {
+                    showExitDialog = false
+                    viewModel.userDisconnect()
+                    LauncherManager.stopService(this@Vpn5gMainActivity)
+                    finishAffinity()
                 },
             )
         }
@@ -5341,6 +5427,29 @@ private val VPN5G_CONNECTING_STATES = setOf(
  * the video renders nothing and the texts + cancel stay usable
  * over the home UI.
  */
+/**
+ * Exit confirmation (v1.1.29, extracted in v1.1.32 so the startup
+ * screen asks the same question): «از برنامه خارج می‌شوید؟» —
+ * «نه» stays, «آره» runs [onConfirm] (full stop + finish).
+ */
+@Composable
+private fun Vpn5gExitDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.vpn5g_exit_title)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.vpn5g_exit_yes))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.vpn5g_exit_no))
+            }
+        },
+    )
+}
+
 @Composable
 private fun Vpn5gConnectingOverlay(
     connectState: Vpn5gConnectState,
@@ -5386,6 +5495,43 @@ private fun Vpn5gConnectingOverlay(
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
             )
+            Spacer(Modifier.height(16.dp))
+            // v1.1.32 (Aref's order): rotating guidance texts over
+            // the connecting video («رو ویدیو راهنمایی هایی بنویس
+            // کاربر حداقل بدونه در مورد وصل شدن، امکانات اپ،
+            // امکانات ربات و...») — about connecting, app features
+            // and bot features, softly fading every ~4 s. Transient
+            // presentation state only, like the startup texts.
+            val connectTips = listOf(
+                stringResource(R.string.vpn5g_connect_tip_01),
+                stringResource(R.string.vpn5g_connect_tip_02),
+                stringResource(R.string.vpn5g_connect_tip_03),
+                stringResource(R.string.vpn5g_connect_tip_04),
+                stringResource(R.string.vpn5g_connect_tip_05),
+                stringResource(R.string.vpn5g_connect_tip_06),
+            )
+            var tipIndex by remember { mutableStateOf(0) }
+            LaunchedEffect(Unit) {
+                while (true) {
+                    delay(4000L)
+                    tipIndex = (tipIndex + 1) % connectTips.size
+                }
+            }
+            AnimatedContent(
+                targetState = connectTips[tipIndex],
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(400)) togetherWith
+                        fadeOut(animationSpec = tween(400))
+                },
+                label = "vpn5g_connect_tip",
+            ) { tip ->
+                Text(
+                    text = tip,
+                    color = Vpn5gOnDarkMuted,
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Spacer(Modifier.height(24.dp))
             Button(
                 onClick = onCancel,

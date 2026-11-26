@@ -95,6 +95,12 @@
     <string name="vpn5g_connect_connecting">Connecting…</string>
     <string name="vpn5g_connect_creating_tunnel">Creating a secure tunnel…</string>
     <string name="vpn5g_connect_retrying">Retrying the connection…</string>
+    <string name="vpn5g_connect_tip_01">Connecting takes only a few seconds; if a server drops, the app switches to the next one by itself.</string>
+    <string name="vpn5g_connect_tip_02">In «Apps using the VPN» you can choose which apps go through the VPN.</string>
+    <string name="vpn5g_connect_tip_03">In the Telegram bot you can buy a subscription, get gift codes and reach support.</string>
+    <string name="vpn5g_connect_tip_04">The «Sanctioned apps» tab gathers the servers that work for Google Flow and Gemini.</string>
+    <string name="vpn5g_connect_tip_05">Share the app and both you and your friend get 1 GB free on all servers.</string>
+    <string name="vpn5g_connect_tip_06">Usage stats and the real ping are on the home screen; a lower ping means a faster connection.</string>
     <string name="vpn5g_disconnecting">Disconnecting…</string>
     <string name="vpn5g_no_internet">No internet available; check the connection</string>
     <string name="vpn5g_loading_servers">Getting servers…</string>
@@ -450,7 +456,6 @@ The more you share, the more you get. Send your link now 🎁</string>
     <string name="vpn5g_about_ping_body">The ping you see is real: an actual request goes through the tunnel. The lower the number, the faster and steadier the connection.</string>
     <string name="vpn5g_about_creator_title">Creator</string>
     <string name="vpn5g_about_creator_body">Creator: AREF KH
-Instagram: @4ref.ai
 Telegram: @Aref_5G</string>
     <string name="vpn5g_about_security_title">Security &amp; privacy</string>
     <string name="vpn5g_about_security_body">Your traffic is encrypted and DNS also goes through the tunnel, so nothing leaks. The app keeps no history of the sites you visit.</string>

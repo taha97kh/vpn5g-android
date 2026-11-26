@@ -671,6 +671,12 @@
     <string name="vpn5g_connect_connecting">Qoşulur…</string>
     <string name="vpn5g_connect_creating_tunnel">Təhlükəsiz tunel yaradılır…</string>
     <string name="vpn5g_connect_retrying">Qoşulmağa yenidən cəhd edilir…</string>
+    <string name="vpn5g_connect_tip_01">Qoşulma cəmi bir neçə saniyə çəkir; server kəsilərsə, proqram özü növbəti serverə qoşulur.</string>
+    <string name="vpn5g_connect_tip_02">«VPN istifadə edən proqramlar» bölməsində hansı proqramların VPN-dən keçəcəyini seçə bilərsən.</string>
+    <string name="vpn5g_connect_tip_03">Telegram botunda abunə ala, hədiyyə kodları götürə və dəstəyə yaza bilərsən.</string>
+    <string name="vpn5g_connect_tip_04">«Sanksiyalı proqramlar» bölməsi Google Flow və Gemini üçün uyğun serverləri bir yerdə göstərir.</string>
+    <string name="vpn5g_connect_tip_05">Proqramı paylaş — həm sən, həm dostun bütün serverlərdə 1 GB hədiyyə qazanın.</string>
+    <string name="vpn5g_connect_tip_06">İstifadə statistikası və real pinq ana səhifədədir; pinq nə qədər az olsa, qoşulma bir o qədər sürətlidir.</string>
     <string name="vpn5g_disconnecting">Ayrılır…</string>
     <string name="vpn5g_no_internet">İnternet yoxdur; bağlantını yoxlayın</string>
     <string name="vpn5g_loading_servers">Serverlər alınır…</string>
@@ -1026,7 +1032,6 @@ Nə qədər çox paylaşsan, o qədər çox qazanarsan. Linkini indi göndər �
     <string name="vpn5g_about_ping_body">Gördüyün ping realdır: tuneldən həqiqi sorğu göndərilir. Rəqəm nə qədər kiçik olsa, bağlantı o qədər sürətli və sabitdir.</string>
     <string name="vpn5g_about_creator_title">Yaradan</string>
     <string name="vpn5g_about_creator_body">Yaradan: AREF KH
-Instagram: @4ref.ai
 Telegram: @Aref_5G</string>
     <string name="vpn5g_about_security_title">Təhlükəsizlik və məxfilik</string>
     <string name="vpn5g_about_security_body">Trafikin şifrələnir və DNS də tuneldən keçir, sızma olmur. Tətbiq ziyarət etdiyin saytların tarixçəsini saxlamır.</string>

@@ -315,7 +315,7 @@ fun Vpn5gDrawerContent(
                 title = stringResource(R.string.vpn5g_drawer_support),
                 subtitle = stringResource(R.string.vpn5g_link_support),
                 onClick = onOpenSupport,
-            ) { Vpn5gHelpIcon(color = Vpn5gTeal, size = 22.dp) }
+            ) { Vpn5gSupportIcon(color = Vpn5gTeal, size = 22.dp) }
             Vpn5gDrawerDivider()
             Vpn5gDrawerRow(
                 title = stringResource(R.string.vpn5g_drawer_about),

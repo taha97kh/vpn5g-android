@@ -387,6 +387,122 @@ fun Vpn5gBellIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier)
     }
 }
 
+/** Megaphone for the channel button (v1.1.32, Aref's order: each of
+ * the channel/bot/support buttons gets its own dedicated icon):
+ * cone + mouthpiece + handle + sound arcs. */
+@Composable
+fun Vpn5gChannelIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.09f
+        // Cone: trapezoid opening to the right.
+        val cone = Path().apply {
+            moveTo(w * 0.10f, h * 0.38f)
+            lineTo(w * 0.52f, h * 0.20f)
+            lineTo(w * 0.52f, h * 0.80f)
+            lineTo(w * 0.10f, h * 0.62f)
+            close()
+        }
+        drawPath(cone, color)
+        // Handle under the mouthpiece.
+        drawLine(
+            color,
+            Offset(w * 0.16f, h * 0.62f),
+            Offset(w * 0.22f, h * 0.88f),
+            stroke,
+            StrokeCap.Round,
+        )
+        // Sound arcs to the right of the cone mouth.
+        drawArc(
+            color = color,
+            startAngle = -55f,
+            sweepAngle = 110f,
+            useCenter = false,
+            topLeft = Offset(w * 0.48f, h * 0.30f),
+            size = androidx.compose.ui.geometry.Size(w * 0.30f, h * 0.40f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+        drawArc(
+            color = color,
+            startAngle = -55f,
+            sweepAngle = 110f,
+            useCenter = false,
+            topLeft = Offset(w * 0.54f, h * 0.18f),
+            size = androidx.compose.ui.geometry.Size(w * 0.42f, h * 0.64f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+    }
+}
+
+/** Robot head for the bot button (v1.1.32): rounded head + antenna +
+ * eyes + side ears. */
+@Composable
+fun Vpn5gBotIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.09f
+        // Antenna: stem + tip dot.
+        drawLine(color, Offset(w * 0.5f, h * 0.26f), Offset(w * 0.5f, h * 0.10f), stroke, StrokeCap.Round)
+        drawCircle(color = color, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.08f))
+        // Head: rounded rect outline.
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.14f, h * 0.26f),
+            size = androidx.compose.ui.geometry.Size(w * 0.72f, h * 0.56f),
+            cornerRadius = CornerRadius(w * 0.14f, w * 0.14f),
+            style = Stroke(width = stroke),
+        )
+        // Ears: short bars on both sides.
+        drawLine(color, Offset(w * 0.06f, h * 0.48f), Offset(w * 0.14f, h * 0.48f), stroke, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.86f, h * 0.48f), Offset(w * 0.94f, h * 0.48f), stroke, StrokeCap.Round)
+        // Eyes: two dots.
+        drawCircle(color = color, radius = w * 0.055f, center = Offset(w * 0.36f, h * 0.50f))
+        drawCircle(color = color, radius = w * 0.055f, center = Offset(w * 0.64f, h * 0.50f))
+        // Mouth: short line.
+        drawLine(color, Offset(w * 0.40f, h * 0.68f), Offset(w * 0.60f, h * 0.68f), stroke, StrokeCap.Round)
+    }
+}
+
+/** Headset for the support buttons (v1.1.32): headband arc + two ear
+ * cups + microphone boom. */
+@Composable
+fun Vpn5gSupportIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.09f
+        // Headband: open-bottom arc.
+        drawArc(
+            color = color,
+            startAngle = 180f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(w * 0.16f, h * 0.10f),
+            size = androidx.compose.ui.geometry.Size(w * 0.68f, h * 0.68f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+        // Ear cups: rounded rects at both ends of the band.
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.08f, h * 0.44f),
+            size = androidx.compose.ui.geometry.Size(w * 0.16f, h * 0.30f),
+            cornerRadius = CornerRadius(w * 0.06f, w * 0.06f),
+        )
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.76f, h * 0.44f),
+            size = androidx.compose.ui.geometry.Size(w * 0.16f, h * 0.30f),
+            cornerRadius = CornerRadius(w * 0.06f, w * 0.06f),
+        )
+        // Microphone boom from the right cup toward the mouth.
+        drawLine(color, Offset(w * 0.84f, h * 0.74f), Offset(w * 0.84f, h * 0.86f), stroke, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.84f, h * 0.86f), Offset(w * 0.62f, h * 0.86f), stroke, StrokeCap.Round)
+        drawCircle(color = color, radius = w * 0.055f, center = Offset(w * 0.58f, h * 0.86f))
+    }
+}
+
 /** Apps grid for the split-tunnel row (v1.1.21): 2×2 rounded squares. */
 @Composable
 fun Vpn5gAppsIcon(color: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {

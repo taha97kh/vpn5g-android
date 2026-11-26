@@ -150,4 +150,32 @@ class Vpn5gQuickSyncTest {
             Vpn5gSync.assignGuids(emptyList(), mapOf("k" to "g")) { "x" }.isEmpty()
         )
     }
+
+    // -- v1.1.32 fast-refresh carry-over -------------------------------------
+    // The bounded fast refresh stops starting pings after 2.5 s; the
+    // candidates it did not reach must keep their stored profile when
+    // the store holds a real measured delay, so the published list
+    // never shrinks. Unknown or stored-dead identities stay dropped.
+
+    @Test
+    fun test_carry_over_keeps_only_stored_live_identities() {
+        val unpinged = listOf("k1", "k2", "k3", "k4")
+        val delays = mapOf("k1" to 120L, "k2" to -1L, "k4" to 0L)
+        // k1 stored-live, k4 stored with a 0 ms measurement: kept.
+        // k2 stored-dead, k3 unknown: dropped.
+        assertEquals(
+            listOf("k1", "k4"),
+            Vpn5gSync.selectCarryOverKeys(unpinged, delays),
+        )
+    }
+
+    @Test
+    fun test_carry_over_empty_cases() {
+        assertTrue(
+            Vpn5gSync.selectCarryOverKeys(emptyList(), mapOf("k" to 5L)).isEmpty()
+        )
+        assertTrue(
+            Vpn5gSync.selectCarryOverKeys(listOf("k"), emptyMap()).isEmpty()
+        )
+    }
 }
